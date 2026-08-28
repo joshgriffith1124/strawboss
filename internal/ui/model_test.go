@@ -211,3 +211,54 @@ func TestViewsRenderKeyContent(t *testing.T) {
 		os.WriteFile(dump, []byte(out), 0o644)
 	}
 }
+
+// TestWorkerStreamScrolls: streamed deltas must flush completed lines into
+// the transcript (scrolling), never accumulate into one rewriting line.
+func TestWorkerStreamScrolls(t *testing.T) {
+	m := New(make(chan tea.Msg))
+	m = apply(t, m, WorkerUpsertMsg{ID: "w1", Model: "qwen-coder", Task: "t", Status: "running"})
+
+	// Prose with newlines arrives in small deltas.
+	for _, d := range []string{"First line", " of text\nSecond", " line\n\nThird grows"} {
+		m = apply(t, m, WorkerEventMsg{ID: "w1", Kind: "reasoning", Text: d})
+	}
+	evs := m.workerEvents["w1"]
+	if len(evs) != 3 {
+		t.Fatalf("events = %+v", evs)
+	}
+	if evs[0].text != "First line of text" || !evs[0].done {
+		t.Errorf("evs[0] = %+v", evs[0])
+	}
+	if evs[1].text != "Second line" || !evs[1].done {
+		t.Errorf("evs[1] = %+v", evs[1])
+	}
+	if evs[2].text != "Third grows" || evs[2].done {
+		t.Errorf("evs[2] = %+v", evs[2])
+	}
+
+	// A long unbroken paragraph force-wraps instead of growing forever.
+	m = apply(t, m, WorkerEventMsg{ID: "w1", Kind: "reasoning", Text: strings.Repeat("word ", 80)})
+	evs = m.workerEvents["w1"]
+	for _, ev := range evs[:len(evs)-1] {
+		if len(ev.text) > flushWidth {
+			t.Errorf("flushed line too long (%d): %q…", len(ev.text), ev.text[:40])
+		}
+	}
+	if n := len(evs); n < 5 {
+		t.Errorf("long paragraph did not wrap into lines: %d entries", n)
+	}
+
+	// A tool event closes the growing line and logs to the logs tab.
+	before := len(m.logs)
+	m = apply(t, m, WorkerEventMsg{ID: "w1", Kind: "tool", Text: "bash pytest [completed]"})
+	evs = m.workerEvents["w1"]
+	if !evs[len(evs)-1].done || evs[len(evs)-1].kind != "tool" {
+		t.Errorf("tail = %+v", evs[len(evs)-1])
+	}
+	if !evs[len(evs)-2].done {
+		t.Errorf("growing line not closed by tool event: %+v", evs[len(evs)-2])
+	}
+	if len(m.logs) != before+1 {
+		t.Errorf("tool event not logged (logs %d → %d)", before, len(m.logs))
+	}
+}

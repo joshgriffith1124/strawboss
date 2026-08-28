@@ -2,7 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -162,13 +161,12 @@ func (m Model) viewDetailSplit(w, h int) string {
 			evs = evs[len(evs)-maxEv:]
 		}
 		for i, ev := range evs {
-			kind, text, _ := strings.Cut(ev, "\x00")
 			branch := "├"
 			if i == len(evs)-1 {
 				branch = "└"
 			}
 			style := sDim
-			switch kind {
+			switch ev.kind {
 			case "tool":
 				style = sText
 			case "error":
@@ -176,7 +174,7 @@ func (m Model) viewDetailSplit(w, h int) string {
 			case "reasoning":
 				style = sFaint
 			}
-			lines = append(lines, " "+sFaint.Render(branch)+" "+style.Render(truncPlain(text, leftW-8)))
+			lines = append(lines, " "+sFaint.Render(branch)+" "+style.Render(truncPlain(ev.text, leftW-8)))
 		}
 		if sel.Status == "done" || sel.Status == "failed" {
 			lines = append(lines, " "+sDim.Render(truncPlain("summary: "+firstLine(sel.Summary), leftW-4)))

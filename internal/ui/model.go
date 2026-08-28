@@ -48,6 +48,62 @@ type modelStat struct {
 	Note   string
 }
 
+// workerEvent is one transcript line in a worker's detail pane. Streamed
+// text/reasoning accumulates in a not-done tail entry; completed lines
+// (newline-terminated or force-wrapped) are flushed as done entries so the
+// transcript scrolls instead of rewriting one line forever.
+type workerEvent struct {
+	kind string // "text", "reasoning", "tool", "error"
+	text string
+	done bool
+}
+
+// flushWidth force-breaks unbroken streamed text so long paragraphs still
+// scroll line by line.
+const flushWidth = 160
+
+// appendStream grows the tail entry with a delta and flushes any completed
+// lines out of it.
+func appendStream(evs []workerEvent, kind, delta string) []workerEvent {
+	n := len(evs)
+	if n > 0 && !evs[n-1].done && evs[n-1].kind == kind {
+		evs[n-1].text += delta
+	} else {
+		if n > 0 && !evs[n-1].done {
+			evs[n-1].done = true // kind changed mid-stream
+		}
+		evs = append(evs, workerEvent{kind: kind, text: delta})
+	}
+
+	// Flush completed lines from the growing tail.
+	tail := &evs[len(evs)-1]
+	for {
+		text := tail.text
+		nl := strings.IndexByte(text, '\n')
+		var line, rest string
+		switch {
+		case nl >= 0 && nl <= flushWidth:
+			line, rest = text[:nl], text[nl+1:]
+		case len(text) > flushWidth:
+			cut := flushWidth
+			if sp := strings.LastIndexByte(text[:flushWidth], ' '); sp > flushWidth/2 {
+				cut = sp
+			}
+			line, rest = text[:cut], strings.TrimLeft(text[cut:], " ")
+		default:
+			return evs
+		}
+		if strings.TrimSpace(line) == "" {
+			tail.text = rest
+			continue
+		}
+		kind := tail.kind
+		*tail = workerEvent{kind: kind, text: line, done: true}
+		evs = append(evs, workerEvent{kind: kind, text: rest})
+		tail = &evs[len(evs)-1]
+	}
+}
+
 // Model is the root Bubble Tea model.
 type Model struct {
 	feed <-chan tea.Msg
@@ -82,7 +138,7 @@ type Model struct {
 
 	// workers
 	workers      []workerRow
-	workerEvents map[string][]string
+	workerEvents map[string][]workerEvent
 	selected     int
 	follow       bool
 
@@ -107,7 +163,7 @@ func New(feed <-chan tea.Msg) Model {
 		feed:         feed,
 		started:      time.Now(),
 		now:          time.Now(),
-		workerEvents: map[string][]string{},
+		workerEvents: map[string][]workerEvent{},
 		follow:       true,
 		input:        in,
 		auth:         "starting…",
@@ -259,27 +315,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, Listen(m.feed)
 	case WorkerEventMsg:
-		ev := m.workerEvents[msg.ID]
-		streamKind := msg.Kind == "text" || msg.Kind == "reasoning"
-		if streamKind && len(ev) > 0 {
-			// Coalesce consecutive stream deltas into one growing entry so
-			// the transcript reads as prose, not 3-character shards.
-			if kind, text, ok := strings.Cut(ev[len(ev)-1], "\x00"); ok && kind == msg.Kind {
-				ev[len(ev)-1] = kind + "\x00" + tailStr(text+msg.Text, 400)
-				m.workerEvents[msg.ID] = ev
-				return m, Listen(m.feed)
+		evs := m.workerEvents[msg.ID]
+		if msg.Kind == "text" || msg.Kind == "reasoning" {
+			// Stream deltas accumulate and flush as scrolling lines; they
+			// never hit the logs tab (fragment spew).
+			evs = appendStream(evs, msg.Kind, msg.Text)
+		} else {
+			if n := len(evs); n > 0 && !evs[n-1].done {
+				evs[n-1].done = true // a discrete event ends any growing line
 			}
-		}
-		ev = append(ev, msg.Kind+"\x00"+msg.Text)
-		if len(ev) > 200 {
-			ev = ev[len(ev)-200:]
-		}
-		m.workerEvents[msg.ID] = ev
-		if !streamKind {
-			// Stream deltas would spew fragments into the logs tab; only
-			// discrete events (tool calls, errors) are log-worthy.
+			evs = append(evs, workerEvent{kind: msg.Kind, text: msg.Text, done: true})
 			m.log("wrk", msg.ID+" "+msg.Kind+": "+truncPlain(msg.Text, 110))
 		}
+		if len(evs) > 200 {
+			evs = evs[len(evs)-200:]
+		}
+		m.workerEvents[msg.ID] = evs
 		return m, Listen(m.feed)
 
 	case ModelStatMsg:
@@ -393,14 +444,6 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.follow = !m.follow
 	}
 	return m, nil
-}
-
-// tailStr keeps the last n bytes of a growing stream entry.
-func tailStr(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[len(s)-n:]
 }
 
 func firstLine(s string) string {

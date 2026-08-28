@@ -23,6 +23,9 @@ type Event struct {
 	Type    string    `json:"type"` // "spawned" | "finished"
 	Worker  string    `json:"worker"`
 	Session string    `json:"session"`
+	// Run scopes workers to one supervisor run so the TUI doesn't replay
+	// other runs' history (set from $STRAWBOSS_RUN by delegate).
+	Run string `json:"run,omitempty"`
 	// spawned fields
 	Model string `json:"model,omitempty"`
 	Task  string `json:"task,omitempty"`
@@ -39,6 +42,8 @@ type Event struct {
 // Registry appends to and replays one workers.jsonl file.
 type Registry struct {
 	Path string
+	// Run is stamped onto every appended event.
+	Run string
 }
 
 // withLock serializes multi-process access (concurrent delegations) around
@@ -89,7 +94,7 @@ func (r *Registry) Allocate(session, model, task, dir string) (string, error) {
 		}
 		id = fmt.Sprintf("w%d", max+1)
 		return r.append(Event{
-			TS: time.Now(), Type: "spawned", Worker: id,
+			TS: time.Now(), Type: "spawned", Worker: id, Run: r.Run,
 			Session: session, Model: model, Task: task, Dir: dir,
 		})
 	})
@@ -103,7 +108,7 @@ func (r *Registry) Allocate(session, model, task, dir string) (string, error) {
 func (r *Registry) Finish(workerID, session, status, summary, logPath string, duration time.Duration, inputTokens, outputTokens int) error {
 	return r.withLock(func() error {
 		return r.append(Event{
-			TS: time.Now(), Type: "finished", Worker: workerID, Session: session,
+			TS: time.Now(), Type: "finished", Worker: workerID, Session: session, Run: r.Run,
 			Status: status, Summary: summary, LogPath: logPath,
 			DurationMS:  duration.Milliseconds(),
 			InputTokens: inputTokens, OutputTokens: outputTokens,

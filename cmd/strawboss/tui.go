@@ -89,12 +89,21 @@ func buildLive(stateDir, modelsPath string, fresh bool) (ui.Model, func(), error
 	if system == "" {
 		system = live.BuildSystemPrompt(exe, models)
 	}
+	// The run id scopes worker history: --new rotates it so old runs'
+	// workers don't replay into a fresh session; resume keeps it.
+	runID, err := live.RunID(stateDir, fresh)
+	if err != nil {
+		return zero, nil, err
+	}
 	driver := &supervisor.Driver{
 		Command:        cfg.Supervisor.Command,
 		PermissionMode: cfg.Supervisor.PermissionMode,
 		AllowedTools:   allowed,
 		SystemPrompt:   system,
 		Dir:            cwd,
+		// Inherited by delegate (via the supervisor's Bash) to stamp
+		// registry events with this run.
+		Env: []string{"STRAWBOSS_RUN=" + runID},
 	}
 	if !fresh {
 		if sid := live.LoadSession(stateDir); sid != "" {
@@ -103,6 +112,7 @@ func buildLive(stateDir, modelsPath string, fresh bool) (ui.Model, func(), error
 	}
 
 	o := live.New(driver, models, stateDir)
+	o.RunID = runID
 	o.Run(context.Background())
 
 	m := ui.New(o.Feed())

@@ -85,6 +85,8 @@ type WorkerUpsertMsg struct {
 	Summary string
 	LogPath string
 	Started time.Time // zero keeps existing
+	Ended   time.Time // when the worker finished; zero means "now" on a
+	// done/failed transition (live events) vs. the recorded time (replay)
 }
 
 // WorkerUsageMsg updates a worker's token counts.

@@ -251,3 +251,36 @@ func TestShutdownKillsEverything(t *testing.T) {
 		return ok && d.Err == "" && d.Interrupted
 	})
 }
+
+// TestRegistryWatcherScopesByRun: only the current run's workers replay;
+// other runs' history stays out of a fresh session.
+func TestRegistryWatcherScopesByRun(t *testing.T) {
+	stateDir := t.TempDir()
+	oldReg := &registry.Registry{Path: filepath.Join(stateDir, "workers.jsonl"), Run: "run-old"}
+	w1, _ := oldReg.Allocate("ses_old", "qwen-coder", "ancient history", "/repo")
+	_ = oldReg.Finish(w1, "ses_old", "done", "old", "/l", time.Second, 1, 1)
+
+	newReg := &registry.Registry{Path: oldReg.Path, Run: "run-new"}
+	w2, _ := newReg.Allocate("ses_new", "qwen-coder", "current work", "/repo")
+
+	o := New(&supervisor.Driver{}, nil, stateDir)
+	o.RunID = "run-new"
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go o.watchRegistry(ctx)
+
+	msgs := drainUntil(t, o.Feed(), 5*time.Second, func(m tea.Msg) bool {
+		u, ok := m.(ui.WorkerUpsertMsg)
+		return ok && u.ID == w2
+	})
+	for _, m := range msgs {
+		if u, ok := m.(ui.WorkerUpsertMsg); ok && u.ID == w1 {
+			t.Errorf("old run's worker leaked into the feed: %+v", u)
+		}
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.unfinished[w1] {
+		t.Error("old run's worker tracked as unfinished")
+	}
+}

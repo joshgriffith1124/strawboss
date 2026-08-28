@@ -242,7 +242,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Status != "" && msg.Status != w.Status {
 			w.Status = msg.Status
 			if msg.Status == "done" || msg.Status == "failed" {
-				w.Ended = time.Now()
+				w.Ended = msg.Ended
+				if w.Ended.IsZero() {
+					w.Ended = time.Now()
+				}
 			}
 			if msg.Status == "failed" {
 				m.ringBell(msg.ID + " failed — " + truncPlain(firstLine(msg.Summary), 40))

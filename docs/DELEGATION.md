@@ -60,6 +60,9 @@ The supervisor must never block on a permission prompt (invariant 6). Spawn it w
 
 - `workers.jsonl` — append-only registry: one `spawned` and one `finished` event
   per worker (id, session, model, task, dir, status, summary, log path, duration,
-  tokens). The TUI replays this; state survives restarts. Concurrent delegations
-  are safe (flock).
+  tokens). Events carry a `run` id ($STRAWBOSS_RUN, set by the TUI on the
+  supervisor and inherited by delegate): the TUI replays only its own run's
+  events, so resuming shows that run's workers while `--new` starts clean.
+  Concurrent delegations are safe (flock).
+- `run` — the current run id (rotated by `--new`).
 - `logs/<session>.jsonl` — the full worker transcript, one message per line.

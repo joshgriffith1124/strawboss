@@ -30,6 +30,8 @@ type Driver struct {
 	SystemPrompt string
 	// Dir is the subprocess working directory. Empty means inherit.
 	Dir string
+	// Env is appended to the (scrubbed) inherited environment.
+	Env []string
 
 	mu        sync.Mutex
 	sessionID string
@@ -120,7 +122,7 @@ func (d *Driver) Start(prompt string) (*Turn, error) {
 
 	cmd := exec.Command(bin, args...)
 	cmd.Dir = d.Dir
-	cmd.Env = scrubEnv(os.Environ())
+	cmd.Env = append(scrubEnv(os.Environ()), d.Env...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	stdout, err := cmd.StdoutPipe()

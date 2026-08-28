@@ -23,6 +23,9 @@ type Orchestrator struct {
 	Driver   *supervisor.Driver
 	Models   []config.ModelConfig
 	StateDir string
+	// RunID scopes which registry events this UI shows; events stamped
+	// with a different run (or none) belong to other runs and are skipped.
+	RunID string
 
 	feed      chan tea.Msg
 	prompts   chan string
@@ -131,6 +134,27 @@ func LoadSession(stateDir string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(b))
+}
+
+// RunID returns the persisted run id scoping registry events to this
+// supervisor run; rotate (or a missing file) mints a fresh one, so a new
+// session starts with an empty worker table while a resumed session
+// replays its own workers.
+func RunID(stateDir string, rotate bool) (string, error) {
+	path := filepath.Join(stateDir, "run")
+	if !rotate {
+		if b, err := os.ReadFile(path); err == nil && len(strings.TrimSpace(string(b))) > 0 {
+			return strings.TrimSpace(string(b)), nil
+		}
+	}
+	id := fmt.Sprintf("run-%d", time.Now().UnixNano())
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		return "", fmt.Errorf("minting run id: %w", err)
+	}
+	if err := os.WriteFile(path, []byte(id), 0o644); err != nil {
+		return "", fmt.Errorf("minting run id: %w", err)
+	}
+	return id, nil
 }
 
 func (o *Orchestrator) supervisorLoop(ctx context.Context) {

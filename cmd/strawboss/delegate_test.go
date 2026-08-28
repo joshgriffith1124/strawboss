@@ -81,6 +81,7 @@ func setup(t *testing.T, f *fakeOpencode) (stateDir string, baseArgs []string) {
 func TestDelegateDone(t *testing.T) {
 	f := &fakeOpencode{mode: "done"}
 	stateDir, args := setup(t, f)
+	t.Setenv("STRAWBOSS_RUN", "run-env")
 
 	var out strings.Builder
 	err := runDelegate(append(args, "--task", "build the thing"), &out)
@@ -115,6 +116,11 @@ func TestDelegateDone(t *testing.T) {
 	w := workers[0]
 	if w.ID != "w1" || w.Status != "done" || w.Session != testSID {
 		t.Errorf("worker = %+v", w)
+	}
+	for _, ev := range events {
+		if ev.Run != "run-env" {
+			t.Errorf("event run = %q, want run-env (from $STRAWBOSS_RUN)", ev.Run)
+		}
 	}
 	if w.Task != "build the thing" || w.Model != "qwen-coder" {
 		t.Errorf("worker = %+v", w)

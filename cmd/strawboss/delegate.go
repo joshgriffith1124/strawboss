@@ -81,7 +81,9 @@ func runDelegate(args []string, stdout io.Writer) error {
 
 	// mc.Harness is validated by LoadModels; opencode is the only v1 value.
 	h := opencode.New(mc, *dir, filepath.Join(*stateDir, "logs"))
-	reg := &registry.Registry{Path: filepath.Join(*stateDir, "workers.jsonl")}
+	// STRAWBOSS_RUN is set by the TUI on the supervisor subprocess and
+	// inherited here; it scopes these workers to that run.
+	reg := &registry.Registry{Path: filepath.Join(*stateDir, "workers.jsonl"), Run: os.Getenv("STRAWBOSS_RUN")}
 
 	// Timeout and supervisor interrupt (SIGINT/SIGTERM when the Bash call
 	// is killed) both cancel the wait; workers are then aborted rather

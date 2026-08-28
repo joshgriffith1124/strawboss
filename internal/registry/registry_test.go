@@ -57,7 +57,7 @@ func TestAllocateConcurrent(t *testing.T) {
 }
 
 func TestFinishLoadReduce(t *testing.T) {
-	r := &Registry{Path: filepath.Join(t.TempDir(), "workers.jsonl")}
+	r := &Registry{Path: filepath.Join(t.TempDir(), "workers.jsonl"), Run: "run-77"}
 	w1, _ := r.Allocate("ses_1", "qwen-coder", "build the thing", "/repo")
 	w2, _ := r.Allocate("ses_2", "qwen-small", "docstrings", "/repo")
 	if err := r.Finish(w1, "ses_1", "done", "built; tests pass", "/logs/ses_1.jsonl", 95*time.Second, 12000, 800); err != nil {
@@ -70,6 +70,11 @@ func TestFinishLoadReduce(t *testing.T) {
 	}
 	if len(events) != 3 {
 		t.Fatalf("got %d events", len(events))
+	}
+	for _, ev := range events {
+		if ev.Run != "run-77" {
+			t.Errorf("event %s/%s run = %q, want run-77", ev.Type, ev.Worker, ev.Run)
+		}
 	}
 	workers := Reduce(events)
 	if len(workers) != 2 {

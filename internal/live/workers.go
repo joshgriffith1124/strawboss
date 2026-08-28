@@ -62,6 +62,9 @@ func (o *Orchestrator) readRegistryFrom(ctx context.Context, path string, offset
 }
 
 func (o *Orchestrator) applyRegistryEvent(ctx context.Context, ev registry.Event) {
+	if o.RunID != "" && ev.Run != o.RunID {
+		return // another run's worker — not this session's story
+	}
 	switch ev.Type {
 	case "spawned":
 		o.mu.Lock()
@@ -80,7 +83,7 @@ func (o *Orchestrator) applyRegistryEvent(ctx context.Context, ev registry.Event
 		delete(o.unfinished, ev.Worker)
 		o.mu.Unlock()
 		o.emit(ctx,
-			ui.WorkerUpsertMsg{ID: ev.Worker, Status: ev.Status, Summary: ev.Summary, LogPath: ev.LogPath},
+			ui.WorkerUpsertMsg{ID: ev.Worker, Status: ev.Status, Summary: ev.Summary, LogPath: ev.LogPath, Ended: ev.TS},
 			ui.WorkerUsageMsg{ID: ev.Worker, Input: ev.InputTokens, Output: ev.OutputTokens},
 		)
 	}

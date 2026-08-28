@@ -6,6 +6,7 @@ package ui
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -136,9 +137,25 @@ func clipTo(s string, w int) string {
 	return string(rs) + "…"
 }
 
-// truncPlain shortens an unstyled string to n cells.
+// ansiSeq matches CSI/OSC escape sequences in worker output.
+var ansiSeq = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)?`)
+
+// truncPlain shortens an unstyled string to n cells, stripping ANSI
+// sequences and replacing control characters (worker output can carry
+// escapes and carriage returns that would shred the layout) with spaces.
 func truncPlain(s string, n int) string {
-	s = strings.ReplaceAll(s, "\n", " ")
+	if strings.ContainsRune(s, 0x1b) {
+		s = ansiSeq.ReplaceAllString(s, "")
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			r = ' '
+		}
+		b.WriteRune(r)
+	}
+	s = b.String()
 	if len(s) <= n {
 		return s
 	}

@@ -105,3 +105,28 @@ verified and summarized. No permission prompts. Notes:
   endpoint in models.toml that fails its health check (child process, log at
   `~/.strawboss/opencode-serve.log`, killed on exit). Remote endpoints are only
   reported (`endpoint unreachable`), never managed.
+
+## The hung-delegation incident (2026-08-28, first real task)
+
+Two stacked failures produced an indefinite delegate hang; both handled now.
+
+1. **`GET /session/status` is project-scoped like `/event`**: without
+   `?directory=<worker dir>` it returns `{}` for sessions rooted outside the
+   server's own cwd, so delegate never saw its worker go busy. Every status query
+   now carries the worker's directory. (M3/M5 tests passed by luck: their workers'
+   final messages completed, satisfying the fallback exit condition.)
+2. **opencode can end a run silently mid-message**: the sglang server on the GX10
+   restarted mid-generation (model `created` timestamp jumped past the worker's
+   death), the in-flight request died, and opencode left the session idle with an
+   INCOMPLETE final assistant message and `error: null`. Waiting for a completed
+   message therefore never returns. `Result` now declares a worker dead when it
+   goes idle with an incomplete message (debounced), or when its session record
+   goes stale (`StallAfter`, default 45s) — reported as a failed worker with the
+   partial transcript at the log path. `finishedStatus` also no longer classifies
+   an incomplete message as done (that briefly made the TUI mark live workers
+   "recovered").
+
+Also fixed from the same run: the logs tab was spewing every streamed worker
+delta as its own fragment line (now only discrete events are logged; deltas
+coalesce in the detail pane) and worker output ANSI/control characters are
+stripped before rendering.

@@ -24,6 +24,9 @@ type Harness struct {
 	LogDir string
 	// PollInterval for Result's completion polling. Default 500ms.
 	PollInterval time.Duration
+	// StallAfter is how long an idle-looking session may go without a
+	// record update before it's declared dead. Default 45s.
+	StallAfter time.Duration
 }
 
 // New returns a Harness for the model config's endpoint (the opencode
@@ -65,7 +68,7 @@ func (h *Harness) Spawn(ctx context.Context, task string, model config.ModelConf
 // Status maps opencode's live status (busy/retry, absent = idle) plus the
 // transcript's error state onto the worker lifecycle.
 func (h *Harness) Status(ctx context.Context, workerID string) (harness.Status, error) {
-	statuses, err := h.Client.Status(ctx)
+	statuses, err := h.Client.Status(ctx, h.Dir)
 	if err != nil {
 		return "", fmt.Errorf("worker %s status: %w", workerID, err)
 	}
@@ -79,7 +82,10 @@ func (h *Harness) Status(ctx context.Context, workerID string) (harness.Status, 
 	return finishedStatus(msgs), nil
 }
 
-// finishedStatus classifies an idle session from its transcript.
+// finishedStatus classifies a session from its transcript. An INCOMPLETE
+// last assistant message reports as running — only its time.completed (or
+// an error) proves the turn actually ended; classifying it done here once
+// closed rows on workers that were mid-generation.
 func finishedStatus(msgs []Message) harness.Status {
 	last := lastAssistant(msgs)
 	if last == nil {
@@ -92,6 +98,9 @@ func finishedStatus(msgs []Message) harness.Status {
 		if p.Type == "tool" && p.State.Status == "error" {
 			return harness.StatusFailed
 		}
+	}
+	if last.Info.Time.Completed == 0 {
+		return harness.StatusRunning
 	}
 	return harness.StatusDone
 }
@@ -182,31 +191,51 @@ func (h *Harness) Result(ctx context.Context, workerID string) (harness.Result, 
 	if interval == 0 {
 		interval = 500 * time.Millisecond
 	}
+	stallAfter := h.StallAfter
+	if stallAfter == 0 {
+		stallAfter = 45 * time.Second
+	}
 	// prompt_async admits the task before the session shows busy, so a
 	// too-early idle is not "finished" — it's "not started yet". Finished
-	// means: idle after having been seen busy, or idle with a *completed*
-	// assistant reply in the transcript (an assistant message exists from
-	// the moment generation starts, but time.completed stays 0 until it's
-	// done). ctx bounds the whole wait.
-	var msgs []Message
+	// means the transcript proves it: a completed (or errored) final
+	// assistant message. opencode can also die MID-message with no error
+	// recorded (seen live — docs/NOTES.md), so a session that goes idle
+	// with an incomplete message, or whose record stops updating, is
+	// declared stalled rather than waited on forever. ctx bounds the wait.
 	started := false
-	for {
-		statuses, err := h.Client.Status(ctx)
+	stalled := false
+	idlePolls := 0
+	for !stalled {
+		statuses, err := h.Client.Status(ctx, h.Dir)
 		if err != nil {
 			return harness.Result{}, fmt.Errorf("worker %s result: %w", workerID, err)
 		}
 		if st, ok := statuses[workerID]; ok && st.Type != "idle" {
 			started = true
+			idlePolls = 0
 		} else {
-			if started {
-				break
-			}
-			msgs, err = h.Client.Messages(ctx, workerID)
+			idlePolls++
+			msgs, err := h.Client.Messages(ctx, workerID)
 			if err != nil {
 				return harness.Result{}, fmt.Errorf("worker %s result: %w", workerID, err)
 			}
-			if last := lastAssistant(msgs); last != nil && last.Info.Time.Completed != 0 {
+			if st := finishedStatus(msgs); st == harness.StatusDone || st == harness.StatusFailed {
 				break
+			}
+			if started && idlePolls >= 2 {
+				// Was running, now idle, transcript incomplete: died mid-message.
+				stalled = true
+				break
+			}
+			if !started {
+				// Never seen busy (or died before the first poll): fall back
+				// to the session record's last-updated time.
+				info, err := h.Client.SessionInfo(ctx, workerID)
+				if err == nil && info.Time.Updated > 0 &&
+					time.Since(time.UnixMilli(info.Time.Updated)) > stallAfter {
+					stalled = true
+					break
+				}
 			}
 		}
 		select {
@@ -224,10 +253,16 @@ func (h *Harness) Result(ctx context.Context, workerID string) (harness.Result, 
 	if err != nil {
 		return harness.Result{}, err
 	}
+	status := finishedStatus(msgs)
+	summary := summarize(msgs)
+	if stalled || status == harness.StatusRunning || status == harness.StatusQueued {
+		status = harness.StatusFailed
+		summary = "worker stopped without completing its reply (no error recorded by opencode); partial transcript in log. " + summary
+	}
 	return harness.Result{
 		WorkerID: workerID,
-		Status:   finishedStatus(msgs),
-		Summary:  summarize(msgs),
+		Status:   status,
+		Summary:  summary,
 		LogPath:  logPath,
 	}, nil
 }

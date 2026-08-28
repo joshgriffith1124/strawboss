@@ -257,12 +257,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, Listen(m.feed)
 	case WorkerEventMsg:
 		ev := m.workerEvents[msg.ID]
+		streamKind := msg.Kind == "text" || msg.Kind == "reasoning"
+		if streamKind && len(ev) > 0 {
+			// Coalesce consecutive stream deltas into one growing entry so
+			// the transcript reads as prose, not 3-character shards.
+			if kind, text, ok := strings.Cut(ev[len(ev)-1], "\x00"); ok && kind == msg.Kind {
+				ev[len(ev)-1] = kind + "\x00" + tailStr(text+msg.Text, 400)
+				m.workerEvents[msg.ID] = ev
+				return m, Listen(m.feed)
+			}
+		}
 		ev = append(ev, msg.Kind+"\x00"+msg.Text)
 		if len(ev) > 200 {
 			ev = ev[len(ev)-200:]
 		}
 		m.workerEvents[msg.ID] = ev
-		m.log("wrk", msg.ID+" "+msg.Kind+": "+truncPlain(msg.Text, 110))
+		if !streamKind {
+			// Stream deltas would spew fragments into the logs tab; only
+			// discrete events (tool calls, errors) are log-worthy.
+			m.log("wrk", msg.ID+" "+msg.Kind+": "+truncPlain(msg.Text, 110))
+		}
 		return m, Listen(m.feed)
 
 	case ModelStatMsg:
@@ -376,6 +390,14 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.follow = !m.follow
 	}
 	return m, nil
+}
+
+// tailStr keeps the last n bytes of a growing stream entry.
+func tailStr(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[len(s)-n:]
 }
 
 func firstLine(s string) string {

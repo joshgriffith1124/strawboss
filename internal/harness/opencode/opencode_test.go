@@ -26,6 +26,7 @@ const fixtureSID = "ses_fb60449aeffeOeKJ878Yqn4aj6"
 // report busy so Result's polling loop is exercised.
 type fakeServer struct {
 	t           *testing.T
+	stalled     bool
 	busyPolls   int32
 	statusPolls atomic.Int32
 	prompts     atomic.Int32
@@ -69,6 +70,14 @@ func (f *fakeServer) handler() http.Handler {
 		w.Write([]byte(`{}`))
 	})
 	mux.HandleFunc("GET /session/"+fixtureSID+"/message", func(w http.ResponseWriter, r *http.Request) {
+		if f.stalled {
+			// A worker that died mid-message: incomplete assistant, no error.
+			w.Write([]byte(`[
+				{"info":{"id":"m1","sessionID":"` + fixtureSID + `","role":"user","time":{"created":1}},"parts":[{"type":"text","text":"task"}]},
+				{"info":{"id":"m2","sessionID":"` + fixtureSID + `","role":"assistant","time":{"created":2}},"parts":[{"type":"reasoning","text":""}]}
+			]`))
+			return
+		}
 		w.Write(fixture(f.t, "messages.json"))
 	})
 	mux.HandleFunc("GET /api/session/"+fixtureSID, func(w http.ResponseWriter, r *http.Request) {
@@ -149,6 +158,12 @@ func TestStatus(t *testing.T) {
 	})
 }
 
+func completedInfo() MessageInfo {
+	info := MessageInfo{Role: "assistant"}
+	info.Time.Completed = 2
+	return info
+}
+
 func TestFinishedStatusClassification(t *testing.T) {
 	tests := []struct {
 		name string
@@ -161,7 +176,8 @@ func TestFinishedStatusClassification(t *testing.T) {
 			Info:  MessageInfo{Role: "assistant"},
 			Parts: []Part{{Type: "tool", State: ToolState{Status: "error"}}},
 		}}, harness.StatusFailed},
-		{"clean", []Message{{Info: MessageInfo{Role: "assistant"}, Parts: []Part{{Type: "text", Text: "ok"}}}}, harness.StatusDone},
+		{"clean completed", []Message{{Info: completedInfo(), Parts: []Part{{Type: "text", Text: "ok"}}}}, harness.StatusDone},
+		{"incomplete last message is still running", []Message{{Info: MessageInfo{Role: "assistant"}, Parts: []Part{{Type: "text", Text: "partial"}}}}, harness.StatusRunning},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -262,5 +278,47 @@ func TestSummarizeError(t *testing.T) {
 	s := summarize(msgs)
 	if !strings.Contains(s, "APIError") || !strings.Contains(s, "boom") {
 		t.Errorf("summary = %q", s)
+	}
+}
+
+// TestResultStalledWorker: session idle, last assistant message never
+// completed, record stale — Result must fail fast instead of hanging
+// forever (hit live 2026-08-28; see docs/NOTES.md).
+func TestResultStalledWorker(t *testing.T) {
+	f := &fakeServer{t: t, stalled: true}
+	h := newHarness(t, f)
+	h.StallAfter = 10 * time.Millisecond // fixture session_info updated long ago
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res, err := h.Result(ctx, fixtureSID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != harness.StatusFailed {
+		t.Errorf("status = %q, want failed", res.Status)
+	}
+	if !strings.Contains(res.Summary, "without completing") {
+		t.Errorf("summary = %q", res.Summary)
+	}
+	if res.LogPath == "" {
+		t.Error("no log path — partial transcript must still be written")
+	}
+}
+
+// TestResultStallAfterBusy: worker seen busy, then idle with an incomplete
+// message — the debounced idle path must declare it dead, not done.
+func TestResultStallAfterBusy(t *testing.T) {
+	f := &fakeServer{t: t, stalled: true, busyPolls: 2}
+	h := newHarness(t, f)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res, err := h.Result(ctx, fixtureSID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != harness.StatusFailed {
+		t.Errorf("status = %q, want failed", res.Status)
 	}
 }

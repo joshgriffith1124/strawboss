@@ -30,6 +30,7 @@ type Orchestrator struct {
 	sessionToWorker map[string]string // opencode session id → wN
 	workerSession   map[string]string // wN → opencode session id
 	workerModel     map[string]string // wN → model config name
+	workerDir       map[string]string // wN → working directory (for scoped status)
 	unfinished      map[string]bool   // wN spawned but no finished event yet
 }
 
@@ -45,6 +46,7 @@ func New(d *supervisor.Driver, models []config.ModelConfig, stateDir string) *Or
 		sessionToWorker: map[string]string{},
 		workerSession:   map[string]string{},
 		workerModel:     map[string]string{},
+		workerDir:       map[string]string{},
 		unfinished:      map[string]bool{},
 	}
 }

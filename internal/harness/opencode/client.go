@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -98,10 +99,16 @@ func (c *Client) PromptAsync(ctx context.Context, sessionID, providerID, modelID
 }
 
 // Status returns the busy/retry state of every non-idle session; sessions
-// absent from the map are idle.
-func (c *Client) Status(ctx context.Context) (map[string]SessionStatus, error) {
+// absent from the map are idle. dir MUST be the directory the sessions
+// live in: the endpoint is project-scoped, and without the directory
+// param sessions rooted elsewhere are silently absent (see docs/NOTES.md).
+func (c *Client) Status(ctx context.Context, dir string) (map[string]SessionStatus, error) {
+	path := "/session/status"
+	if dir != "" {
+		path += "?directory=" + url.QueryEscape(dir)
+	}
 	out := map[string]SessionStatus{}
-	if err := c.do(ctx, "GET", "/session/status", nil, &out); err != nil {
+	if err := c.do(ctx, "GET", path, nil, &out); err != nil {
 		return nil, err
 	}
 	return out, nil

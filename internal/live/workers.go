@@ -68,6 +68,7 @@ func (o *Orchestrator) applyRegistryEvent(ctx context.Context, ev registry.Event
 		o.sessionToWorker[ev.Session] = ev.Worker
 		o.workerSession[ev.Worker] = ev.Session
 		o.workerModel[ev.Worker] = ev.Model
+		o.workerDir[ev.Worker] = ev.Dir
 		o.unfinished[ev.Worker] = true
 		o.mu.Unlock()
 		o.emit(ctx, ui.WorkerUpsertMsg{
@@ -108,23 +109,38 @@ func (o *Orchestrator) pollWorkers(ctx context.Context) {
 		case <-time.After(interval):
 		}
 
-		type snapshot struct{ worker, session, model string }
+		type snapshot struct{ worker, session, model, dir string }
 		o.mu.Lock()
 		var open []snapshot
 		for wid := range o.unfinished {
-			open = append(open, snapshot{wid, o.workerSession[wid], o.workerModel[wid]})
+			open = append(open, snapshot{wid, o.workerSession[wid], o.workerModel[wid], o.workerDir[wid]})
 		}
 		o.mu.Unlock()
 
+		// The status endpoint is project-scoped: query each endpoint once
+		// per distinct worker directory (plus bare, for reachability).
 		busyByEndpoint := map[string]map[string]opencode.SessionStatus{}
 		reachable := map[string]bool{}
 		for _, base := range o.endpoints() {
 			c := &opencode.Client{Base: base}
-			st, err := c.Status(ctx)
-			if err == nil {
-				busyByEndpoint[base] = st
-				reachable[base] = true
+			if _, err := c.Status(ctx, ""); err != nil {
+				continue
 			}
+			reachable[base] = true
+			merged := map[string]opencode.SessionStatus{}
+			dirs := map[string]bool{}
+			for _, s := range open {
+				if o.clientFor(s.model).Base != base || dirs[s.dir] {
+					continue
+				}
+				dirs[s.dir] = true
+				if st, err := c.Status(ctx, s.dir); err == nil {
+					for k, v := range st {
+						merged[k] = v
+					}
+				}
+			}
+			busyByEndpoint[base] = merged
 		}
 
 		activePerModel := map[string]int{}
@@ -150,7 +166,7 @@ func (o *Orchestrator) pollWorkers(ctx context.Context) {
 			} else if reachable[c.Base] {
 				// Idle but no finished event: the delegate process is gone
 				// (crash/kill). Classify from the transcript and close the row.
-				h := &opencode.Harness{Client: c}
+				h := &opencode.Harness{Client: c, Dir: s.dir}
 				st, err := h.Status(ctx, s.session)
 				if err == nil && (st == harness.StatusDone || st == harness.StatusFailed) {
 					o.mu.Lock()

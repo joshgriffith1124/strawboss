@@ -90,10 +90,13 @@ func (c *Client) CreateSession(ctx context.Context, dir, title string) (string, 
 // PromptAsync fires a task at a session without waiting: the v1
 // fire-and-forget path that actually starts a run (the v2 prompt endpoint
 // only queues input — see docs/NOTES.md).
-func (c *Client) PromptAsync(ctx context.Context, sessionID, providerID, modelID, text string) error {
+func (c *Client) PromptAsync(ctx context.Context, sessionID, providerID, modelID, variant, text string) error {
 	body := map[string]any{
 		"model": map[string]string{"providerID": providerID, "modelID": modelID},
 		"parts": []map[string]string{{"type": "text", "text": text}},
+	}
+	if variant != "" {
+		body["variant"] = variant
 	}
 	return c.do(ctx, "POST", "/session/"+sessionID+"/prompt_async", body, nil)
 }

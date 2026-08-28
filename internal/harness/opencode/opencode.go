@@ -59,7 +59,7 @@ func (h *Harness) Spawn(ctx context.Context, task string, model config.ModelConf
 	if err != nil {
 		return "", fmt.Errorf("spawning worker: %w", err)
 	}
-	if err := h.Client.PromptAsync(ctx, id, providerID, modelID, task); err != nil {
+	if err := h.Client.PromptAsync(ctx, id, providerID, modelID, model.Variant, task); err != nil {
 		return "", fmt.Errorf("spawning worker %s: %w", id, err)
 	}
 	return id, nil
@@ -259,6 +259,17 @@ func (h *Harness) Result(ctx context.Context, workerID string) (harness.Result, 
 		status = harness.StatusFailed
 		summary = "worker stopped without completing its reply (no error recorded by opencode); partial transcript in log. " + summary
 	}
+	// A "clean" completion that is pure reasoning — no answer, no tool
+	// calls — means the model exhausted its output budget thinking (seen
+	// live: 49k chars of reasoning, output tokens pegged at the limit).
+	// Report failure with advice, or the supervisor retries the same task
+	// into the same wall forever.
+	if status == harness.StatusDone {
+		if last := lastAssistant(msgs); last != nil && reasoningOnly(last) {
+			status = harness.StatusFailed
+			summary = fmt.Sprintf("worker produced only internal reasoning and no answer — its output budget (%d tokens) was likely exhausted thinking. Do NOT retry the same task: split it into smaller pieces or demand a much smaller deliverable.", last.Info.Tokens.Output)
+		}
+	}
 	return harness.Result{
 		WorkerID: workerID,
 		Status:   status,
@@ -310,6 +321,25 @@ func summarize(msgs []Message) string {
 		text = text[:maxSummaryBytes] + "…"
 	}
 	return text
+}
+
+// reasoningOnly reports a message that thought but never answered: at
+// least one reasoning part, and neither text nor tool parts.
+func reasoningOnly(m *Message) bool {
+	sawReasoning := false
+	for _, p := range m.Parts {
+		switch p.Type {
+		case "text":
+			if strings.TrimSpace(p.Text) != "" {
+				return false
+			}
+		case "tool":
+			return false
+		case "reasoning":
+			sawReasoning = true
+		}
+	}
+	return sawReasoning
 }
 
 // textOf concatenates a message's text parts.

@@ -155,3 +155,25 @@ pattern for the TUI:
   estimated_tokens_delta}`, emitted periodically while reasoning — now feeds
   the status line ("thinking… ~82 tok") instead of spamming logs as unparsed.
 - `strawboss chat` (console spike) still uses the per-turn --resume driver.
+
+## The retry-loop incident (2026-08-28): reasoning exhaustion
+
+The supervisor kept re-delegating the same big task. Cause: qwen3.8-27b (a
+reasoning model) burned its ENTIRE output budget thinking — one worker produced
+49,778 chars of reasoning, zero text, zero tool calls, output tokens pegged at
+exactly the 16384 `limit.output` from opencode.json — and opencode recorded a
+CLEAN completion (no error, no finish reason). The terse result read "done ·
+(empty reply)", the file never existed, so the supervisor retried the same task
+into the same wall, forever.
+
+Handled three ways:
+- A completed message that is pure reasoning (no text, no tool parts) is now a
+  FAILED result with advice ("output budget exhausted thinking — split the task,
+  don't retry it as-is"), and delegate exits 1.
+- The system prompt tells the supervisor workers have a ~16k output budget
+  shared with reasoning: scope tasks to ~200-line deliverables, split big files.
+- `models.toml` entries accept `variant` (opencode ModelRef variant, e.g. a
+  non-thinking mode if the provider defines one), passed through prompt_async.
+
+Also worth knowing: `limit.output` in ~/.config/opencode/opencode.json is the
+lever for the budget itself (currently 16384 for spark-a models).

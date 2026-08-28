@@ -10,6 +10,9 @@
 endpoint = "http://127.0.0.1:4477"
 model = "spark-a/qwen3.8-27b"
 harness = "opencode"             # optional; "opencode" is the default and only v1 harness
+# variant = "non-thinking"       # optional opencode model variant — reasoning models can
+#                                # exhaust their whole output budget thinking; a non-thinking
+#                                # variant (if the provider defines one) avoids that
 
 [models.qwen-flash]
 endpoint = "http://127.0.0.1:4477"

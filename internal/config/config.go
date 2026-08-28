@@ -19,6 +19,9 @@ type ModelConfig struct {
 	Endpoint string `toml:"endpoint"`
 	Model    string `toml:"model"`
 	Harness  string `toml:"harness"`
+	// Variant selects the opencode model variant (e.g. a non-thinking mode
+	// for reasoning models). Empty uses the provider default.
+	Variant string `toml:"variant"`
 }
 
 // Supervisor holds settings for spawning the claude CLI.

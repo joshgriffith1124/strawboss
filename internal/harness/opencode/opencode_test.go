@@ -25,12 +25,13 @@ const fixtureSID = "ses_fb60449aeffeOeKJ878Yqn4aj6"
 // uses. statusPolls counts /session/status calls; the first `busyPolls`
 // report busy so Result's polling loop is exercised.
 type fakeServer struct {
-	t           *testing.T
-	stalled     bool
-	busyPolls   int32
-	statusPolls atomic.Int32
-	prompts     atomic.Int32
-	lastPrompt  atomic.Value // json body string
+	t             *testing.T
+	stalled       bool
+	reasoningOnly bool
+	busyPolls     int32
+	statusPolls   atomic.Int32
+	prompts       atomic.Int32
+	lastPrompt    atomic.Value // json body string
 }
 
 func fixture(t *testing.T, name string) []byte {
@@ -70,6 +71,15 @@ func (f *fakeServer) handler() http.Handler {
 		w.Write([]byte(`{}`))
 	})
 	mux.HandleFunc("GET /session/"+fixtureSID+"/message", func(w http.ResponseWriter, r *http.Request) {
+		if f.reasoningOnly {
+			// Completed cleanly, but the entire output is reasoning: the
+			// model thought its budget away and never answered.
+			w.Write([]byte(`[
+				{"info":{"id":"m1","sessionID":"` + fixtureSID + `","role":"user","time":{"created":1}},"parts":[{"type":"text","text":"task"}]},
+				{"info":{"id":"m2","sessionID":"` + fixtureSID + `","role":"assistant","time":{"created":2,"completed":3},"tokens":{"input":850,"output":16384,"reasoning":0,"cache":{"read":0,"write":0}}},"parts":[{"type":"step-start"},{"type":"reasoning","text":"thinking forever"},{"type":"step-finish"}]}
+			]`))
+			return
+		}
 		if f.stalled {
 			// A worker that died mid-message: incomplete assistant, no error.
 			w.Write([]byte(`[
@@ -348,4 +358,40 @@ func TestSummarizeFallbacks(t *testing.T) {
 			t.Errorf("summary = %q", s)
 		}
 	})
+}
+
+// TestResultReasoningExhaustion: a clean completion that is pure reasoning
+// (no answer, no tools) must fail with advice, not report done+empty —
+// that combination sent the supervisor into a retry loop (seen live).
+func TestResultReasoningExhaustion(t *testing.T) {
+	f := &fakeServer{t: t, reasoningOnly: true}
+	h := newHarness(t, f)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res, err := h.Result(ctx, fixtureSID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != harness.StatusFailed {
+		t.Errorf("status = %q, want failed", res.Status)
+	}
+	if !strings.Contains(res.Summary, "only internal reasoning") ||
+		!strings.Contains(res.Summary, "16384") ||
+		!strings.Contains(res.Summary, "split it") {
+		t.Errorf("summary = %q", res.Summary)
+	}
+}
+
+func TestSpawnPassesVariant(t *testing.T) {
+	f := &fakeServer{t: t}
+	h := newHarness(t, f)
+	_, err := h.Spawn(context.Background(), "task", config.ModelConfig{Model: "spark-a/qwen3.8-27b", Variant: "non-thinking"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt, _ := f.lastPrompt.Load().(string)
+	if !strings.Contains(prompt, `"variant":"non-thinking"`) {
+		t.Errorf("prompt body missing variant: %s", prompt)
+	}
 }

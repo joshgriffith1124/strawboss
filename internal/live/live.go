@@ -288,6 +288,8 @@ Available worker models: %s. Workers run in your working directory and cannot se
 
 Run INDEPENDENT tasks in parallel by repeating --task in ONE delegate call — each task becomes its own concurrent worker:
   %s delegate --model <m> --task "first task" --task "second task"
-Only chain separate delegate calls when one task needs another's output. Do small glue work yourself (you may Read, Edit, and Write files directly); delegate anything substantial.`,
+Only chain separate delegate calls when one task needs another's output. Do small glue work yourself (you may Read, Edit, and Write files directly); delegate anything substantial.
+
+Workers are SMALL local models with a limited output budget (roughly 16k tokens, shared with their internal reasoning). Scope every task so the deliverable is modest — aim for one file of at most ~200 lines per task, never a whole app in one file. If a worker fails with "only internal reasoning" or an empty reply, the task was too big: split it into smaller pieces instead of retrying the same task.`,
 		exe, strings.Join(names, ", "), exe)
 }

@@ -1,0 +1,193 @@
+package live
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"strawboss/internal/config"
+	"strawboss/internal/harness/opencode"
+	"strawboss/internal/registry"
+	"strawboss/internal/supervisor"
+	"strawboss/internal/ui"
+)
+
+// drainUntil pulls feed msgs until pred returns true or the timeout hits.
+func drainUntil(t *testing.T, feed <-chan tea.Msg, timeout time.Duration, pred func(tea.Msg) bool) []tea.Msg {
+	t.Helper()
+	var got []tea.Msg
+	deadline := time.After(timeout)
+	for {
+		select {
+		case m := <-feed:
+			got = append(got, m)
+			if pred(m) {
+				return got
+			}
+		case <-deadline:
+			t.Fatalf("timed out; got %d msgs: %#v", len(got), got)
+		}
+	}
+}
+
+// TestSupervisorTurnThroughOrchestrator runs a full turn against a fake
+// claude binary replaying the real captured fixture stream.
+func TestSupervisorTurnThroughOrchestrator(t *testing.T) {
+	fixture, err := filepath.Abs(filepath.Join("..", "supervisor", "testdata", "turn1.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "claude")
+	script := fmt.Sprintf("#!/bin/sh\ncat %q\n", fixture)
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	stateDir := t.TempDir()
+	o := New(&supervisor.Driver{Command: bin}, nil, stateDir)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go o.supervisorLoop(ctx)
+
+	o.OnPrompt("hello")
+	msgs := drainUntil(t, o.Feed(), 10*time.Second, func(m tea.Msg) bool {
+		_, done := m.(ui.SupTurnDoneMsg)
+		return done
+	})
+
+	var sawInit, sawText, sawUsage bool
+	for _, m := range msgs {
+		switch v := m.(type) {
+		case ui.SupInitMsg:
+			sawInit = true
+			if v.Auth != "subscription" {
+				t.Errorf("auth = %q", v.Auth)
+			}
+			if v.PID == 0 {
+				t.Error("pid = 0")
+			}
+		case ui.SupTextDoneMsg:
+			if strings.Contains(v.Text, "strawboss spike ok") {
+				sawText = true
+			}
+		case ui.SupUsageMsg:
+			if v.CostUSD > 0 {
+				sawUsage = true
+			}
+		}
+	}
+	if !sawInit || !sawText || !sawUsage {
+		t.Errorf("init=%v text=%v usage=%v", sawInit, sawText, sawUsage)
+	}
+
+	// The session id was persisted for resume.
+	if sid := LoadSession(stateDir); sid != "35a53d5b-ee5c-4624-9f59-afb4d9e34f26" {
+		t.Errorf("persisted session = %q", sid)
+	}
+}
+
+// TestRegistryWatcher feeds a workers.jsonl incrementally and checks the
+// emitted worker msgs (historical replay + live tail).
+func TestRegistryWatcher(t *testing.T) {
+	stateDir := t.TempDir()
+	reg := &registry.Registry{Path: filepath.Join(stateDir, "workers.jsonl")}
+
+	// Pre-existing history: w1 done before startup.
+	w1, _ := reg.Allocate("ses_a", "qwen-coder", "old task", "/repo")
+	if err := reg.Finish(w1, "ses_a", "done", "all good", "/logs/a.jsonl", time.Second, 100, 20); err != nil {
+		t.Fatal(err)
+	}
+
+	o := New(&supervisor.Driver{}, nil, stateDir)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go o.watchRegistry(ctx)
+
+	msgs := drainUntil(t, o.Feed(), 5*time.Second, func(m tea.Msg) bool {
+		u, ok := m.(ui.WorkerUsageMsg)
+		return ok && u.ID == w1
+	})
+	first := msgs[0].(ui.WorkerUpsertMsg)
+	if first.ID != w1 || first.Status != "running" || first.Task != "old task" {
+		t.Errorf("first = %+v", first)
+	}
+
+	// Live tail: a new delegation lands while watching.
+	w2, err := reg.Allocate("ses_b", "qwen-small", "new task", "/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	drainUntil(t, o.Feed(), 5*time.Second, func(m tea.Msg) bool {
+		u, ok := m.(ui.WorkerUpsertMsg)
+		if ok && u.ID == w2 {
+			if u.Model != "qwen-small" || u.Status != "running" {
+				t.Errorf("w2 = %+v", u)
+			}
+			return true
+		}
+		return false
+	})
+
+	// The watcher registered the session mapping for the event stream.
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.sessionToWorker["ses_b"] != w2 || !o.unfinished[w2] {
+		t.Errorf("mappings = %+v unfinished = %+v", o.sessionToWorker, o.unfinished)
+	}
+	if o.unfinished[w1] {
+		t.Error("w1 should be finished")
+	}
+}
+
+func TestMapWorkerEventFiltersUnknownSessions(t *testing.T) {
+	o := New(&supervisor.Driver{}, nil, t.TempDir())
+	o.sessionToWorker["ses_known"] = "w7"
+
+	mk := func(sid, field, delta string) []tea.Msg {
+		return o.mapWorkerEvent(sseDelta(sid, field, delta))
+	}
+
+	if msgs := mk("ses_unknown", "text", "x"); msgs != nil {
+		t.Errorf("unknown session leaked: %#v", msgs)
+	}
+	msgs := mk("ses_known", "text", "hello")
+	if len(msgs) != 1 {
+		t.Fatalf("msgs = %#v", msgs)
+	}
+	we := msgs[0].(ui.WorkerEventMsg)
+	if we.ID != "w7" || we.Kind != "text" || we.Text != "hello" {
+		t.Errorf("event = %+v", we)
+	}
+	if msgs := mk("ses_known", "somethingelse", "x"); msgs != nil {
+		t.Errorf("non-text delta leaked: %#v", msgs)
+	}
+}
+
+// sseDelta builds a message.part.delta ServerEvent for tests.
+func sseDelta(sid, field, delta string) (ev opencode.ServerEvent) {
+	ev.Type = "message.part.delta"
+	ev.Properties.SessionID = sid
+	ev.Properties.Field = field
+	ev.Properties.Delta = delta
+	return ev
+}
+
+func TestBuildSystemPrompt(t *testing.T) {
+	p := BuildSystemPrompt("/usr/local/bin/strawboss", []config.ModelConfig{
+		{Name: "qwen-coder", Model: "spark-a/qwen3.8-27b"},
+		{Name: "qwen-small", Model: "spark-a/qwen3.8-flash-next"},
+	})
+	for _, want := range []string{"/usr/local/bin/strawboss delegate", "--model", "--task",
+		"qwen-coder (spark-a/qwen3.8-27b)", "qwen-small", "terse"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("prompt missing %q", want)
+		}
+	}
+}

@@ -84,3 +84,24 @@ verified and summarized. No permission prompts. Notes:
 - The supervisor also ran a bare `cat` that was NOT in allowedTools and it executed —
   headless default permission mode appears to allow read-only commands. Don't rely on
   allowedTools as a sandbox; it's prompt-avoidance, not confinement.
+- **Compound shell commands don't pass the allowlist** (verified in `dontAsk` mode):
+  `delegate … & delegate … & wait` is denied even with `Bash(wait)` allowed — the
+  matcher doesn't decompose `&` chains into individually-allowed parts. That's why
+  `delegate` accepts repeated `--task` flags: parallelism lives inside one allowed
+  command. Also: a resumed session REMEMBERS past denials and avoids the denied form
+  even after the allowlist changes — prompt-engineering fixes need `--new`.
+
+## M5 integration notes (2026-08-28)
+
+- Full live loop verified in the TUI: prompt → supervisor turn → one delegate call
+  with two --task flags → two workers running simultaneously on the GX10
+  ("Workers · 2 active"), files landing on disk, terse results back, session
+  persisted and resumed across strawboss restarts.
+- **tok/s and mid-run worker tokens only move when a worker message completes** —
+  opencode's session token counters update per completed assistant message, so
+  single-message tasks (seconds long) show `idle`/0 until done. Multi-step tasks
+  (the real workload) update every few seconds. Known cosmetic limitation.
+- strawboss now spawns and babysits `opencode serve` itself for any localhost
+  endpoint in models.toml that fails its health check (child process, log at
+  `~/.strawboss/opencode-serve.log`, killed on exit). Remote endpoints are only
+  reported (`endpoint unreachable`), never managed.

@@ -60,6 +60,14 @@ type Turn struct {
 	once        sync.Once
 }
 
+// PID returns the subprocess pid (0 if not started).
+func (t *Turn) PID() int {
+	if t.cmd.Process == nil {
+		return 0
+	}
+	return t.cmd.Process.Pid
+}
+
 // Interrupt sends SIGINT (esc-to-interrupt): the CLI ends the current turn
 // but the session remains resumable.
 func (t *Turn) Interrupt() {

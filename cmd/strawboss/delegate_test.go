@@ -16,46 +16,49 @@ import (
 // fakeOpencode serves the minimal API surface delegate exercises. mode
 // selects the worker outcome: "done", "failed", or "hang" (never finishes).
 type fakeOpencode struct {
-	mode   string
-	aborts atomic.Int32
+	mode    string
+	aborts  atomic.Int32
+	created atomic.Int32
 }
 
-const testSID = "ses_delegate_test"
+const testSID = "ses_delegate_test_1"
 
 func (f *fakeOpencode) handler() http.Handler {
-	assistant := func(errField string) string {
+	assistant := func(sid, errField string) string {
 		return fmt.Sprintf(`{
 			"info":{"id":"msg_2","sessionID":%[1]q,"role":"assistant","time":{"created":1,"completed":2}%[2]s},
 			"parts":[{"type":"text","text":"summary: did the thing"}]
-		}`, testSID, errField)
+		}`, sid, errField)
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/session", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"data":{"id":"` + testSID + `"}}`))
+		n := f.created.Add(1)
+		fmt.Fprintf(w, `{"data":{"id":"ses_delegate_test_%d"}}`, n)
 	})
-	mux.HandleFunc("POST /session/"+testSID+"/prompt_async", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /session/{sid}/prompt_async", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	mux.HandleFunc("POST /session/"+testSID+"/abort", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /session/{sid}/abort", func(w http.ResponseWriter, r *http.Request) {
 		f.aborts.Add(1)
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("GET /session/status", func(w http.ResponseWriter, r *http.Request) {
 		if f.mode == "hang" {
-			w.Write([]byte(`{"` + testSID + `":{"type":"busy"}}`))
+			fmt.Fprintf(w, `{"ses_delegate_test_1":{"type":"busy"},"ses_delegate_test_2":{"type":"busy"}}`)
 			return
 		}
 		w.Write([]byte(`{}`))
 	})
-	mux.HandleFunc("GET /session/"+testSID+"/message", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /session/{sid}/message", func(w http.ResponseWriter, r *http.Request) {
+		sid := r.PathValue("sid")
 		errField := ""
 		if f.mode == "failed" {
 			errField = `,"error":{"name":"UnknownError","data":{"message":"it broke"}}`
 		}
-		w.Write([]byte(`[{"info":{"id":"msg_1","sessionID":"` + testSID + `","role":"user","time":{"created":1}},"parts":[{"type":"text","text":"the task"}]},` + assistant(errField) + `]`))
+		w.Write([]byte(`[{"info":{"id":"msg_1","sessionID":"` + sid + `","role":"user","time":{"created":1}},"parts":[{"type":"text","text":"the task"}]},` + assistant(sid, errField) + `]`))
 	})
-	mux.HandleFunc("GET /api/session/"+testSID, func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"data":{"id":"` + testSID + `","tokens":{"input":500,"output":90,"reasoning":0,"cache":{"read":1500,"write":0}}}}`))
+	mux.HandleFunc("GET /api/session/{sid}", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"data":{"id":"` + r.PathValue("sid") + `","tokens":{"input":500,"output":90,"reasoning":0,"cache":{"read":1500,"write":0}}}}`))
 	})
 	return mux
 }
@@ -130,7 +133,7 @@ func TestDelegateFailedWorker(t *testing.T) {
 	if err == nil {
 		t.Fatal("want error for failed worker")
 	}
-	if !strings.Contains(err.Error(), "w1 failed") {
+	if !strings.Contains(err.Error(), "1 of 1 workers failed") {
 		t.Errorf("err = %v", err)
 	}
 	// The terse result still prints — the supervisor needs it either way.
@@ -177,8 +180,8 @@ func TestDelegateBadArgs(t *testing.T) {
 		args []string
 		want string
 	}{
-		{"missing task", []string{"--model", "x"}, "--model and --task are required"},
-		{"missing model", []string{"--task", "x"}, "--model and --task are required"},
+		{"missing task", []string{"--model", "x"}, "at least one --task"},
+		{"missing model", []string{"--task", "x"}, "at least one --task"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -196,5 +199,43 @@ func TestDelegateUnknownModel(t *testing.T) {
 	err := runDelegate(append(args[:len(args)-1], "nope", "--task", "x"), &strings.Builder{})
 	if err == nil || !strings.Contains(err.Error(), `no model "nope"`) {
 		t.Errorf("err = %v", err)
+	}
+}
+
+func TestDelegateParallelTasks(t *testing.T) {
+	f := &fakeOpencode{mode: "done"}
+	stateDir, args := setup(t, f)
+
+	var out strings.Builder
+	err := runDelegate(append(args, "--task", "task alpha", "--task", "task beta"), &out)
+	if err != nil {
+		t.Fatalf("err = %v, out = %s", err, out.String())
+	}
+	got := out.String()
+	// One terse block per worker, in task order.
+	if !strings.Contains(got, "w1 done ") || !strings.Contains(got, "w2 done ") {
+		t.Errorf("output = %q", got)
+	}
+	if strings.Count(got, "summary: did the thing") != 2 {
+		t.Errorf("output = %q", got)
+	}
+	if f.created.Load() != 2 {
+		t.Errorf("sessions created = %d", f.created.Load())
+	}
+
+	events, _ := (&registry.Registry{Path: filepath.Join(stateDir, "workers.jsonl")}).Load()
+	workers := registry.Reduce(events)
+	if len(workers) != 2 {
+		t.Fatalf("workers = %+v", workers)
+	}
+	tasks := map[string]bool{}
+	for _, w := range workers {
+		if w.Status != "done" {
+			t.Errorf("worker = %+v", w)
+		}
+		tasks[w.Task] = true
+	}
+	if !tasks["task alpha"] || !tasks["task beta"] {
+		t.Errorf("tasks = %v", tasks)
 	}
 }

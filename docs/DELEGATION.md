@@ -5,18 +5,23 @@ How the supervisor spawns workers, and what flows back into its context.
 ## The command
 
 ```
-strawboss delegate --model <name> --task "<prompt>" [--dir <path>] [--timeout 20m]
+strawboss delegate --model <name> --task "<prompt>" [--task "<prompt>"…] [--dir <path>] [--timeout 20m]
 ```
 
 - `--model` — a named entry in `~/.strawboss/models.toml` (never a hostname).
-- `--task` — the worker's prompt.
+- `--task` — a worker's prompt. **Repeat it to run tasks in parallel**: each task
+  becomes its own concurrent worker inside this one invocation. (This is the
+  parallelism mechanism on purpose — a compound shell command like
+  `delegate … & delegate … & wait` does NOT pass Claude Code's allowlist, verified
+  2026-08-28.)
 - `--dir` — worker working directory; defaults to the caller's cwd, so when the
   supervisor runs it from the project root, workers work in the project.
-- `--timeout` — the worker is aborted (not orphaned) when it expires.
+- `--timeout` — expired workers are aborted (not orphaned).
 - `--state-dir` / `--models` — overrides for tests and experiments.
 
-Blocks until the worker finishes. Exit 0 iff the worker ended `done` — a failed or
-aborted worker exits 1, so the supervisor's tool result is flagged as an error.
+Blocks until every worker finishes and prints one terse result per worker. Exit 0
+iff all ended `done` — otherwise exit 1, so the supervisor's tool result is
+flagged as an error.
 
 ## What the supervisor sees (the terse-result contract)
 

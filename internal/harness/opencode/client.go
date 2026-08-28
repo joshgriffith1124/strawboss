@@ -163,23 +163,10 @@ func (c *Client) Events(ctx context.Context) (<-chan ServerEvent, error) {
 		sc := bufio.NewScanner(resp.Body)
 		sc.Buffer(make([]byte, 64<<10), 16<<20)
 		for sc.Scan() {
-			line := strings.TrimSpace(sc.Text())
-			data, ok := strings.CutPrefix(line, "data:")
+			ev, ok := ParseEventLine(sc.Text())
 			if !ok {
-				continue // comments, event: lines, blank separators
-			}
-			var wrapper struct {
-				Directory string          `json:"directory"`
-				Payload   json.RawMessage `json:"payload"`
-			}
-			if err := json.Unmarshal([]byte(strings.TrimSpace(data)), &wrapper); err != nil || len(wrapper.Payload) == 0 {
 				continue
 			}
-			var ev ServerEvent
-			if err := json.Unmarshal(wrapper.Payload, &ev); err != nil {
-				continue
-			}
-			ev.Directory = wrapper.Directory
 			select {
 			case ch <- ev:
 			case <-ctx.Done():
@@ -188,4 +175,28 @@ func (c *Client) Events(ctx context.Context) (<-chan ServerEvent, error) {
 		}
 	}()
 	return ch, nil
+}
+
+// ParseEventLine parses one SSE line from /global/event ("data: {…}" with
+// the {directory, payload} envelope). ok is false for comments, blanks,
+// and unparseable lines. Exported so recorded streams can be replayed
+// through the same parser (M4 demo mode).
+func ParseEventLine(line string) (ServerEvent, bool) {
+	data, found := strings.CutPrefix(strings.TrimSpace(line), "data:")
+	if !found {
+		return ServerEvent{}, false
+	}
+	var wrapper struct {
+		Directory string          `json:"directory"`
+		Payload   json.RawMessage `json:"payload"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(data)), &wrapper); err != nil || len(wrapper.Payload) == 0 {
+		return ServerEvent{}, false
+	}
+	var ev ServerEvent
+	if err := json.Unmarshal(wrapper.Payload, &ev); err != nil {
+		return ServerEvent{}, false
+	}
+	ev.Directory = wrapper.Directory
+	return ev, true
 }

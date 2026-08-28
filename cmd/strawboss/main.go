@@ -3,7 +3,7 @@
 //
 // Subcommands:
 //
-//	strawboss           launch the TUI (M4; not yet implemented)
+//	strawboss           launch the TUI (demo replay until M5 wires live feeds)
 //	strawboss chat      console supervisor driver (M1 spike)
 //	strawboss delegate  the command the supervisor calls to spawn a worker (M3)
 //	strawboss version   print version
@@ -12,6 +12,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 )
 
 var version = "dev"
@@ -19,18 +20,19 @@ var version = "dev"
 func main() {
 	args := os.Args[1:]
 	cmd := ""
-	if len(args) > 0 {
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		cmd = args[0]
+		args = args[1:]
 	}
 
 	var err error
 	switch cmd {
 	case "":
-		err = fmt.Errorf("TUI not implemented yet (M4) — try 'strawboss chat'")
+		err = runTUI(args)
 	case "chat":
-		err = runChat(args[1:])
+		err = runChat(args)
 	case "delegate":
-		err = runDelegate(args[1:], os.Stdout)
+		err = runDelegate(args, os.Stdout)
 	case "version":
 		fmt.Println("strawboss", version)
 	case "-h", "--help", "help":

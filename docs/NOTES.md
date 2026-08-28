@@ -130,3 +130,28 @@ Also fixed from the same run: the logs tab was spewing every streamed worker
 delta as its own fragment line (now only discrete events are logged; deltas
 coalesce in the detail pane) and worker output ANSI/control characters are
 stripped before rendering.
+
+## Persistent supervisor via --input-format stream-json (verified 2026-08-28)
+
+KICKOFF assumed `--input-format stream-json` might not exist — it DOES in CLI
+2.1.251 ("realtime streaming input"), which obsoletes the one-process-per-turn
+pattern for the TUI:
+
+- One `claude -p --input-format stream-json --output-format stream-json` process
+  stays alive across turns; user messages are stdin JSON lines
+  (`{"type":"user","message":{"role":"user","content":[{"type":"text","text":…}]}}`).
+- **Messages sent MID-TURN are delivered into the running turn** (verified: the
+  model acknowledged and honored a mid-turn instruction) — the supervisor is
+  never deaf while workers run. This was the motivation: with per-turn
+  processes, input typed during a turn just queued silently.
+- `system/init` is emitted only after the FIRST message, not at spawn — keeping
+  the process warm is free.
+- One `result` event per turn (num_turns cumulative); the process does not exit
+  between turns.
+- SIGINT terminates the whole process (unlike interactive esc). Interrupt is
+  therefore: kill → respawn with --resume on the next prompt — identical to
+  crash recovery. Closing stdin ends the process gracefully.
+- New stream event: `system/thinking_tokens` `{estimated_tokens,
+  estimated_tokens_delta}`, emitted periodically while reasoning — now feeds
+  the status line ("thinking… ~82 tok") instead of spamming logs as unparsed.
+- `strawboss chat` (console spike) still uses the per-turn --resume driver.

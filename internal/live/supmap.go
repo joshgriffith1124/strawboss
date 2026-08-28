@@ -5,6 +5,7 @@
 package live
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -28,6 +29,8 @@ func mapSupEvent(ev supervisor.Event, pid int) []tea.Msg {
 			return []tea.Msg{ui.SupStatusMsg{Status: "thinking…"}}
 		}
 		return nil
+	case supervisor.ThinkingEvent:
+		return []tea.Msg{ui.SupStatusMsg{Status: fmt.Sprintf("thinking… ~%d tok", e.EstimatedTokens)}}
 	case supervisor.StreamDeltaEvent:
 		return []tea.Msg{ui.SupStatusMsg{Status: ""}, ui.SupTextDeltaMsg{Text: e.Text}}
 	case supervisor.AssistantEvent:
@@ -58,6 +61,9 @@ func mapSupEvent(ev supervisor.Event, pid int) []tea.Msg {
 	case supervisor.RateLimitEvent:
 		return []tea.Msg{ui.SupRateLimitMsg{FiveHour: e.FiveHour.Utilization, SevenDay: e.SevenDay.Utilization}}
 	case supervisor.ResultEvent:
+		// The result closes a turn; SupTurnDoneMsg (no error) flushes any
+		// streaming text and clears the status line. In stream mode the
+		// process outlives the turn, so this is the only turn boundary.
 		return []tea.Msg{ui.SupUsageMsg{
 			Input:      e.Usage.InputTokens,
 			Output:     e.Usage.OutputTokens,
@@ -65,7 +71,7 @@ func mapSupEvent(ev supervisor.Event, pid int) []tea.Msg {
 			CacheWrite: e.Usage.CacheCreationTokens,
 			CostUSD:    e.TotalCostUSD,
 			Turns:      1,
-		}}
+		}, ui.SupTurnDoneMsg{}}
 	case supervisor.UnknownEvent:
 		if e.Type != "" {
 			return []tea.Msg{ui.RawLogMsg{Source: "sup", Line: "unparsed " + e.Type + " event"}}

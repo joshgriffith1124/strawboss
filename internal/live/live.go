@@ -34,13 +34,13 @@ type Orchestrator struct {
 	cancel context.CancelFunc
 
 	mu              sync.Mutex
-	sessionToWorker map[string]string // opencode session id → wN
-	workerSession   map[string]string // wN → opencode session id
-	workerModel     map[string]string // wN → model config name
-	workerDir       map[string]string // wN → working directory (for scoped status)
-	unfinished      map[string]bool   // wN spawned but no finished event yet
-	turn            *supervisor.Turn  // in-flight supervisor turn, if any
-	servers         []*exec.Cmd       // managed opencode serve children
+	sessionToWorker map[string]string  // opencode session id → wN
+	workerSession   map[string]string  // wN → opencode session id
+	workerModel     map[string]string  // wN → model config name
+	workerDir       map[string]string  // wN → working directory (for scoped status)
+	unfinished      map[string]bool    // wN spawned but no finished event yet
+	stream          *supervisor.Stream // the persistent supervisor process, if running
+	servers         []*exec.Cmd        // managed opencode serve children
 }
 
 // New builds an orchestrator; call Run to start the feeds.
@@ -157,47 +157,58 @@ func RunID(stateDir string, rotate bool) (string, error) {
 	return id, nil
 }
 
+// supervisorLoop owns one persistent supervisor process (spawned lazily on
+// the first prompt, respawned with --resume after a crash or interrupt).
+// Prompts are injected over stdin at ANY time — including mid-turn, so the
+// supervisor is never deaf while workers run.
 func (o *Orchestrator) supervisorLoop(ctx context.Context) {
 	if sid := o.Driver.SessionID(); sid != "" {
 		o.emit(ctx, ui.RawLogMsg{Source: "sup", Line: "resuming session " + sid})
 	}
+	current := func() *supervisor.Stream {
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		return o.stream
+	}
 	for {
 		select {
 		case <-ctx.Done():
+			if s := current(); s != nil {
+				s.Shutdown(3 * time.Second)
+			}
 			return
-		case <-o.interrupt: // nothing in flight
+		case <-o.interrupt:
+			if s := current(); s != nil && s.Alive() {
+				s.Interrupt() // process exits; next prompt respawns with --resume
+			}
 		case prompt := <-o.prompts:
-			o.runTurn(ctx, prompt)
+			s := current()
+			if s == nil || !s.Alive() {
+				var err error
+				if s, err = o.startStream(ctx); err != nil {
+					o.emit(ctx, ui.SupTurnDoneMsg{Err: err.Error()})
+					continue
+				}
+			}
+			if err := s.Send(prompt); err != nil {
+				o.emit(ctx, ui.SupTurnDoneMsg{Err: err.Error()})
+			}
 		}
 	}
 }
 
-func (o *Orchestrator) runTurn(ctx context.Context, prompt string) {
-	turn, err := o.Driver.Start(prompt)
+// startStream spawns the persistent supervisor and pumps its events.
+func (o *Orchestrator) startStream(ctx context.Context) (*supervisor.Stream, error) {
+	s, err := o.Driver.StartStream()
 	if err != nil {
-		o.emit(ctx, ui.SupTurnDoneMsg{Err: err.Error()})
-		return
+		return nil, err
 	}
 	o.mu.Lock()
-	o.turn = turn
+	o.stream = s
 	o.mu.Unlock()
-	defer func() {
-		o.mu.Lock()
-		o.turn = nil
-		o.mu.Unlock()
-	}()
-	pid := turn.PID()
-	for {
-		select {
-		case <-ctx.Done():
-			turn.Shutdown(3 * time.Second)
-			return
-		case <-o.interrupt:
-			turn.Interrupt()
-		case ev, ok := <-turn.Events:
-			if !ok {
-				return
-			}
+	go func() {
+		pid := s.PID()
+		for ev := range s.Events {
 			if init, isInit := ev.(supervisor.InitEvent); isInit && init.SessionID != "" {
 				if err := os.WriteFile(o.sessionFile(), []byte(init.SessionID), 0o644); err != nil {
 					o.emit(ctx, ui.RawLogMsg{Source: "app", Line: "persisting session id: " + err.Error()})
@@ -205,7 +216,8 @@ func (o *Orchestrator) runTurn(ctx context.Context, prompt string) {
 			}
 			o.emit(ctx, mapSupEvent(ev, pid)...)
 		}
-	}
+	}()
+	return s, nil
 }
 
 // Shutdown tears the whole operation down when the UI exits: abort every
@@ -222,7 +234,7 @@ func (o *Orchestrator) Shutdown() {
 	for wid := range o.unfinished {
 		workers = append(workers, target{o.workerSession[wid], o.workerModel[wid]})
 	}
-	turn := o.turn
+	stream := o.stream
 	servers := append([]*exec.Cmd(nil), o.servers...)
 	o.mu.Unlock()
 
@@ -232,8 +244,8 @@ func (o *Orchestrator) Shutdown() {
 			_ = c.Abort(ctx, w.session)
 		}
 	}
-	if turn != nil {
-		turn.Shutdown(3 * time.Second)
+	if stream != nil {
+		stream.Shutdown(3 * time.Second)
 	}
 	if o.cancel != nil {
 		o.cancel()

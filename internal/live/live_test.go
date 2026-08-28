@@ -48,7 +48,7 @@ func TestSupervisorTurnThroughOrchestrator(t *testing.T) {
 	}
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "claude")
-	script := fmt.Sprintf("#!/bin/sh\ncat %q\n", fixture)
+	script := fmt.Sprintf("#!/bin/sh\nread line\ncat %q\nread line2\n", fixture)
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}

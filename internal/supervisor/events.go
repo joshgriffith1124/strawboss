@@ -59,6 +59,13 @@ type StatusEvent struct {
 	Status    string
 }
 
+// ThinkingEvent is a system/thinking_tokens line: a live estimate of the
+// current thinking pass, emitted periodically while the model reasons.
+type ThinkingEvent struct {
+	SessionID       string
+	EstimatedTokens int
+}
+
 // ToolUse is one tool_use content block from an assistant message. Delegation
 // detection lives here: a Bash tool_use invoking the delegate command is the
 // moment a worker row appears in the TUI.
@@ -167,6 +174,7 @@ type TurnDoneEvent struct {
 
 func (InitEvent) event()        {}
 func (StatusEvent) event()      {}
+func (ThinkingEvent) event()    {}
 func (AssistantEvent) event()   {}
 func (ToolResultsEvent) event() {}
 func (StreamDeltaEvent) event() {}

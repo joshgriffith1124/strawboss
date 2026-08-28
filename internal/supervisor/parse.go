@@ -69,6 +69,14 @@ func parseSystem(line []byte, subtype, sessionID string) (Event, error) {
 			return UnknownEvent{Type: "system/status", Raw: line, Err: err}, nil
 		}
 		return StatusEvent{SessionID: sessionID, Status: v.Status}, nil
+	case "thinking_tokens":
+		var v struct {
+			EstimatedTokens int `json:"estimated_tokens"`
+		}
+		if err := json.Unmarshal(line, &v); err != nil {
+			return nil, nil // periodic chatter; never worth an unknown-event log
+		}
+		return ThinkingEvent{SessionID: sessionID, EstimatedTokens: v.EstimatedTokens}, nil
 	default:
 		return UnknownEvent{Type: "system/" + subtype, Raw: line}, nil
 	}

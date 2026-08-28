@@ -237,15 +237,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.flushStreaming()
 		text := msg.Command
 		if msg.Delegate != nil {
-			text = msg.Delegate.Model + " " + fmt.Sprintf("%q", truncPlain(msg.Delegate.Task, 60))
+			text = msg.Delegate.Model + " " + fmt.Sprintf("%q", truncPlain(msg.Delegate.Task, 220))
 		}
 		m.chat = append(m.chat, chatItem{kind: "tool-out", when: time.Now(), toolID: msg.ToolID,
 			text: msg.Name + " " + text})
 		m.log("sup", "→ "+msg.Name+" "+truncPlain(msg.Command, 120))
 		return m, Listen(m.feed)
 	case SupToolResultMsg:
+		// Store generously; the renderer wraps and caps for display.
 		m.chat = append(m.chat, chatItem{kind: "tool-in", when: time.Now(), toolID: msg.ToolID,
-			text: truncPlain(msg.Content, 110), isError: msg.IsError})
+			text: truncPlain(msg.Content, 600), isError: msg.IsError})
 		m.delegationResultTokens = append(m.delegationResultTokens, len(msg.Content)/4)
 		m.log("sup", "← "+truncPlain(msg.Content, 120))
 		return m, Listen(m.feed)

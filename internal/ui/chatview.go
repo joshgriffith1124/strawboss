@@ -43,13 +43,15 @@ func (m Model) viewChatColumn(w, h int) string {
 			b.WriteString(sAmber.Render("SUPERVISOR · "+it.when.Format("15:04")) + "\n")
 			b.WriteString(wrap.Render(sText.Render(it.text)) + "\n\n")
 		case "tool-out":
-			b.WriteString("  " + sAmber.Render(glyphOut) + " " + sText.Render(truncPlain(it.text, w-6)) + "\n")
+			b.WriteString(toolBlock(sAmber.Render(glyphOut), it.text, 240, sText, w))
 		case "tool-in":
 			mark := sOK.Render(glyphDone)
 			if it.isError {
 				mark = sErr.Render(glyphFail)
 			}
-			b.WriteString("  " + sTeal.Render(glyphIn) + " " + mark + " " + sDim.Render(truncPlain(it.text, w-8)) + "\n")
+			// Results get more room: the terse-result contract caps them,
+			// and their content (summaries, denial reasons) is the point.
+			b.WriteString(toolBlock(sTeal.Render(glyphIn)+" "+mark, it.text, 500, sDim, w))
 		case "note":
 			style := sDim
 			if it.isError {
@@ -84,6 +86,21 @@ func (m Model) viewChatColumn(w, h int) string {
 		Width(w - 2).Render(m.input.View())
 
 	return lipgloss.JoinVertical(lipgloss.Left, log, inputBox)
+}
+
+// toolBlock renders an inline tool line that WRAPS instead of vanishing
+// behind an ellipsis: denial reasons and task text must stay readable. cap
+// bounds runaway content (giant task prompts) before wrapping.
+func toolBlock(prefix, text string, maxLen int, style lipgloss.Style, w int) string {
+	text = truncPlain(text, maxLen)
+	wrapped := lipgloss.NewStyle().Width(w - 6).Render(style.Render(text))
+	lines := strings.Split(wrapped, "\n")
+	var b strings.Builder
+	b.WriteString("  " + prefix + " " + lines[0] + "\n")
+	for _, ln := range lines[1:] {
+		b.WriteString("      " + ln + "\n")
+	}
+	return b.String()
 }
 
 func (m Model) viewSidePanel(w int) string {

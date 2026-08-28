@@ -262,3 +262,22 @@ func TestWorkerStreamScrolls(t *testing.T) {
 		t.Errorf("tool event not logged (logs %d → %d)", before, len(m.logs))
 	}
 }
+
+// TestToolLinesWrap: denial reasons and task text wrap across lines in the
+// chat instead of disappearing behind an ellipsis.
+func TestToolLinesWrap(t *testing.T) {
+	m := New(make(chan tea.Msg))
+	long := "Permission to use Write has been denied because Claude Code is running in don't ask mode. IMPORTANT: You may attempt to accomplish this action using other tools."
+	m = apply(t, m,
+		tea.WindowSizeMsg{Width: 100, Height: 40},
+		SupToolResultMsg{ToolID: "t1", Content: long, IsError: true},
+	)
+	view := m.View()
+	// Single tokens (wrapping may break phrases across lines) from the
+	// middle and the very end of the message.
+	for _, want := range []string{"IMPORTANT:", "accomplish", "tools."} {
+		if !strings.Contains(view, want) {
+			t.Errorf("chat view lost %q", want)
+		}
+	}
+}

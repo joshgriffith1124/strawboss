@@ -267,29 +267,60 @@ func (h *Harness) Result(ctx context.Context, workerID string) (harness.Result, 
 	}, nil
 }
 
-// summarize builds the few-line summary: the final assistant text, capped.
+// summarize builds the few-line summary: the final assistant text, falling
+// back to the last text anywhere in the transcript, then to a tool recap —
+// "(empty reply)" starves the supervisor of exactly what it needs.
 func summarize(msgs []Message) string {
 	last := lastAssistant(msgs)
 	if last == nil {
 		return "(no assistant reply)"
 	}
-	var text string
-	for _, p := range last.Parts {
-		if p.Type == "text" {
-			text += p.Text
+	text := textOf(last)
+	if text == "" {
+		for i := len(msgs) - 1; i >= 0 && text == ""; i-- {
+			if msgs[i].Info.Role == "assistant" {
+				text = textOf(&msgs[i])
+			}
+		}
+		if text != "" {
+			text = "(no final reply; last text was:) " + text
+		}
+	}
+	if text == "" {
+		tools := 0
+		lastTool := ""
+		for _, m := range msgs {
+			for _, p := range m.Parts {
+				if p.Type == "tool" {
+					tools++
+					lastTool = strings.TrimSpace(p.Tool + " " + p.State.Title)
+				}
+			}
+		}
+		if tools > 0 {
+			text = fmt.Sprintf("(no reply text; ran %d tool steps, last: %s — check the log)", tools, lastTool)
+		} else {
+			text = "(empty reply)"
 		}
 	}
 	if len(last.Info.Error) > 0 && string(last.Info.Error) != "null" {
 		text = strings.TrimSpace("worker error: " + compactError(last.Info.Error) + "\n" + text)
 	}
-	text = strings.TrimSpace(text)
-	if text == "" {
-		text = "(empty reply)"
-	}
 	if len(text) > maxSummaryBytes {
 		text = text[:maxSummaryBytes] + "…"
 	}
 	return text
+}
+
+// textOf concatenates a message's text parts.
+func textOf(m *Message) string {
+	var text string
+	for _, p := range m.Parts {
+		if p.Type == "text" {
+			text += p.Text
+		}
+	}
+	return strings.TrimSpace(text)
 }
 
 func compactError(raw json.RawMessage) string {

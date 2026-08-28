@@ -322,3 +322,30 @@ func TestResultStallAfterBusy(t *testing.T) {
 		t.Errorf("status = %q, want failed", res.Status)
 	}
 }
+
+func TestSummarizeFallbacks(t *testing.T) {
+	textless := func(parts ...Part) Message {
+		info := completedInfo()
+		return Message{Info: info, Parts: parts}
+	}
+	t.Run("falls back to earlier text", func(t *testing.T) {
+		msgs := []Message{
+			{Info: completedInfo(), Parts: []Part{{Type: "text", Text: "wrote the file and tests pass"}}},
+			textless(Part{Type: "tool", Tool: "bash", State: ToolState{Status: "completed", Title: "node test.js"}}),
+		}
+		s := summarize(msgs)
+		if !strings.Contains(s, "wrote the file and tests pass") || !strings.Contains(s, "no final reply") {
+			t.Errorf("summary = %q", s)
+		}
+	})
+	t.Run("tool recap when no text anywhere", func(t *testing.T) {
+		msgs := []Message{textless(
+			Part{Type: "tool", Tool: "bash", State: ToolState{Status: "completed", Title: "mkdir x"}},
+			Part{Type: "tool", Tool: "write", State: ToolState{Status: "completed", Title: "farkle.js"}},
+		)}
+		s := summarize(msgs)
+		if !strings.Contains(s, "2 tool steps") || !strings.Contains(s, "write farkle.js") {
+			t.Errorf("summary = %q", s)
+		}
+	})
+}

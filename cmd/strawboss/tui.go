@@ -83,7 +83,9 @@ func buildLive(stateDir, modelsPath string, fresh bool) (ui.Model, func(), error
 
 	allowed := cfg.Supervisor.AllowedTools
 	if len(allowed) == 0 {
-		allowed = []string{fmt.Sprintf("Bash(%s delegate:*)", exe), "Read"}
+		// Read/Edit/Write cover the "small glue work" the system prompt
+		// asks for — without them the supervisor gets denied mid-repair.
+		allowed = []string{fmt.Sprintf("Bash(%s delegate:*)", exe), "Read", "Edit", "Write"}
 	}
 	system := cfg.Supervisor.SystemPrompt
 	if system == "" {

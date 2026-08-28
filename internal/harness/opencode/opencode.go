@@ -1,0 +1,306 @@
+package opencode
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"strawboss/internal/config"
+	"strawboss/internal/harness"
+)
+
+// Harness implements harness.WorkerHarness against one `opencode serve`
+// instance. A worker is an opencode session; the session id is the worker id.
+type Harness struct {
+	Client *Client
+	// Dir is the working directory workers run in.
+	Dir string
+	// LogDir is where Result writes full transcripts (the terse-result
+	// contract: the supervisor gets a path, never the transcript).
+	LogDir string
+	// PollInterval for Result's completion polling. Default 500ms.
+	PollInterval time.Duration
+}
+
+// New returns a Harness for the model config's endpoint (the opencode
+// server base URL).
+func New(mc config.ModelConfig, dir, logDir string) *Harness {
+	return &Harness{
+		Client: &Client{Base: strings.TrimRight(mc.Endpoint, "/")},
+		Dir:    dir,
+		LogDir: logDir,
+	}
+}
+
+// splitModel splits a config model reference "provider/model" into opencode's
+// providerID and modelID (e.g. "spark-a/qwen3.8-27b").
+func splitModel(ref string) (providerID, modelID string, err error) {
+	providerID, modelID, ok := strings.Cut(ref, "/")
+	if !ok || providerID == "" || modelID == "" {
+		return "", "", fmt.Errorf("model ref %q: want provider/model", ref)
+	}
+	return providerID, modelID, nil
+}
+
+// Spawn creates a session and fires the task at it without waiting.
+func (h *Harness) Spawn(ctx context.Context, task string, model config.ModelConfig) (string, error) {
+	providerID, modelID, err := splitModel(model.Model)
+	if err != nil {
+		return "", fmt.Errorf("spawning worker: %w", err)
+	}
+	id, err := h.Client.CreateSession(ctx, h.Dir, "")
+	if err != nil {
+		return "", fmt.Errorf("spawning worker: %w", err)
+	}
+	if err := h.Client.PromptAsync(ctx, id, providerID, modelID, task); err != nil {
+		return "", fmt.Errorf("spawning worker %s: %w", id, err)
+	}
+	return id, nil
+}
+
+// Status maps opencode's live status (busy/retry, absent = idle) plus the
+// transcript's error state onto the worker lifecycle.
+func (h *Harness) Status(ctx context.Context, workerID string) (harness.Status, error) {
+	statuses, err := h.Client.Status(ctx)
+	if err != nil {
+		return "", fmt.Errorf("worker %s status: %w", workerID, err)
+	}
+	if st, ok := statuses[workerID]; ok && st.Type != "idle" {
+		return harness.StatusRunning, nil
+	}
+	msgs, err := h.Client.Messages(ctx, workerID)
+	if err != nil {
+		return "", fmt.Errorf("worker %s status: %w", workerID, err)
+	}
+	return finishedStatus(msgs), nil
+}
+
+// finishedStatus classifies an idle session from its transcript.
+func finishedStatus(msgs []Message) harness.Status {
+	last := lastAssistant(msgs)
+	if last == nil {
+		return harness.StatusQueued
+	}
+	if len(last.Info.Error) > 0 && string(last.Info.Error) != "null" {
+		return harness.StatusFailed
+	}
+	for _, p := range last.Parts {
+		if p.Type == "tool" && p.State.Status == "error" {
+			return harness.StatusFailed
+		}
+	}
+	return harness.StatusDone
+}
+
+func lastAssistant(msgs []Message) *Message {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Info.Role == "assistant" {
+			return &msgs[i]
+		}
+	}
+	return nil
+}
+
+// Events streams the worker's transcript as it happens: text/reasoning
+// deltas and tool-call state changes. The channel closes when the session
+// goes idle, the stream drops, or ctx is cancelled.
+func (h *Harness) Events(ctx context.Context, workerID string) (<-chan harness.Event, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	src, err := h.Client.Events(ctx)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("worker %s events: %w", workerID, err)
+	}
+	out := make(chan harness.Event, 64)
+	go func() {
+		defer close(out)
+		defer cancel()
+		for ev := range src {
+			if ev.Properties.SessionID != workerID {
+				continue
+			}
+			var he harness.Event
+			switch ev.Type {
+			case "message.part.delta":
+				if ev.Properties.Field != "text" && ev.Properties.Field != "reasoning" {
+					continue
+				}
+				he = harness.Event{Time: time.Now(), Kind: ev.Properties.Field, Text: ev.Properties.Delta}
+			case "message.part.updated":
+				p := ev.Properties.Part
+				if p == nil || p.Type != "tool" {
+					continue
+				}
+				if p.State.Status != "completed" && p.State.Status != "error" && p.State.Status != "running" {
+					continue
+				}
+				kind := "tool"
+				if p.State.Status == "error" {
+					kind = "error"
+				}
+				he = harness.Event{Time: time.Now(), Kind: kind,
+					Text: fmt.Sprintf("%s %s [%s]", p.Tool, p.State.Title, p.State.Status)}
+			case "session.idle":
+				return
+			default:
+				continue
+			}
+			select {
+			case out <- he:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out, nil
+}
+
+// Usage reports the session's cumulative token counts.
+func (h *Harness) Usage(ctx context.Context, workerID string) (harness.Usage, error) {
+	info, err := h.Client.SessionInfo(ctx, workerID)
+	if err != nil {
+		return harness.Usage{}, fmt.Errorf("worker %s usage: %w", workerID, err)
+	}
+	return harness.Usage{
+		InputTokens:  info.Tokens.Input + info.Tokens.Cache.Read + info.Tokens.Cache.Write,
+		OutputTokens: info.Tokens.Output + info.Tokens.Reasoning,
+	}, nil
+}
+
+// maxSummaryBytes caps the terse summary; the supervisor-channel budget is
+// ~250 tokens for the whole result (CLAUDE.md invariant 3).
+const maxSummaryBytes = 700
+
+// Result blocks until the worker finishes, writes the full transcript to
+// LogDir, and returns the terse result for the supervisor channel.
+func (h *Harness) Result(ctx context.Context, workerID string) (harness.Result, error) {
+	interval := h.PollInterval
+	if interval == 0 {
+		interval = 500 * time.Millisecond
+	}
+	// prompt_async admits the task before the session shows busy, so a
+	// too-early idle is not "finished" — it's "not started yet". Finished
+	// means: idle after having been seen busy, or idle with a *completed*
+	// assistant reply in the transcript (an assistant message exists from
+	// the moment generation starts, but time.completed stays 0 until it's
+	// done). ctx bounds the whole wait.
+	var msgs []Message
+	started := false
+	for {
+		statuses, err := h.Client.Status(ctx)
+		if err != nil {
+			return harness.Result{}, fmt.Errorf("worker %s result: %w", workerID, err)
+		}
+		if st, ok := statuses[workerID]; ok && st.Type != "idle" {
+			started = true
+		} else {
+			if started {
+				break
+			}
+			msgs, err = h.Client.Messages(ctx, workerID)
+			if err != nil {
+				return harness.Result{}, fmt.Errorf("worker %s result: %w", workerID, err)
+			}
+			if last := lastAssistant(msgs); last != nil && last.Info.Time.Completed != 0 {
+				break
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return harness.Result{}, fmt.Errorf("worker %s result: %w", workerID, ctx.Err())
+		case <-time.After(interval):
+		}
+	}
+
+	msgs, err := h.Client.Messages(ctx, workerID)
+	if err != nil {
+		return harness.Result{}, fmt.Errorf("worker %s result: %w", workerID, err)
+	}
+	logPath, err := h.writeLog(workerID, msgs)
+	if err != nil {
+		return harness.Result{}, err
+	}
+	return harness.Result{
+		WorkerID: workerID,
+		Status:   finishedStatus(msgs),
+		Summary:  summarize(msgs),
+		LogPath:  logPath,
+	}, nil
+}
+
+// summarize builds the few-line summary: the final assistant text, capped.
+func summarize(msgs []Message) string {
+	last := lastAssistant(msgs)
+	if last == nil {
+		return "(no assistant reply)"
+	}
+	var text string
+	for _, p := range last.Parts {
+		if p.Type == "text" {
+			text += p.Text
+		}
+	}
+	if len(last.Info.Error) > 0 && string(last.Info.Error) != "null" {
+		text = strings.TrimSpace("worker error: " + compactError(last.Info.Error) + "\n" + text)
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		text = "(empty reply)"
+	}
+	if len(text) > maxSummaryBytes {
+		text = text[:maxSummaryBytes] + "…"
+	}
+	return text
+}
+
+func compactError(raw json.RawMessage) string {
+	var e struct {
+		Name string `json:"name"`
+		Data struct {
+			Message string `json:"message"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &e); err == nil && (e.Name != "" || e.Data.Message != "") {
+		return strings.TrimSpace(e.Name + " " + e.Data.Message)
+	}
+	s := string(raw)
+	if len(s) > 200 {
+		s = s[:200] + "…"
+	}
+	return s
+}
+
+// writeLog dumps the full transcript as JSONL (one message per line) so the
+// TUI and the supervisor's pay-per-use Read both have somewhere to go.
+func (h *Harness) writeLog(workerID string, msgs []Message) (string, error) {
+	dir := h.LogDir
+	if dir == "" {
+		base, err := config.DefaultStateDir()
+		if err != nil {
+			return "", fmt.Errorf("worker %s log: %w", workerID, err)
+		}
+		dir = filepath.Join(base, "logs")
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("worker %s log: %w", workerID, err)
+	}
+	path := filepath.Join(dir, workerID+".jsonl")
+	f, err := os.Create(path)
+	if err != nil {
+		return "", fmt.Errorf("worker %s log: %w", workerID, err)
+	}
+	defer f.Close()
+	enc := json.NewEncoder(f)
+	for _, m := range msgs {
+		if err := enc.Encode(m); err != nil {
+			return "", fmt.Errorf("worker %s log: %w", workerID, err)
+		}
+	}
+	return path, nil
+}
+
+var _ harness.WorkerHarness = (*Harness)(nil)

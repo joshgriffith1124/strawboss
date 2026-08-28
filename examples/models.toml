@@ -1,13 +1,16 @@
 # Named model configs workers bind to (~/.strawboss/models.toml).
 # Workers and the UI reference these by name only — hardware stays invisible.
-# One config might be a model tensor-split across both GX10s, one per box,
-# or a different model entirely; strawboss measures endpoints, not hosts.
+#
+# endpoint = the `opencode serve` base URL (opencode runs locally; the GX10
+#            inference endpoints live behind opencode's provider config in
+#            ~/.config/opencode/opencode.json — see docs/NOTES.md).
+# model    = opencode model ref, "provider/model".
 
 [models.qwen-coder]
-endpoint = "http://gx10a:4096"   # opencode serve base URL
-model = "qwen2.5-coder-32b"
+endpoint = "http://127.0.0.1:4477"
+model = "spark-a/qwen3.8-27b"
 harness = "opencode"             # optional; "opencode" is the default and only v1 harness
 
-[models.qwen-small]
-endpoint = "http://gx10b:8080"
-model = "qwen2.5-7b-instruct"
+[models.qwen-flash]
+endpoint = "http://127.0.0.1:4477"
+model = "spark-a/qwen3.8-flash-next"

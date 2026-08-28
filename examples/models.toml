@@ -1,0 +1,13 @@
+# Named model configs workers bind to (~/.strawboss/models.toml).
+# Workers and the UI reference these by name only — hardware stays invisible.
+# One config might be a model tensor-split across both GX10s, one per box,
+# or a different model entirely; strawboss measures endpoints, not hosts.
+
+[models.qwen-coder]
+endpoint = "http://gx10a:4096"   # opencode serve base URL
+model = "qwen2.5-coder-32b"
+harness = "opencode"             # optional; "opencode" is the default and only v1 harness
+
+[models.qwen-small]
+endpoint = "http://gx10b:8080"
+model = "qwen2.5-7b-instruct"

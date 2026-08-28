@@ -1,0 +1,10 @@
+# strawboss app config (~/.strawboss/config.toml). Every key is optional.
+
+# state_dir = "~/.strawboss"     # logs + session state (JSONL)
+
+[supervisor]
+# command = "claude"             # claude binary to spawn (subscription auth;
+#                                # ANTHROPIC_API_KEY is always scrubbed)
+# permission_mode = "dontAsk"    # must never block on an interactive prompt
+# allowed_tools = ["Bash(strawboss delegate:*)", "Read"]
+# system_prompt = ""             # appended via --append-system-prompt

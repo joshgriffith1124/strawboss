@@ -73,11 +73,28 @@ Josh has no API key configured — supervisor must run on his Claude subscriptio
 
 - **Go + Bubble Tea** (Josh's call, supersedes the earlier Python/Textual lean): single static binary, goroutines for the concurrent feeds (supervisor stdout, opencode polling), Elm-style message loop fits the event-driven UI. Drives the `claude` CLI as a subprocess (NOT the Agent SDK — see auth section). Details in KICKOFF.md.
 
-## Prior art checked (Aug 2026, from PoE-era research + general knowledge — not deep-researched)
+## Prior art (deep-researched Aug 28, 2026 — web survey)
 
-- claude-squad and similar tmux multi-agent managers: manage multiple *interactive* sessions, not cross-host delegation observability.
-- opencode's own TUI: per-session only.
-- Nothing found that shows a Claude supervisor + remote local-AI workers topology. Unusual setup; probably genuinely needs building.
+**Bottom line: the pattern is practiced, the product is unbuilt.** "Frontier supervisor + cheap/local workers" is an emerging 2026 best practice, but every instance found is DIY glue or a config hack — nobody ships strawboss's combination (subscription-Claude headless supervisor + opencode workers on own GPUs + fleet TUI + paid-vs-free token split). The "strawboss" name is free — no AI/agent tool by that name found.
+
+Closest matches:
+- **agent-deck** (github.com/asheshgoplani/agent-deck) — **the incumbent to differentiate against**: Go TUI (same stack!), MIT, ~800★, active; manages Claude Code/Gemini/OpenCode/Codex sessions; live cost dashboard + budgets; "Conductors" = persistent AI sessions that monitor/unblock the other sessions, escalate via Telegram/Slack. Gap: its Conductor is a babysitter, not a planner that decomposes work and dispatches to deliberately-cheap local workers; no paid-vs-free economics framing. Worth reading its code; contributing instead of building is a legitimate option.
+- **DIY versions of exactly our topology**: XDA article (Jul 2026) — cloud supervisor + opencode/llama.cpp/Qwen3-Coder worker, intentionally manual (human ferries a SUPERVISOR.md between them); JP Caparas's "opencode as headless worker inside Claude Code" blog pattern; **houtini-lm** MCP (Claude delegates bounded tasks to local LLMs, claims 93% token savings — bounded completions, not autonomous agent workers).
+- **Gas Town** (Yegge) — highest-profile AI-supervised fleet; HN horror stories of $1.8k–$15k/mo on paid workers; the community "Prius" config (opencode workers on cheap/self-hosted models at 6–17% cost) proves people are hacking our pattern onto it. No token-economy UI.
+- **Ruflo** (ex-claude-flow, 31k★) — claims per-agent local endpoints in queen-led swarms; a reviewer found documented local-model support partly absent from source; marketing-heavy. Not a credible blocker.
+- **aider architect mode** — philosophical ancestor (strong architect + cheap editor; people run it fully local); single-session pair, no fleet/TUI.
+- **Human-supervised session managers** (human is the strawboss): claude-squad, Conductor (Mac), Sculptor, Codeman, awslabs/cli-agent-orchestrator, Untrivial agent-orchestrator (10k★ desktop Agent IDE with an AI orchestrator + 26 harnesses — no local-model/telemetry story found). vibe-kanban: Bloop shut down Apr 2026, thin community maintenance.
+- **Claude Code experimental Agent Teams** (~Feb 2026): lead + peer teammates — all-Claude, no heterogeneous/local workers. Platform-absorption risk for session managers; doesn't touch local economics.
+- **Token trackers** (codeburn, tokscale, ccusage-lineage): retrospective analytics only; none frame paid-supervisor-vs-free-local.
+
+**Community-validated failure points to design around** (they match agentfarm experience):
+1. Local workers fail on large refactors/architecture/exploratory work; succeed on well-scoped decomposable subtasks → **supervisor decomposition quality is the whole game** (Josh's 10/10 Qwen first-pass rate on the PoE dispatch pipeline confirms good decomposition works).
+2. Hybrid setups quietly degrade into "everything routes back to cloud" → the token-split display is the guardrail that makes drift visible.
+3. Tool-protocol mismatch: local servers that don't speak the harness's tool protocol yield agents that "pretend" to use tools → opencode against OpenAI-compatible endpoints is the right worker choice.
+4. Limited-GPU concurrency: parallel workers queue/thrash → per-endpoint queue depth in the Models pane is ops data, not decoration.
+5. Unsupervised paid fleets are ruinously expensive (Gas Town) → the economics story is the differentiator; keep it front and center.
+
+**Competitive risks**: agent-deck's Conductor growing a planner role; Untrivial adding local workers; Anthropic Agent Teams going heterogeneous; Gas Town formalizing the Prius config.
 
 ## Next steps
 

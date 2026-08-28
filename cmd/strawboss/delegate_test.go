@@ -1,0 +1,200 @@
+package main
+
+import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"testing"
+
+	"strawboss/internal/registry"
+)
+
+// fakeOpencode serves the minimal API surface delegate exercises. mode
+// selects the worker outcome: "done", "failed", or "hang" (never finishes).
+type fakeOpencode struct {
+	mode   string
+	aborts atomic.Int32
+}
+
+const testSID = "ses_delegate_test"
+
+func (f *fakeOpencode) handler() http.Handler {
+	assistant := func(errField string) string {
+		return fmt.Sprintf(`{
+			"info":{"id":"msg_2","sessionID":%[1]q,"role":"assistant","time":{"created":1,"completed":2}%[2]s},
+			"parts":[{"type":"text","text":"summary: did the thing"}]
+		}`, testSID, errField)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/session", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"data":{"id":"` + testSID + `"}}`))
+	})
+	mux.HandleFunc("POST /session/"+testSID+"/prompt_async", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /session/"+testSID+"/abort", func(w http.ResponseWriter, r *http.Request) {
+		f.aborts.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("GET /session/status", func(w http.ResponseWriter, r *http.Request) {
+		if f.mode == "hang" {
+			w.Write([]byte(`{"` + testSID + `":{"type":"busy"}}`))
+			return
+		}
+		w.Write([]byte(`{}`))
+	})
+	mux.HandleFunc("GET /session/"+testSID+"/message", func(w http.ResponseWriter, r *http.Request) {
+		errField := ""
+		if f.mode == "failed" {
+			errField = `,"error":{"name":"UnknownError","data":{"message":"it broke"}}`
+		}
+		w.Write([]byte(`[{"info":{"id":"msg_1","sessionID":"` + testSID + `","role":"user","time":{"created":1}},"parts":[{"type":"text","text":"the task"}]},` + assistant(errField) + `]`))
+	})
+	mux.HandleFunc("GET /api/session/"+testSID, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"data":{"id":"` + testSID + `","tokens":{"input":500,"output":90,"reasoning":0,"cache":{"read":1500,"write":0}}}}`))
+	})
+	return mux
+}
+
+// setup writes a models.toml pointing at the fake server and returns
+// delegate args plus the state dir.
+func setup(t *testing.T, f *fakeOpencode) (stateDir string, baseArgs []string) {
+	t.Helper()
+	srv := httptest.NewServer(f.handler())
+	t.Cleanup(srv.Close)
+	stateDir = t.TempDir()
+	models := filepath.Join(stateDir, "models.toml")
+	toml := "[models.qwen-coder]\nendpoint = \"" + srv.URL + "\"\nmodel = \"spark-a/qwen3.8-27b\"\n"
+	if err := os.WriteFile(models, []byte(toml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return stateDir, []string{"--state-dir", stateDir, "--dir", t.TempDir(), "--model", "qwen-coder"}
+}
+
+func TestDelegateDone(t *testing.T) {
+	f := &fakeOpencode{mode: "done"}
+	stateDir, args := setup(t, f)
+
+	var out strings.Builder
+	err := runDelegate(append(args, "--task", "build the thing"), &out)
+	if err != nil {
+		t.Fatalf("err = %v, out = %s", err, out.String())
+	}
+
+	got := out.String()
+	if !strings.HasPrefix(got, "w1 done ") {
+		t.Errorf("output = %q", got)
+	}
+	if !strings.Contains(got, "summary: did the thing") {
+		t.Errorf("output missing summary: %q", got)
+	}
+	logPath := filepath.Join(stateDir, "logs", testSID+".jsonl")
+	if !strings.Contains(got, logPath) {
+		t.Errorf("output missing log path %s: %q", logPath, got)
+	}
+	if _, err := os.Stat(logPath); err != nil {
+		t.Errorf("transcript log: %v", err)
+	}
+
+	reg := &registry.Registry{Path: filepath.Join(stateDir, "workers.jsonl")}
+	events, err := reg.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	workers := registry.Reduce(events)
+	if len(workers) != 1 {
+		t.Fatalf("workers = %+v", workers)
+	}
+	w := workers[0]
+	if w.ID != "w1" || w.Status != "done" || w.Session != testSID {
+		t.Errorf("worker = %+v", w)
+	}
+	if w.Task != "build the thing" || w.Model != "qwen-coder" {
+		t.Errorf("worker = %+v", w)
+	}
+	if w.InputTokens != 2000 || w.OutputTokens != 90 {
+		t.Errorf("tokens = %d/%d", w.InputTokens, w.OutputTokens)
+	}
+}
+
+func TestDelegateFailedWorker(t *testing.T) {
+	f := &fakeOpencode{mode: "failed"}
+	stateDir, args := setup(t, f)
+
+	var out strings.Builder
+	err := runDelegate(append(args, "--task", "break the thing"), &out)
+	if err == nil {
+		t.Fatal("want error for failed worker")
+	}
+	if !strings.Contains(err.Error(), "w1 failed") {
+		t.Errorf("err = %v", err)
+	}
+	// The terse result still prints — the supervisor needs it either way.
+	got := out.String()
+	if !strings.HasPrefix(got, "w1 failed ") {
+		t.Errorf("output = %q", got)
+	}
+	if !strings.Contains(got, "UnknownError") || !strings.Contains(got, "it broke") {
+		t.Errorf("output = %q", got)
+	}
+	events, _ := (&registry.Registry{Path: filepath.Join(stateDir, "workers.jsonl")}).Load()
+	workers := registry.Reduce(events)
+	if len(workers) != 1 || workers[0].Status != "failed" {
+		t.Errorf("workers = %+v", workers)
+	}
+}
+
+func TestDelegateTimeoutAborts(t *testing.T) {
+	f := &fakeOpencode{mode: "hang"}
+	stateDir, args := setup(t, f)
+
+	var out strings.Builder
+	err := runDelegate(append(args, "--task", "never finishes", "--timeout", "300ms"), &out)
+	if err == nil {
+		t.Fatal("want error on timeout")
+	}
+	if f.aborts.Load() == 0 {
+		t.Error("worker was not aborted")
+	}
+	got := out.String()
+	if !strings.HasPrefix(got, "w1 failed ") || !strings.Contains(got, "aborted") {
+		t.Errorf("output = %q", got)
+	}
+	events, _ := (&registry.Registry{Path: filepath.Join(stateDir, "workers.jsonl")}).Load()
+	workers := registry.Reduce(events)
+	if len(workers) != 1 || workers[0].Status != "failed" {
+		t.Errorf("workers = %+v", workers)
+	}
+}
+
+func TestDelegateBadArgs(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"missing task", []string{"--model", "x"}, "--model and --task are required"},
+		{"missing model", []string{"--task", "x"}, "--model and --task are required"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := runDelegate(tt.args, &strings.Builder{})
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("err = %v", err)
+			}
+		})
+	}
+}
+
+func TestDelegateUnknownModel(t *testing.T) {
+	f := &fakeOpencode{mode: "done"}
+	_, args := setup(t, f)
+	err := runDelegate(append(args[:len(args)-1], "nope", "--task", "x"), &strings.Builder{})
+	if err == nil || !strings.Contains(err.Error(), `no model "nope"`) {
+		t.Errorf("err = %v", err)
+	}
+}

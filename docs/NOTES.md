@@ -73,3 +73,14 @@ KICKOFF.md. Add to this file whenever reality disagrees with the docs.
 - Cumulative session tokens (incl. cache read/write) at v2 `GET /api/session/{id}`;
   per-message tokens on each assistant message. No tok/s from the API — compute from
   output-token deltas over time if wanted.
+
+## Full chain verified (2026-08-28, M3)
+
+`claude -p --allowedTools 'Bash(<path>/strawboss delegate:*)'` → delegate → opencode →
+GX10 worker → file on disk → 2-line terse result in supervisor context → supervisor
+verified and summarized. No permission prompts. Notes:
+
+- The path-prefixed allowedTools pattern (`Bash(/abs/path/strawboss delegate:*)`) works.
+- The supervisor also ran a bare `cat` that was NOT in allowedTools and it executed —
+  headless default permission mode appears to allow read-only commands. Don't rely on
+  allowedTools as a sandbox; it's prompt-avoidance, not confinement.

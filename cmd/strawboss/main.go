@@ -30,7 +30,7 @@ func main() {
 	case "chat":
 		err = runChat(args[1:])
 	case "delegate":
-		err = fmt.Errorf("delegate not implemented yet (M3)")
+		err = runDelegate(args[1:], os.Stdout)
 	case "version":
 		fmt.Println("strawboss", version)
 	case "-h", "--help", "help":

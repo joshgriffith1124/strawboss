@@ -57,6 +57,7 @@ type Turn struct {
 
 	cmd         *exec.Cmd
 	interrupted chan struct{}
+	done        chan struct{} // closed when the subprocess has exited
 	once        sync.Once
 }
 
@@ -131,7 +132,7 @@ func (d *Driver) Start(prompt string) (*Turn, error) {
 	}
 
 	events := make(chan Event, 64)
-	t := &Turn{Events: events, cmd: cmd, interrupted: make(chan struct{})}
+	t := &Turn{Events: events, cmd: cmd, interrupted: make(chan struct{}), done: make(chan struct{})}
 
 	go func() {
 		defer close(events)
@@ -153,6 +154,7 @@ func (d *Driver) Start(prompt string) (*Turn, error) {
 		}
 		scanErr := sc.Err()
 		exitErr := cmd.Wait()
+		close(t.done)
 		interrupted := false
 		select {
 		case <-t.interrupted:
@@ -170,20 +172,16 @@ func (d *Driver) Start(prompt string) (*Turn, error) {
 }
 
 // Shutdown terminates an in-flight turn gracefully (SIGTERM); the session
-// stays resumable via SessionID.
+// stays resumable via SessionID. Like Interrupt, a shutdown is a requested
+// stop — the TurnDoneEvent reports Interrupted, not an error.
 func (t *Turn) Shutdown(grace time.Duration) {
 	if t.cmd.Process == nil {
 		return
 	}
+	t.once.Do(func() { close(t.interrupted) })
 	_ = t.cmd.Process.Signal(syscall.SIGTERM)
-	done := make(chan struct{})
-	go func() {
-		for range t.Events {
-		}
-		close(done)
-	}()
 	select {
-	case <-done:
+	case <-t.done:
 	case <-time.After(grace):
 		_ = t.cmd.Process.Kill()
 	}

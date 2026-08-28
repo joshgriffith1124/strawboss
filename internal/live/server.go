@@ -51,6 +51,9 @@ func (o *Orchestrator) ensureServers(ctx context.Context) {
 			}
 			logf.Close()
 			children[base] = cmd
+			o.mu.Lock()
+			o.servers = append(o.servers, cmd)
+			o.mu.Unlock()
 			go func() { _ = cmd.Wait() }() // reap; ProcessState marks death
 			o.emitAsync(ui.RawLogMsg{Source: "app",
 				Line: "started opencode serve on " + base + " (log " + logPath + ")"})
@@ -61,12 +64,7 @@ func (o *Orchestrator) ensureServers(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			for _, c := range children {
-				if c.Process != nil && c.ProcessState == nil {
-					_ = c.Process.Kill()
-				}
-			}
-			return
+			return // Shutdown owns killing the children
 		case <-time.After(5 * time.Second):
 			check()
 		}

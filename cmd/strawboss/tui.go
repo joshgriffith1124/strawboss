@@ -31,14 +31,19 @@ func runTUI(args []string) error {
 	}
 
 	var m ui.Model
+	cleanup := func() {}
 	if *demo {
 		m = ui.New(replay.Feed(*speed))
 	} else {
 		var err error
-		if m, err = buildLive(*stateDir, *modelsPath, *fresh); err != nil {
+		if m, cleanup, err = buildLive(*stateDir, *modelsPath, *fresh); err != nil {
 			return err
 		}
 	}
+	// Exiting must kill the whole operation: active workers are aborted,
+	// the supervisor turn is terminated (resumable), managed opencode
+	// servers stop. Nothing keeps running unobserved.
+	defer cleanup()
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
@@ -47,33 +52,33 @@ func runTUI(args []string) error {
 	return nil
 }
 
-func buildLive(stateDir, modelsPath string, fresh bool) (ui.Model, error) {
+func buildLive(stateDir, modelsPath string, fresh bool) (ui.Model, func(), error) {
 	var zero ui.Model
 	if stateDir == "" {
 		var err error
 		if stateDir, err = config.DefaultStateDir(); err != nil {
-			return zero, err
+			return zero, nil, err
 		}
 	}
 	cfg, err := config.Load(filepath.Join(stateDir, "config.toml"))
 	if err != nil {
-		return zero, err
+		return zero, nil, err
 	}
 	if modelsPath == "" {
 		modelsPath = filepath.Join(stateDir, "models.toml")
 	}
 	models, err := config.LoadModels(modelsPath)
 	if err != nil {
-		return zero, fmt.Errorf("%w\n(create it from examples/models.toml — workers need model configs)", err)
+		return zero, nil, fmt.Errorf("%w\n(create it from examples/models.toml — workers need model configs)", err)
 	}
 
 	exe, err := os.Executable()
 	if err != nil {
-		return zero, fmt.Errorf("resolving strawboss binary: %w", err)
+		return zero, nil, fmt.Errorf("resolving strawboss binary: %w", err)
 	}
 	cwd, err := os.Getwd()
 	if err != nil {
-		return zero, fmt.Errorf("resolving cwd: %w", err)
+		return zero, nil, fmt.Errorf("resolving cwd: %w", err)
 	}
 
 	allowed := cfg.Supervisor.AllowedTools
@@ -103,5 +108,5 @@ func buildLive(stateDir, modelsPath string, fresh bool) (ui.Model, error) {
 	m := ui.New(o.Feed())
 	m.OnPrompt = o.OnPrompt
 	m.OnInterrupt = o.OnInterrupt
-	return m, nil
+	return m, o.Shutdown, nil
 }

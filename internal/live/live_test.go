@@ -3,9 +3,12 @@ package live
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -190,4 +193,61 @@ func TestBuildSystemPrompt(t *testing.T) {
 			t.Errorf("prompt missing %q", want)
 		}
 	}
+}
+
+// TestShutdownKillsEverything: exiting must abort unfinished workers and
+// terminate the in-flight supervisor turn.
+func TestShutdownKillsEverything(t *testing.T) {
+	var aborts atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /session/{sid}/abort", func(w http.ResponseWriter, r *http.Request) {
+		if r.PathValue("sid") == "ses_live" {
+			aborts.Add(1)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	// A claude that emits init then sleeps until signalled.
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "claude")
+	script := "#!/bin/sh\necho '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"s9\",\"apiKeySource\":\"none\"}'\nexec sleep 60\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	stateDir := t.TempDir()
+	models := []config.ModelConfig{{Name: "m1", Endpoint: srv.URL, Model: "p/x", Harness: "opencode"}}
+	o := New(&supervisor.Driver{Command: bin}, models, stateDir)
+	o.Run(context.Background())
+
+	// One unfinished worker on record, one turn in flight.
+	o.mu.Lock()
+	o.workerSession["w1"] = "ses_live"
+	o.workerModel["w1"] = "m1"
+	o.unfinished["w1"] = true
+	o.mu.Unlock()
+	o.OnPrompt("hello")
+	drainUntil(t, o.Feed(), 10*time.Second, func(m tea.Msg) bool {
+		_, ok := m.(ui.SupInitMsg)
+		return ok
+	})
+
+	done := make(chan struct{})
+	go func() { o.Shutdown(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("Shutdown did not return")
+	}
+	if aborts.Load() != 1 {
+		t.Errorf("aborts = %d, want 1", aborts.Load())
+	}
+	// The turn's claude process must be gone, reported as a requested stop
+	// (a live process would still be sleeping).
+	drainUntil(t, o.Feed(), 5*time.Second, func(m tea.Msg) bool {
+		d, ok := m.(ui.SupTurnDoneMsg)
+		return ok && d.Err == "" && d.Interrupted
+	})
 }

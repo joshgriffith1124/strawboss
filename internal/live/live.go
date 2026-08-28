@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -26,12 +28,16 @@ type Orchestrator struct {
 	prompts   chan string
 	interrupt chan struct{}
 
+	cancel context.CancelFunc
+
 	mu              sync.Mutex
 	sessionToWorker map[string]string // opencode session id → wN
 	workerSession   map[string]string // wN → opencode session id
 	workerModel     map[string]string // wN → model config name
 	workerDir       map[string]string // wN → working directory (for scoped status)
 	unfinished      map[string]bool   // wN spawned but no finished event yet
+	turn            *supervisor.Turn  // in-flight supervisor turn, if any
+	servers         []*exec.Cmd       // managed opencode serve children
 }
 
 // New builds an orchestrator; call Run to start the feeds.
@@ -88,9 +94,9 @@ func (o *Orchestrator) emitAsync(m tea.Msg) {
 	}
 }
 
-// Run starts every feed goroutine. Cancel ctx to shut down; an in-flight
-// supervisor turn gets a graceful SIGTERM (session stays resumable).
+// Run starts every feed goroutine. Call Shutdown when the UI exits.
 func (o *Orchestrator) Run(ctx context.Context) {
+	ctx, o.cancel = context.WithCancel(ctx)
 	go o.supervisorLoop(ctx)
 	go o.watchRegistry(ctx)
 	go o.pollWorkers(ctx)
@@ -148,6 +154,14 @@ func (o *Orchestrator) runTurn(ctx context.Context, prompt string) {
 		o.emit(ctx, ui.SupTurnDoneMsg{Err: err.Error()})
 		return
 	}
+	o.mu.Lock()
+	o.turn = turn
+	o.mu.Unlock()
+	defer func() {
+		o.mu.Lock()
+		o.turn = nil
+		o.mu.Unlock()
+	}()
 	pid := turn.PID()
 	for {
 		select {
@@ -166,6 +180,58 @@ func (o *Orchestrator) runTurn(ctx context.Context, prompt string) {
 				}
 			}
 			o.emit(ctx, mapSupEvent(ev, pid)...)
+		}
+	}
+}
+
+// Shutdown tears the whole operation down when the UI exits: abort every
+// unfinished worker (nothing keeps running unobserved), SIGTERM the
+// in-flight supervisor turn (session stays resumable), stop managed
+// opencode servers, and cancel the feed goroutines.
+func (o *Orchestrator) Shutdown() {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	type target struct{ session, model string }
+	o.mu.Lock()
+	var workers []target
+	for wid := range o.unfinished {
+		workers = append(workers, target{o.workerSession[wid], o.workerModel[wid]})
+	}
+	turn := o.turn
+	servers := append([]*exec.Cmd(nil), o.servers...)
+	o.mu.Unlock()
+
+	// Abort workers first, while any managed server is still up.
+	for _, w := range workers {
+		if c := o.clientFor(w.model); c != nil {
+			_ = c.Abort(ctx, w.session)
+		}
+	}
+	if turn != nil {
+		turn.Shutdown(3 * time.Second)
+	}
+	if o.cancel != nil {
+		o.cancel()
+	}
+	for _, cmd := range servers {
+		if cmd.Process == nil || cmd.ProcessState != nil {
+			continue
+		}
+		_ = cmd.Process.Signal(syscall.SIGTERM)
+	}
+	deadline := time.After(2 * time.Second)
+	for _, cmd := range servers {
+		if cmd.Process == nil {
+			continue
+		}
+		for cmd.ProcessState == nil {
+			select {
+			case <-deadline:
+				_ = cmd.Process.Kill()
+				return
+			case <-time.After(50 * time.Millisecond):
+			}
 		}
 	}
 }

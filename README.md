@@ -59,9 +59,11 @@ supervisor spent vs. what your free local workers churned through.
   and its worker history
 - Budget guard: notional-cost / plan-window ceilings that warn, then block
   new delegations with a terse refusal the supervisor understands
-- Remote reach: worker failures push via [ntfy](https://ntfy.sh) or an
-  [OpenClaw](https://openclaw.ai) channel (e.g. Discord) — and with two-way
-  enabled, replying in the channel steers the supervisor from your phone
+- Remote reach (entirely optional): worker failures push via
+  [ntfy](https://ntfy.sh) or an [OpenClaw](https://openclaw.ai) channel
+  (e.g. Discord) — and with two-way enabled, replying in the channel
+  steers the supervisor from your phone. Unconfigured, you keep the
+  terminal bell and nothing external is ever contacted
 - Loud permission denials with paste-ready allowlist fixes; `strawboss
   clean` retention sweeps; `strawboss costs` per-run summaries
 - Everything replayable: state is JSONL under `~/.strawboss/`

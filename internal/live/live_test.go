@@ -92,8 +92,9 @@ func TestSupervisorTurnThroughOrchestrator(t *testing.T) {
 		t.Errorf("init=%v text=%v usage=%v", sawInit, sawText, sawUsage)
 	}
 
-	// The session id was persisted for resume.
-	if sid := LoadSession(stateDir); sid != "35a53d5b-ee5c-4624-9f59-afb4d9e34f26" {
+	// The session id was persisted for resume, scoped to the driver's
+	// working directory (empty here → the process cwd, both sides).
+	if sid := LoadSession(stateDir, ""); sid != "35a53d5b-ee5c-4624-9f59-afb4d9e34f26" {
 		t.Errorf("persisted session = %q", sid)
 	}
 }
@@ -623,5 +624,41 @@ esac
 	case p := <-o.prompts:
 		t.Errorf("unexpected prompt: %q", p)
 	default:
+	}
+}
+
+// TestSessionScopedPerProject: strawboss in project B must never resume
+// project A's supervisor (seen live: a new directory picked up the old
+// project's session and kept working on it).
+func TestSessionScopedPerProject(t *testing.T) {
+	stateDir := t.TempDir()
+	dirA, dirB := t.TempDir(), t.TempDir()
+
+	runA, err := RunID(stateDir, dirA, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runB, err := RunID(stateDir, dirB, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runA == runB {
+		t.Errorf("run ids shared across projects: %s", runA)
+	}
+	// Re-reading without rotate keeps each project's own id.
+	if again, _ := RunID(stateDir, dirA, false); again != runA {
+		t.Errorf("dirA run changed: %s vs %s", again, runA)
+	}
+
+	// A session persisted for dirA is invisible from dirB.
+	slot := projectDir(stateDir, dirA)
+	if err := os.WriteFile(filepath.Join(slot, "supervisor-session"), []byte("ses-a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := LoadSession(stateDir, dirA); got != "ses-a" {
+		t.Errorf("dirA session = %q", got)
+	}
+	if got := LoadSession(stateDir, dirB); got != "" {
+		t.Errorf("dirB leaked dirA's session: %q", got)
 	}
 }

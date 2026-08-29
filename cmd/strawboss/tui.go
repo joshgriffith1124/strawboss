@@ -85,15 +85,19 @@ func buildLive(stateDir, modelsPath string, fresh bool) (ui.Model, func(), error
 	if len(allowed) == 0 {
 		// Read/Edit/Write cover the "small glue work" the system prompt
 		// asks for — without them the supervisor gets denied mid-repair.
-		allowed = []string{fmt.Sprintf("Bash(%s delegate:*)", exe), "Read", "Edit", "Write"}
+		// Glob is the sanctioned way to look around a directory: in
+		// dontAsk mode a bare `ls` gets denied (seen live).
+		allowed = []string{fmt.Sprintf("Bash(%s delegate:*)", exe), "Read", "Edit", "Write", "Glob"}
 	}
 	system := cfg.Supervisor.SystemPrompt
 	if system == "" {
 		system = live.BuildSystemPrompt(exe, models)
 	}
 	// The run id scopes worker history: --new rotates it so old runs'
-	// workers don't replay into a fresh session; resume keeps it.
-	runID, err := live.RunID(stateDir, fresh)
+	// workers don't replay into a fresh session; resume keeps it. Both it
+	// and the session pointer are per working directory — strawboss in a
+	// new project must never resume another project's supervisor.
+	runID, err := live.RunID(stateDir, cwd, fresh)
 	if err != nil {
 		return zero, nil, err
 	}
@@ -108,7 +112,7 @@ func buildLive(stateDir, modelsPath string, fresh bool) (ui.Model, func(), error
 		Env: []string{"STRAWBOSS_RUN=" + runID},
 	}
 	if !fresh {
-		if sid := live.LoadSession(stateDir); sid != "" {
+		if sid := live.LoadSession(stateDir, cwd); sid != "" {
 			driver.SetSessionID(sid)
 		}
 	}

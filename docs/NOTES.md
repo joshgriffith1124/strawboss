@@ -334,3 +334,22 @@ equivalent all day (55–78 out-tok/s both harnesses). The slowness was:
 Also fixed for comparability: dsh usage now counts cacheReadTokens as
 input, matching opencode's session-total accounting (dsh "in" numbers
 looked misleadingly tiny before).
+
+## Per-project session scoping (2026-08-29, live incident)
+
+`strawboss` launched in a NEW project directory resumed the OLD
+project's supervisor — full old context, started planning Farkle
+features from an unrelated repo. Cause: the supervisor-session and run
+pointers were single global files under ~/.strawboss. They are now
+scoped per working directory (`~/.strawboss/projects/<hash>/`, with a
+`dir` file naming the path); the legacy global files are ignored. One
+transitional effect: each project's first launch after this change
+starts a fresh session (`claude -r <old-session-id>` still works
+manually if an old conversation matters — note the Claude CLI happily
+resumes a session id from a different cwd, which is what made the bug
+bite instead of erroring).
+
+Also from the same screenshot: in dontAsk mode a bare `ls` IS denied
+(contradicting the earlier M3-era observation that read-only commands
+slipped through) — the default allowedTools now include Glob so the
+supervisor has a sanctioned way to look around a directory.

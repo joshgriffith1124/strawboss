@@ -2,6 +2,8 @@ package live
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -176,14 +178,31 @@ func (o *Orchestrator) modelConfig(name string) (config.ModelConfig, bool) {
 	return config.ModelConfig{}, false
 }
 
-// sessionFile persists the supervisor session id across restarts.
-func (o *Orchestrator) sessionFile() string {
-	return filepath.Join(o.StateDir, "supervisor-session")
+// Session and run persistence is scoped PER PROJECT DIRECTORY: one global
+// pointer meant `strawboss` launched in project B resumed project A's
+// supervisor, old context and all (seen live). Each cwd gets its own slot
+// under <stateDir>/projects/<hash>/; a `dir` file inside names the path
+// for humans. Legacy global supervisor-session/run files are ignored.
+
+// projectDir is the state slot for one working directory.
+func projectDir(stateDir, dir string) string {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		abs = dir
+	}
+	sum := sha256.Sum256([]byte(filepath.Clean(abs)))
+	return filepath.Join(stateDir, "projects", hex.EncodeToString(sum[:6]))
 }
 
-// LoadSession returns the previously persisted supervisor session id.
-func LoadSession(stateDir string) string {
-	b, err := os.ReadFile(filepath.Join(stateDir, "supervisor-session"))
+// sessionFile persists the supervisor session id across restarts.
+func (o *Orchestrator) sessionFile() string {
+	return filepath.Join(projectDir(o.StateDir, o.Driver.Dir), "supervisor-session")
+}
+
+// LoadSession returns the supervisor session id last persisted for this
+// working directory.
+func LoadSession(stateDir, dir string) string {
+	b, err := os.ReadFile(filepath.Join(projectDir(stateDir, dir), "supervisor-session"))
 	if err != nil {
 		return ""
 	}
@@ -191,19 +210,23 @@ func LoadSession(stateDir string) string {
 }
 
 // RunID returns the persisted run id scoping registry events to this
-// supervisor run; rotate (or a missing file) mints a fresh one, so a new
-// session starts with an empty worker table while a resumed session
-// replays its own workers.
-func RunID(stateDir string, rotate bool) (string, error) {
-	path := filepath.Join(stateDir, "run")
+// working directory's supervisor run; rotate (or a missing file) mints a
+// fresh one, so a new session starts with an empty worker table while a
+// resumed session replays its own workers.
+func RunID(stateDir, dir string, rotate bool) (string, error) {
+	slot := projectDir(stateDir, dir)
+	path := filepath.Join(slot, "run")
 	if !rotate {
 		if b, err := os.ReadFile(path); err == nil && len(strings.TrimSpace(string(b))) > 0 {
 			return strings.TrimSpace(string(b)), nil
 		}
 	}
 	id := fmt.Sprintf("run-%d", time.Now().UnixNano())
-	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+	if err := os.MkdirAll(slot, 0o755); err != nil {
 		return "", fmt.Errorf("minting run id: %w", err)
+	}
+	if abs, err := filepath.Abs(dir); err == nil {
+		_ = os.WriteFile(filepath.Join(slot, "dir"), []byte(abs+"\n"), 0o644)
 	}
 	if err := os.WriteFile(path, []byte(id), 0o644); err != nil {
 		return "", fmt.Errorf("minting run id: %w", err)
@@ -264,6 +287,7 @@ func (o *Orchestrator) startStream(ctx context.Context) (*supervisor.Stream, err
 		pid := s.PID()
 		for ev := range s.Events {
 			if init, isInit := ev.(supervisor.InitEvent); isInit && init.SessionID != "" {
+				_ = os.MkdirAll(filepath.Dir(o.sessionFile()), 0o755)
 				if err := os.WriteFile(o.sessionFile(), []byte(init.SessionID), 0o644); err != nil {
 					o.emit(ctx, ui.RawLogMsg{Source: "app", Line: "persisting session id: " + err.Error()})
 				}

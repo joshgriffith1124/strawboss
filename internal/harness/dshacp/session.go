@@ -80,15 +80,21 @@ type SessionInfo struct {
 }
 
 // FindSessionLog locates a session's JSONL under the persistence root.
-// dsh nests logs as <root>/<mangled-cwd>/<sessionID>/session.jsonl — the
-// session id is globally unique, so glob for it rather than reimplementing
-// the cwd mangling (docs/NOTES.md).
+// dsh nests logs as <persistenceRoot>/<mangled-cwd>/<sessionID>/
+// session.jsonl, and each worker gets its own persistence subtree under
+// the shared root (SQLite lock contention — see Spawn), so the log sits
+// one OR two levels down. The session id is globally unique: glob for it
+// rather than reimplementing the cwd mangling (docs/NOTES.md).
 func FindSessionLog(root, sessionID string) (string, error) {
-	matches, err := filepath.Glob(filepath.Join(root, "*", sessionID, "session.jsonl"))
-	if err != nil || len(matches) == 0 {
-		return "", fmt.Errorf("no session log for %s under %s", sessionID, root)
+	for _, pattern := range []string{
+		filepath.Join(root, "*", "*", sessionID, "session.jsonl"),
+		filepath.Join(root, "*", sessionID, "session.jsonl"),
+	} {
+		if matches, err := filepath.Glob(pattern); err == nil && len(matches) > 0 {
+			return matches[0], nil
+		}
 	}
-	return matches[0], nil
+	return "", fmt.Errorf("no session log for %s under %s", sessionID, root)
 }
 
 // parseLine turns one session.jsonl line into tail items (usually 0 or 1;

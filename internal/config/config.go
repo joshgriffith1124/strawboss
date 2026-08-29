@@ -49,9 +49,20 @@ type Supervisor struct {
 	SystemPrompt string `toml:"system_prompt"`
 }
 
+// Notify configures optional push notifications. The bell stays; this
+// adds a phone ping through ntfy (https://ntfy.sh or self-hosted) —
+// local HTTP from the TUI, zero supervisor tokens.
+type Notify struct {
+	// NtfyTopic enables worker-failure pushes to <server>/<topic>.
+	NtfyTopic string `toml:"ntfy_topic"`
+	// NtfyServer overrides the default https://ntfy.sh.
+	NtfyServer string `toml:"ntfy_server"`
+}
+
 // Config is the app configuration from config.toml.
 type Config struct {
 	Supervisor Supervisor `toml:"supervisor"`
+	Notify     Notify     `toml:"notify"`
 
 	// StateDir is where logs and session state live. Default ~/.strawboss.
 	StateDir string `toml:"state_dir"`

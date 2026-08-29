@@ -214,3 +214,49 @@ done
 		t.Errorf("subprocess saw tools mode %q err %v", got, err)
 	}
 }
+
+// TestParallelSpawnsGetIsolatedSessionRoots: concurrent dsh workers must
+// not share a persistence root — the acp app's derived session-query.db
+// (SQLite) at that root is single-writer, and sharing it killed 3 of 4
+// parallel workers live ("database is locked").
+func TestParallelSpawnsGetIsolatedSessionRoots(t *testing.T) {
+	dumpDir := t.TempDir()
+	script := `#!/bin/sh
+echo "$STRAWBOSS_DSH_SESSIONS" > ` + dumpDir + `/root-$$
+while read line; do
+  case "$line" in
+    *'"initialize"'*) echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}';;
+    *'"session/new"'*) echo "{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"sessionId\":\"ses-$$\"}}";;
+    *'"session/prompt"'*) echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}';;
+  esac
+done
+`
+	roots := map[string]bool{}
+	for i := 0; i < 2; i++ {
+		h := testHarness(t, "empty")
+		if err := os.WriteFile(h.Bin, []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		wid, err := h.Spawn(context.Background(), "task", mc())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.Result(context.Background(), wid); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dumps, err := filepath.Glob(filepath.Join(dumpDir, "root-*"))
+	if err != nil || len(dumps) != 2 {
+		t.Fatalf("dumps = %v err %v", dumps, err)
+	}
+	for _, d := range dumps {
+		b, err := os.ReadFile(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		roots[strings.TrimSpace(string(b))] = true
+	}
+	if len(roots) != 2 {
+		t.Errorf("workers shared a persistence root: %v", roots)
+	}
+}

@@ -33,6 +33,8 @@ func main() {
 		err = runChat(args)
 	case "delegate":
 		err = runDelegate(args, os.Stdout)
+	case "clean":
+		err = runClean(args, os.Stdout)
 	case "version":
 		fmt.Println("strawboss", version)
 	case "-h", "--help", "help":
@@ -53,6 +55,7 @@ func usage(w *os.File) {
   (none)     launch the TUI
   chat       console supervisor driver (spike)
   delegate   spawn a worker (called by the supervisor)
+  clean      retention sweep: old logs/sessions, merged worktrees
   version    print version
 `)
 }

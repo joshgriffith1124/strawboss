@@ -94,6 +94,15 @@ func (o *Orchestrator) applyRegistryEvent(ctx context.Context, ev registry.Event
 		o.mu.Lock()
 		delete(o.unfinished, ev.Worker)
 		o.mu.Unlock()
+		// Push only live failures — replayed history must not re-ring
+		// anyone's phone.
+		if ev.Status == "failed" && ev.TS.After(o.started) {
+			summary := ev.Summary
+			if i := strings.IndexByte(summary, '\n'); i >= 0 {
+				summary = summary[:i]
+			}
+			o.pushFailure(ev.Worker, summary)
+		}
 		o.emit(ctx,
 			ui.WorkerUpsertMsg{ID: ev.Worker, Status: ev.Status, Summary: ev.Summary, LogPath: ev.LogPath, Ended: ev.TS},
 			ui.WorkerUsageMsg{ID: ev.Worker, Input: ev.InputTokens, Output: ev.OutputTokens},

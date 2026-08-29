@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -165,11 +166,17 @@ func (h *Harness) Spawn(ctx context.Context, task string, mc config.ModelConfig)
 	if _, err := os.Stat(bin); err != nil {
 		return "", fmt.Errorf("spawning dsh worker: dsh-acp-demo bin not found at %s (docs/NOTES.md): %w", bin, err)
 	}
-	if err := os.MkdirAll(h.SessionsRoot, 0o755); err != nil {
+	// Each worker gets its OWN persistence subtree: the acp app derives a
+	// session-query.db (SQLite) at the persistence root, and concurrent
+	// workers sharing one root fight over its lock — seen live, 3 of 4
+	// parallel workers died at boot with "ERR_SQLITE_ERROR: database is
+	// locked". FindSessionLog globs across the extra level.
+	sub := fmt.Sprintf("w-%d-%s", os.Getpid(), strconv.FormatInt(time.Now().UnixNano()%1e9, 36))
+	sessionsAbs, err := filepath.Abs(filepath.Join(h.SessionsRoot, sub))
+	if err != nil {
 		return "", fmt.Errorf("spawning dsh worker: %w", err)
 	}
-	sessionsAbs, err := filepath.Abs(h.SessionsRoot)
-	if err != nil {
+	if err := os.MkdirAll(sessionsAbs, 0o755); err != nil {
 		return "", fmt.Errorf("spawning dsh worker: %w", err)
 	}
 	apiKey := mc.APIKey

@@ -58,6 +58,19 @@ func TestFindSessionLog(t *testing.T) {
 	if _, err := FindSessionLog(root, "ses_missing"); err == nil {
 		t.Error("want error for unknown session")
 	}
+
+	// Per-worker persistence subtrees put logs one level deeper.
+	deep := filepath.Join(root, "w-123-abc", "--mangled--", "ses_deep")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(deep, "session.jsonl"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err = FindSessionLog(root, "ses_deep")
+	if err != nil || !strings.HasSuffix(got, filepath.Join("ses_deep", "session.jsonl")) {
+		t.Errorf("deep: got %q err %v", got, err)
+	}
 }
 
 // TestTailSessionIncremental writes the fixture in two halves and checks

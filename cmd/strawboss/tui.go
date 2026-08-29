@@ -115,6 +115,7 @@ func buildLive(stateDir, modelsPath string, fresh bool) (ui.Model, func(), error
 
 	o := live.New(driver, models, stateDir)
 	o.RunID = runID
+	o.Notify = cfg.Notify
 	o.Run(context.Background())
 
 	m := ui.New(o.Feed())

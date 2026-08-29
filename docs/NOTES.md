@@ -275,3 +275,14 @@ file on disk → terse result, 5s). Three obstacles, all handled:
    (`192.168.1.94 gx10-52e4.attlocal.net`) until the DNS side serves an A
    record. GX10 endpoint hostname is now gx10-52e4.attlocal.net (the
    .local name died with the IP change).
+
+## dsh parallel workers vs session-query.db (2026-08-29, live TUI run)
+
+Concurrent dsh workers sharing one persistence root die at boot with
+`ERR_SQLITE_ERROR: database is locked`: the acp app derives a
+`session-query.db` (SQLite, single-writer) at the persistence root, and
+every worker process opens it (3 of 4 parallel workers died; opencode was
+immune — one server process). Fixed by giving each worker its own
+persistence subtree `<stateDir>/dsh-sessions/w-<pid>-<nano36>/`;
+FindSessionLog globs both depths. Parallel dsh delegation works after
+this — no need to run dsh tasks sequentially.

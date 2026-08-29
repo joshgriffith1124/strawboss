@@ -30,6 +30,12 @@ type Orchestrator struct {
 	// the owning delegate to record the finish before declaring the
 	// worker orphaned. Default 10s; tests shorten it.
 	DshRecoverGrace time.Duration
+	// Notify configures optional failure pushes (ntfy).
+	Notify config.Notify
+
+	// started marks this orchestrator's birth: replayed history from
+	// before it must not re-trigger notifications.
+	started time.Time
 
 	feed      chan tea.Msg
 	prompts   chan string
@@ -61,6 +67,7 @@ func New(d *supervisor.Driver, models []config.ModelConfig, stateDir string) *Or
 		Driver:          d,
 		Models:          models,
 		StateDir:        stateDir,
+		started:         time.Now(),
 		feed:            make(chan tea.Msg, 64),
 		prompts:         make(chan string, 4),
 		interrupt:       make(chan struct{}, 1),

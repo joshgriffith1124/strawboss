@@ -99,15 +99,54 @@ Type what you want built. The supervisor delegates; the dashboard (tab 2)
 shows workers live. `models.toml` order is preference order — the
 supervisor favors the first entry.
 
-### DeepSeek Harness workers
+### Worker harness setup (at least one required)
 
-dsh is young (developer preview) and its setup is currently manual: the
-acp profile needs the `dsh-acp-demo` app packages installed (`dsh plugin
---profile acp add @deepseek-ai/dsh-acp-demo @deepseek-ai/dsh-acp
-@deepseek-ai/dsh-agent-spine-demo` plus leaf plugins). `docs/NOTES.md`
-has the verified, step-by-step findings — including the wire quirks
-strawboss works around for you (an sglang/dsh tool-call streaming
-incompatibility, reasoning-effort vocabulary clashes).
+Workers don't run themselves: each `models.toml` entry names a harness,
+and that harness must be installed and able to reach your inference
+endpoint. Without one, every delegation fails at spawn.
+
+**Option A — opencode** (the simpler path):
+
+1. Install [opencode](https://opencode.ai) so `opencode` is on your PATH.
+2. Point it at your inference endpoint in
+   `~/.config/opencode/opencode.json`:
+
+   ```json
+   {
+     "provider": {
+       "local": {
+         "npm": "@ai-sdk/openai-compatible",
+         "options": { "baseURL": "http://your-inference-host:8000/v1", "apiKey": "local" },
+         "models": { "qwen3.8-27b": { "limit": { "context": 262144, "output": 49152 } } }
+       }
+     }
+   }
+   ```
+
+3. Your `models.toml` entry then uses `endpoint = "http://127.0.0.1:4477"`
+   (the opencode server) and `model = "local/qwen3.8-27b"`. You do NOT
+   need to run `opencode serve` yourself — strawboss spawns and babysits
+   it for any localhost endpoint that fails its health check.
+
+**Option B — DeepSeek Harness (dsh)**: powerful but young (developer
+preview), and its setup is currently manual:
+
+1. `npm i -g @deepseek-ai/dsh`
+2. Install the ACP app packages into the acp profile:
+   `dsh plugin --profile acp add @deepseek-ai/dsh-acp-demo
+   @deepseek-ai/dsh-acp @deepseek-ai/dsh-agent-spine-demo
+   @deepseek-ai/dsh-llm-deepseek @deepseek-ai/dsh-fs-sandbox
+   @deepseek-ai/dsh-sandbox-policy @deepseek-ai/dsh-system-prompt
+   @deepseek-ai/dsh-user-approval`
+3. Your `models.toml` entry points straight at the LLM:
+   `endpoint = "http://your-inference-host:8000/v1"`, `model` = the id
+   your server serves, `harness = "dsh"`. strawboss generates the worker
+   composition (`strawboss.cordis.yml`) into the profile on first use and
+   works around the wire quirks for you (an sglang/dsh tool-call
+   streaming incompatibility, reasoning-effort vocabulary clashes).
+
+`docs/NOTES.md` has the verified, step-by-step findings behind all of
+this. `examples/models.toml` shows both harness flavors side by side.
 
 ## Claude usage & terms
 

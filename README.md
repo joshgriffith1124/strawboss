@@ -99,6 +99,28 @@ has the verified, step-by-step findings — including the wire quirks
 strawboss works around for you (an sglang/dsh tool-call streaming
 incompatibility, reasoning-effort vocabulary clashes).
 
+## Claude usage & terms
+
+strawboss drives the official `claude` CLI through its documented
+headless interface (`-p`, stream-json, `--resume`) on **your own
+subscription login** — no API-key requirement, no scraping, no metering
+tricks; usage draws from your plan and the TUI shows the plan-window
+utilization Anthropic reports. It deliberately does **not** use the
+Agent SDK, which requires API-key auth (OAuth from consumer accounts is
+disallowed there) — that boundary is why invariant #1 exists.
+
+Know the landscape before relying on it: through 2026 Anthropic has been
+reworking how programmatic (`claude -p` / third-party tool) usage meters
+against subscriptions — a capped monthly credit pool was announced, then
+paused, and may return in some form. That's a billing question, not a
+permission one, but "marginal $0.00" may some day mean "within a monthly
+programmatic allowance" (the built-in budget guard helps). What clearly
+crosses the line, regardless: running strawboss as a service for others
+on your subscription, always-on unattended daemon farms, or anything
+that spoofs the CLI. Keep it what it is — one human, steering their own
+account, interactively. Read Anthropic's current consumer terms
+yourself; they change.
+
 ## Honest maturity notes
 
 This is young software, built fast and verified against real binaries as

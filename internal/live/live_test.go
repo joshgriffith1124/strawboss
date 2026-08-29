@@ -662,3 +662,45 @@ func TestSessionScopedPerProject(t *testing.T) {
 		t.Errorf("dirB leaked dirA's session: %q", got)
 	}
 }
+
+// TestDshModelProbeNotesNotLoaded: a reachable endpoint that does not
+// serve a configured model must report "model not loaded", idle or not.
+func TestDshModelProbeNotesNotLoaded(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/models" {
+			w.Write([]byte(`{"data":[{"id":"some-other-model"}]}`))
+			return
+		}
+		w.WriteHeader(404)
+	}))
+	defer srv.Close()
+
+	// ds-hit first: msgs emit in config order and the drain terminates on
+	// ds-miss.
+	models := []config.ModelConfig{
+		{Name: "ds-hit", Endpoint: srv.URL, Model: "some-other-model", Harness: "dsh"},
+		{Name: "ds-miss", Endpoint: srv.URL, Model: "wanted-model", Harness: "dsh"},
+	}
+	o := New(&supervisor.Driver{}, models, t.TempDir())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go o.pollWorkers(ctx)
+
+	sawHit := false
+	drainUntil(t, o.Feed(), 15*time.Second, func(m tea.Msg) bool {
+		ms, ok := m.(ui.ModelStatMsg)
+		if !ok {
+			return false
+		}
+		if ms.Name == "ds-hit" {
+			if ms.Note != "dsh" {
+				t.Errorf("served model note = %q", ms.Note)
+			}
+			sawHit = true
+		}
+		return ms.Name == "ds-miss" && ms.Note == "model not loaded"
+	})
+	if !sawHit {
+		t.Error("served model never reported")
+	}
+}

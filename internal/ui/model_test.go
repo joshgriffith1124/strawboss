@@ -393,3 +393,44 @@ func TestLogsSourceFilterCycles(t *testing.T) {
 		}
 	}
 }
+
+func TestSidePanelEconomyAndModels(t *testing.T) {
+	m := New(make(chan tea.Msg))
+	m = apply(t, m,
+		tea.WindowSizeMsg{Width: 120, Height: 40},
+		// Cache-heavy supervisor: 300k cache reads vs 5k fresh — the bar
+		// must reflect fresh spend, not raw volume.
+		SupUsageMsg{Input: 3000, Output: 2000, CacheRead: 300000, Turns: 1},
+		WorkerUpsertMsg{ID: "w1", Model: "qwen-dsh", Task: "t", Status: "done"},
+		WorkerUsageMsg{ID: "w1", Input: 40000, Output: 5000},
+		ModelStatMsg{Name: "deepseek-dsh", Note: "model not loaded"},
+		ModelStatMsg{Name: "qwen-coder", Note: "opencode"},
+		ModelStatMsg{Name: "qwen-dsh", Note: "dsh"},
+	)
+	tokens := m.viewTokensPanel(38)
+	if !strings.Contains(tokens, "fresh") {
+		t.Errorf("tokens panel missing fresh legend:\n%s", tokens)
+	}
+	// fresh sup = 5k vs workers 45k → plan share must be small (10%).
+	if !strings.Contains(tokens, "10%") {
+		t.Errorf("fresh split not computed over fresh tokens:\n%s", tokens)
+	}
+
+	models := m.viewModelsPanel(38)
+	if !strings.Contains(models, "not loaded") || !strings.Contains(models, "deepseek-dsh") {
+		t.Errorf("not-loaded model hidden:\n%s", models)
+	}
+	if !strings.Contains(models, "+2 idle") {
+		t.Errorf("idle models not collapsed:\n%s", models)
+	}
+	if strings.Contains(models, "qwen-coder") {
+		t.Errorf("healthy idle model got its own row:\n%s", models)
+	}
+
+	// All idle → a single count line.
+	m = apply(t, m, ModelStatMsg{Name: "deepseek-dsh", Note: "dsh"})
+	models = m.viewModelsPanel(38)
+	if !strings.Contains(models, "3 configured · all idle") {
+		t.Errorf("all-idle collapse missing:\n%s", models)
+	}
+}

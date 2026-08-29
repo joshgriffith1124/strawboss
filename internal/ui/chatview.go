@@ -139,17 +139,21 @@ func (m Model) viewTokensPanel(w int) string {
 		kv(w, "workers", sText.Render(formatTokens(wrkTotal)+" · ")+sTealB.Render("$0.00")),
 	}
 
-	// flow bar: supervisor vs worker share of all tokens moved
+	// Flow bar over FRESH tokens only: supervisor cache reads are the
+	// conversation prefix re-read every turn — counting them made the paid
+	// side look like it did most of the work, the opposite of the story
+	// the delegation economy is telling.
+	freshSup := m.supIn + m.supCacheWrite + m.supOut
 	barW := w - 4
-	if barW > 4 && supTotal+wrkTotal > 0 {
-		supCells := barW * supTotal / (supTotal + wrkTotal)
-		if supCells < 1 && supTotal > 0 {
+	if barW > 4 && freshSup+wrkTotal > 0 {
+		supCells := barW * freshSup / (freshSup + wrkTotal)
+		if supCells < 1 && freshSup > 0 {
 			supCells = 1
 		}
 		bar := sAmber.Render(strings.Repeat("▰", supCells)) + sTeal.Render(strings.Repeat("▰", barW-supCells))
 		lines = append(lines, " "+bar+" ")
-		supPct := 100 * supTotal / (supTotal + wrkTotal)
-		legend := sAmberB.Render(fmt.Sprintf("%d%%", supPct)) + sDim.Render(" plan")
+		supPct := 100 * freshSup / (freshSup + wrkTotal)
+		legend := sDim.Render("fresh ") + sAmberB.Render(fmt.Sprintf("%d%%", supPct)) + sDim.Render(" plan")
 		right := sTealB.Render(fmt.Sprintf("%d%%", 100-supPct)) + sDim.Render(" local")
 		gap := w - 2 - lipgloss.Width(legend) - lipgloss.Width(right) - 2
 		if gap < 1 {
@@ -161,7 +165,7 @@ func (m Model) viewTokensPanel(w int) string {
 		lines = append(lines, kv(w, "plan window",
 			sText.Render(fmt.Sprintf("5h %.0f%% · 7d %.0f%%", m.fiveHour*100, m.sevenDay*100))))
 	}
-	return panel("Tokens", lines, w, cSupBorder, cAmber)
+	return panel("Tokens · plan vs free local", lines, w, cSupBorder, cAmber)
 }
 
 func (m Model) viewWorkersMini(w int) string {
@@ -214,22 +218,39 @@ func (m Model) viewWorkersMini(w int) string {
 }
 
 func (m Model) viewModelsPanel(w int) string {
+	// Rows only for models with something to say — active, generating,
+	// unreachable, or configured-but-not-served. A stack of "idle" lines
+	// reads as noise, so healthy idle models collapse to one count.
 	var lines []string
+	idle := 0
 	for _, ms := range m.models {
-		// One line per model: name left; state (and load, when any)
-		// right. The harness note only appears when something is running
-		// — as an always-on sub-line it read as layout breakage.
 		val := sFaint.Render("idle")
-		if ms.TokSec > 0 {
-			val = sText.Render(fmt.Sprintf("%.0f tok/s", ms.TokSec))
-		}
-		if ms.Active > 0 {
-			val = sTealB.Render(fmt.Sprintf("%d▶ ", ms.Active)) + val
-		}
-		if ms.Note == "endpoint unreachable" {
+		switch {
+		case ms.Note == "endpoint unreachable":
 			val = sErr.Render("unreachable")
+		case ms.Note == "model not loaded":
+			val = sAmber.Render("not loaded")
+		case ms.Active > 0 || ms.TokSec > 0:
+			if ms.TokSec > 0 {
+				val = sText.Render(fmt.Sprintf("%.0f tok/s", ms.TokSec))
+			} else {
+				val = sText.Render("active")
+			}
+			if ms.Active > 0 {
+				val = sTealB.Render(fmt.Sprintf("%d▶ ", ms.Active)) + val
+			}
+		default:
+			idle++
+			continue
 		}
 		lines = append(lines, kv(w, truncPlain(ms.Name, w-16), val))
+	}
+	if idle > 0 {
+		label := fmt.Sprintf("+%d idle", idle)
+		if idle == len(m.models) {
+			label = fmt.Sprintf("%d configured · all idle", idle)
+		}
+		lines = append(lines, kv(w, "models", sFaint.Render(label)))
 	}
 	// task tally
 	var done, running, queued, failed int

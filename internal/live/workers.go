@@ -180,6 +180,15 @@ func (o *Orchestrator) clientFor(model string) *opencode.Client {
 func (o *Orchestrator) pollWorkers(ctx context.Context) {
 	const interval = 2 * time.Second
 	lastOut := map[string]int{} // worker → last output tokens seen
+	// Per-endpoint LLM probe cache (dsh): reachability plus the served
+	// model list, refreshed at most every 15s — a configured model the
+	// server does not serve must show as "not loaded", not healthy idle.
+	type llmProbe struct {
+		reachable bool
+		models    map[string]bool // nil = reachable but list unknown
+		at        time.Time
+	}
+	llmProbes := map[string]*llmProbe{}
 	for {
 		select {
 		case <-ctx.Done():
@@ -267,25 +276,38 @@ func (o *Orchestrator) pollWorkers(ctx context.Context) {
 
 		// dsh workers have no server to poll: usage flows from their
 		// session-log tailers; active = unfinished; tok/s from tailer
-		// output deltas; reachability = a cheap probe of the LLM endpoint.
-		dshReachable := map[string]bool{}
+		// output deltas.
 		for _, s := range openDsh {
-			mc, _ := o.modelConfig(s.model)
 			activePerModel[s.model]++
 			outDeltaPerModel[s.model] += dshOut[s.worker] - lastOut[s.worker]
 			lastOut[s.worker] = dshOut[s.worker]
-			base := strings.TrimRight(mc.Endpoint, "/")
-			if _, seen := dshReachable[base]; !seen {
-				dshReachable[base] = llmReachable(ctx, base)
+		}
+
+		// Probe every distinct dsh endpoint, idle or not (throttled by
+		// the cache above).
+		for _, mc := range o.Models {
+			if mc.Harness != "dsh" {
+				continue
 			}
+			base := strings.TrimRight(mc.Endpoint, "/")
+			if p := llmProbes[base]; p != nil && time.Since(p.at) < 15*time.Second {
+				continue
+			}
+			models, ok := llmModels(ctx, base)
+			llmProbes[base] = &llmProbe{reachable: ok, models: models, at: time.Now()}
 		}
 
 		for _, mc := range o.Models {
 			base := strings.TrimRight(mc.Endpoint, "/")
 			note := mc.Harness
 			if mc.Harness == "dsh" {
-				if up, probed := dshReachable[base]; probed && !up {
-					note = "endpoint unreachable"
+				if p := llmProbes[base]; p != nil {
+					switch {
+					case !p.reachable:
+						note = "endpoint unreachable"
+					case p.models != nil && !p.models[mc.Model]:
+						note = "model not loaded"
+					}
 				}
 			} else if !reachable[base] {
 				note = "endpoint unreachable"
@@ -300,22 +322,38 @@ func (o *Orchestrator) pollWorkers(ctx context.Context) {
 	}
 }
 
-// llmReachable probes an OpenAI-compatible endpoint's model listing,
-// dialing IPv4-first like the worker proxy (stale AAAA records must not
-// report a working endpoint as unreachable).
-func llmReachable(ctx context.Context, base string) bool {
+// llmModels lists an OpenAI-compatible endpoint's served models, dialing
+// IPv4-first like the worker proxy (stale AAAA records must not report a
+// working endpoint as unreachable). A reachable endpoint with an
+// unparseable listing returns (nil, true): reachable, list unknown.
+func llmModels(ctx context.Context, base string) (map[string]bool, bool) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "GET", base+"/models", nil)
 	if err != nil {
-		return false
+		return nil, false
 	}
 	resp, err := dshacp.Transport.RoundTrip(req)
 	if err != nil {
-		return false
+		return nil, false
 	}
-	resp.Body.Close()
-	return resp.StatusCode < 500
+	defer resp.Body.Close()
+	if resp.StatusCode >= 500 {
+		return nil, false
+	}
+	var parsed struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&parsed) != nil || len(parsed.Data) == 0 {
+		return nil, true
+	}
+	set := make(map[string]bool, len(parsed.Data))
+	for _, m := range parsed.Data {
+		set[m.ID] = true
+	}
+	return set, true
 }
 
 // subscribeWorkerEvents streams one endpoint's /global/event feed into

@@ -13,8 +13,7 @@ tested at the end (same rule as milestones). Struck items are done.
    69bc0ce, 737fea0)
 7. ~~Budget guard~~ (`[budget]` config, delegate stop marker, `strawboss costs`)
 8. ~~Recover-all~~ (`R` retries every failed worker in the filtered view)
-9. **Session picker / history browser** — browse and resume past
-   supervisor sessions and replay recorded runs from the TUI.
+9. ~~Session picker / history browser~~ (`s` opens the per-project picker)
 10. **Per-task auto model routing** — strawboss picks the worker model by
     task shape instead of the supervisor hand-picking (needs ≥2 models
     actually loaded on the GX10 to matter — deepseek-v4-flash still

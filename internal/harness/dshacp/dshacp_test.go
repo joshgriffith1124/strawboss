@@ -181,3 +181,36 @@ func TestSpawnMissingBinExplains(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+// TestToolsModeReachesSubprocess: models.toml tools_mode flows to the dsh
+// subprocess env, where the generated cordis.yml reads it.
+func TestToolsModeReachesSubprocess(t *testing.T) {
+	h := testHarness(t, "done")
+	envDump := filepath.Join(t.TempDir(), "env")
+	script := `#!/bin/sh
+echo "$STRAWBOSS_DSH_TOOLS_MODE" > ` + envDump + `
+while read line; do
+  case "$line" in
+    *'"initialize"'*) echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}';;
+    *'"session/new"'*) echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"ses_mode"}}';;
+    *'"session/prompt"'*) echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}';;
+  esac
+done
+`
+	if err := os.WriteFile(h.Bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := mc()
+	m.ToolsMode = "code"
+	wid, err := h.Spawn(context.Background(), "task", m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Result(context.Background(), wid); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(envDump)
+	if err != nil || strings.TrimSpace(string(got)) != "code" {
+		t.Errorf("subprocess saw tools mode %q err %v", got, err)
+	}
+}

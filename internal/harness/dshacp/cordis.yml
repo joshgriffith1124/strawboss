@@ -49,6 +49,12 @@
     persistenceCompression: none
     workspaceContext:
       maxBytes: 65536
+    # Tool transport per spawn (models.toml tools_mode): native tools,
+    # code (one run_code tool + a ~15KB generated TypeScript SDK prompt),
+    # or both. Native is the default — the SDK prompt is heavy for small
+    # local models.
+    tools:
+      mode: !!js process.env.STRAWBOSS_DSH_TOOLS_MODE ?? 'native'
     persona: |
       You are a coding worker executing one delegated task. Your working directory is {{cwd}}. Complete the task, verify by running the code or tests, and reply with a brief factual summary.
 
@@ -62,3 +68,7 @@
 
 - id: tool-fs
   name: '@deepseek-ai/dsh-tool-fs'
+
+# ctx.codeRuntime for code/both mode; inert under native (verified).
+- id: code-runtime
+  name: '@deepseek-ai/dsh-code-runtime-worker-thread'

@@ -184,6 +184,9 @@ func (h *Harness) Spawn(ctx context.Context, task string, mc config.ModelConfig)
 		"STRAWBOSS_DSH_MODEL="+mc.Model,
 		"STRAWBOSS_DSH_SESSIONS="+sessionsAbs,
 	)
+	if mc.ToolsMode != "" {
+		cmd.Env = append(cmd.Env, "STRAWBOSS_DSH_TOOLS_MODE="+mc.ToolsMode)
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return "", fmt.Errorf("spawning dsh worker: %w", err)

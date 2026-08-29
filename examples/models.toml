@@ -32,3 +32,5 @@ endpoint = "http://gx10-52e4.local:8000/v1"  # the LLM endpoint itself — dsh n
 model = "deepseek-v4-flash"
 harness = "dsh"                  # DeepSeek Harness ACP workers; setup in docs/NOTES.md
 # api_key = "local"              # sent to the endpoint; "local" when omitted
+# tools_mode = "native"          # dsh tool transport: native (default) · code (one
+#                                # run_code tool + ~4k-token TS SDK prompt) · both

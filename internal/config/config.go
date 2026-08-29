@@ -29,6 +29,10 @@ type ModelConfig struct {
 	// directly (dsh). Local OpenAI-compatible servers accept any value;
 	// empty defaults to "local".
 	APIKey string `toml:"api_key"`
+	// ToolsMode selects the dsh tool transport: "native" (default),
+	// "code" (one run_code tool + a generated TypeScript SDK prompt), or
+	// "both". Ignored by the opencode harness.
+	ToolsMode string `toml:"tools_mode"`
 }
 
 // Supervisor holds settings for spawning the claude CLI.
@@ -153,6 +157,11 @@ func LoadModels(path string) ([]ModelConfig, error) {
 		}
 		if !knownHarnesses[mc.Harness] {
 			return nil, fmt.Errorf("model %q: unknown harness %q", name, mc.Harness)
+		}
+		switch mc.ToolsMode {
+		case "", "native", "code", "both":
+		default:
+			return nil, fmt.Errorf("model %q: unknown tools_mode %q (native, code, or both)", name, mc.ToolsMode)
 		}
 		out = append(out, mc)
 	}

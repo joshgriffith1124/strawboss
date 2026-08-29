@@ -223,3 +223,24 @@ OpenAI-compatible endpoint; fixtures in `internal/harness/dshacp/testdata/`.
   and the loop continues.
 - Boot diagnostics go to stderr (stdout is the wire); stdin EOF is
   graceful shutdown. Kill from outside = SIGTERM the bin's PID.
+
+## dsh tool-transport modes (verified 2026-08-29, real bin + fake LLM)
+
+The acp-demo app config `tools.mode` selects the model-facing tool
+transport; strawboss exposes it per model as `tools_mode` in models.toml
+(→ `STRAWBOSS_DSH_TOOLS_MODE`, read by the generated cordis.yml):
+
+- **native** (default): ordinary wire tools (`bash, read, write, edit,
+  skill, job_*, *_goal` — 11 in rc.2), system prompt ~2.3KB.
+- **code**: the wire carries ONE `run_code` tool; the model writes
+  TypeScript executed in a fresh worker thread per run
+  (`dsh-code-runtime-worker-thread`, bash-equivalent trust posture,
+  compute/wall/heap/output budgets). The generated TS SDK inflates the
+  system prompt to ~15.6KB (≈4k tokens per request) — significant for
+  small local models, hence opt-in, not default.
+- **both**: native tools + `run_code`.
+
+code/both require the `dsh-code-runtime-worker-thread` plugin mounted;
+the strawboss composition mounts it unconditionally — verified inert
+under native mode (same tool list and prompt size as without it). It is
+present in the shared profile packages; no extra install.

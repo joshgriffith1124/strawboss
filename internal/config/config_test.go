@@ -186,3 +186,16 @@ func TestLoadModelsMissingFile(t *testing.T) {
 		t.Fatal("want error for missing models.toml")
 	}
 }
+
+func TestLoadModelsToolsMode(t *testing.T) {
+	good := "[models.x]\nendpoint = \"http://h:1\"\nmodel = \"m\"\nharness = \"dsh\"\ntools_mode = \"code\"\n"
+	models, err := LoadModels(writeFile(t, "models.toml", good))
+	if err != nil || models[0].ToolsMode != "code" {
+		t.Fatalf("models = %+v err %v", models, err)
+	}
+	bad := "[models.x]\nendpoint = \"http://h:1\"\nmodel = \"m\"\ntools_mode = \"yolo\"\n"
+	if _, err := LoadModels(writeFile(t, "bad.toml", bad)); err == nil ||
+		!strings.Contains(err.Error(), "unknown tools_mode") {
+		t.Fatalf("err = %v", err)
+	}
+}

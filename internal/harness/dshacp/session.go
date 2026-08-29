@@ -68,6 +68,12 @@ type TailItem struct {
 	Usage     *harness.Usage // cumulative usage, present when it changed
 	TurnEnded bool
 	EndReason string // turn/end reason kind, e.g. "completed"
+	// Replay marks items parsed from content that already existed when the
+	// tail began — history repopulating a transcript, not live activity.
+	// Consumers should render but not log or alert on these.
+	Replay bool
+
+	at int64 // byte offset of the source line, for the replay boundary
 }
 
 // SessionInfo is the folded state of a session log.
@@ -217,15 +223,24 @@ func TailSession(ctx context.Context, root, sessionID string, interval time.Dura
 		defer close(out)
 		var path string
 		var offset int64
+		var initialSize int64 = -1
 		var cum harness.Usage
 		ended := false
 		for {
 			if path == "" {
 				path, _ = FindSessionLog(root, sessionID)
+				if path != "" {
+					if fi, err := os.Stat(path); err == nil {
+						initialSize = fi.Size()
+					}
+				}
 			}
 			if path != "" {
 				var items []TailItem
 				items, offset = readFrom(path, offset, &cum)
+				for i := range items {
+					items[i].Replay = items[i].at < initialSize
+				}
 				for _, it := range items {
 					if it.TurnEnded {
 						ended = true
@@ -269,7 +284,11 @@ func readFrom(path string, offset int64, cum *harness.Usage) ([]TailItem, int64)
 		if err != nil {
 			return items, offset
 		}
+		lineStart := offset
 		offset += int64(len(line))
-		items = append(items, parseLine(line, cum, nil)...)
+		for _, it := range parseLine(line, cum, nil) {
+			it.at = lineStart
+			items = append(items, it)
+		}
 	}
 }

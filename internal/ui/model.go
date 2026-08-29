@@ -330,7 +330,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				evs[n-1].done = true // a discrete event ends any growing line
 			}
 			evs = append(evs, workerEvent{kind: msg.Kind, text: msg.Text, done: true})
-			m.log("wrk", msg.ID+" "+msg.Kind+": "+truncPlain(msg.Text, 110))
+			if !msg.Replay {
+				m.log("wrk", msg.ID+" "+msg.Kind+": "+truncPlain(msg.Text, 110))
+			}
 		}
 		if len(evs) > 200 {
 			evs = evs[len(evs)-200:]

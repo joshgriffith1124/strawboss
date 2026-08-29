@@ -127,7 +127,7 @@ func (o *Orchestrator) tailDshWorker(ctx context.Context, wid, session string) {
 	for it := range dshacp.TailSession(ctx, root, session, 0) {
 		switch {
 		case it.Event != nil:
-			o.emit(ctx, ui.WorkerEventMsg{ID: wid, Kind: it.Event.Kind, Text: it.Event.Text})
+			o.emit(ctx, ui.WorkerEventMsg{ID: wid, Kind: it.Event.Kind, Text: it.Event.Text, Replay: it.Replay})
 		case it.Usage != nil:
 			o.mu.Lock()
 			o.dshOut[wid] = it.Usage.OutputTokens

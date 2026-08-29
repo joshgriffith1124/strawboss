@@ -37,10 +37,12 @@ func (m Model) viewChatColumn(w, h int) string {
 	for _, it := range m.chat {
 		switch it.kind {
 		case "user":
-			b.WriteString(sRun.Render("YOU · "+it.when.Format("15:04")) + "\n")
+			// .Local(): stream timestamps arrive in UTC; wall-clock labels
+			// must agree with the user's clock.
+			b.WriteString(sRun.Render("YOU · "+it.when.Local().Format("15:04")) + "\n")
 			b.WriteString(wrap.Render(sBrite.Render(it.text)) + "\n\n")
 		case "sup":
-			b.WriteString(sAmber.Render("SUPERVISOR · "+it.when.Format("15:04")) + "\n")
+			b.WriteString(sAmber.Render("SUPERVISOR · "+it.when.Local().Format("15:04")) + "\n")
 			b.WriteString(wrap.Render(sText.Render(it.text)) + "\n\n")
 		case "tool-out":
 			b.WriteString(toolBlock(sAmber.Render(glyphOut), it.text, 240, sText, w))

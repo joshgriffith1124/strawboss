@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -154,9 +155,26 @@ func (m Model) viewDetailSplit(w, h int) string {
 	if sel != nil {
 		title = fmt.Sprintf("Worker %s · %s · %s", sel.ID, sel.Model, sel.Status)
 		lines = append(lines, " "+sDim.Render(truncPlain(
-			fmt.Sprintf("opencode · %s tok · %s", formatTokens(sel.In+sel.Out), sel.LogPath), leftW-4)))
+			fmt.Sprintf("%s tok · %s", formatTokens(sel.In+sel.Out), sel.LogPath), leftW-4)))
+		// The full task lives nowhere else — every other surface truncates.
+		taskRows := 0
+		if leftW >= 16 && strings.TrimSpace(sel.Task) != "" {
+			wrapped := lipgloss.NewStyle().Width(leftW - 6).Render(sel.Task)
+			for i, ln := range strings.Split(wrapped, "\n") {
+				if i == 4 {
+					lines = append(lines, " "+sFaint.Render("…"))
+					taskRows++
+					break
+				}
+				lines = append(lines, " "+sFaint.Render(ln))
+				taskRows++
+			}
+		}
 		evs := m.workerEvents[sel.ID]
-		maxEv := h - 3
+		maxEv := h - 3 - taskRows
+		if maxEv < 1 {
+			maxEv = 1
+		}
 		if len(evs) > maxEv {
 			evs = evs[len(evs)-maxEv:]
 		}

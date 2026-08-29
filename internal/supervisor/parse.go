@@ -77,6 +77,10 @@ func parseSystem(line []byte, subtype, sessionID string) (Event, error) {
 			return nil, nil // periodic chatter; never worth an unknown-event log
 		}
 		return ThinkingEvent{SessionID: sessionID, EstimatedTokens: v.EstimatedTokens}, nil
+	case "background_tasks_changed", "task_started", "task_completed", "task_failed":
+		// Background Bash bookkeeping (the supervisor may run delegate as
+		// a background task) — known chatter, nothing to display.
+		return nil, nil
 	default:
 		return UnknownEvent{Type: "system/" + subtype, Raw: line}, nil
 	}

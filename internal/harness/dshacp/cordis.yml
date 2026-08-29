@@ -52,6 +52,11 @@
     model: !!js process.env.STRAWBOSS_DSH_MODEL
     persistenceRoot: !!js process.env.STRAWBOSS_DSH_SESSIONS ?? './.sessions'
     persistenceCompression: none
+    # Unpacked chunks: each streamed delta lands in session.jsonl as its
+    # own line IMMEDIATELY. With packing (the default) deltas buffer until
+    # a block completes, so the TUI transcript sits empty through a whole
+    # reasoning stretch — workers look dead while they think.
+    packChunks: false
     workspaceContext:
       maxBytes: 65536
     # Tool transport per spawn (models.toml tools_mode): native tools,

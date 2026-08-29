@@ -100,6 +100,9 @@ type WorkerEventMsg struct {
 	ID   string
 	Kind string // "tool", "text", "reasoning", "error"
 	Text string
+	// Replay: history repopulating a transcript after a restart — render
+	// it, but keep it out of the logs tab (it did not just happen).
+	Replay bool
 }
 
 // ModelStatMsg updates one model config's endpoint stats.

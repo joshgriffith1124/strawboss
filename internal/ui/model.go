@@ -35,17 +35,38 @@ type workerRow struct {
 	Status  string
 	Summary string
 	LogPath string
+	Dir     string
 	Started time.Time
 	Ended   time.Time
 	In, Out int
+	Ctx     int // current context footprint (0 = unknown)
 }
 
+// workerRate is per-worker throughput derived from usage deltas.
+type workerRate struct {
+	out  int
+	at   time.Time
+	rate float64 // smoothed output tok/s
+}
+
+// modelStat mirrors ModelStatMsg field-for-field (conversion below).
 type modelStat struct {
-	Name   string
-	TokSec float64
-	Active int
-	Queue  int
-	Note   string
+	Name          string
+	TokSec        float64
+	Active        int
+	Queue         int
+	Note          string
+	ContextWindow int
+}
+
+// contextWindowFor is the model's reported context length, 0 if unknown.
+func (m Model) contextWindowFor(name string) int {
+	for _, ms := range m.models {
+		if ms.Name == name {
+			return ms.ContextWindow
+		}
+	}
+	return 0
 }
 
 // workerEvent is one transcript line in a worker's detail pane. Streamed
@@ -143,6 +164,7 @@ type Model struct {
 	// workers
 	workers      []workerRow
 	workerEvents map[string][]workerEvent
+	workerRates  map[string]workerRate
 	selected     int
 	follow       bool
 	filterInput  textinput.Model
@@ -175,6 +197,7 @@ func New(feed <-chan tea.Msg) Model {
 		started:      time.Now(),
 		now:          time.Now(),
 		workerEvents: map[string][]workerEvent{},
+		workerRates:  map[string]workerRate{},
 		follow:       true,
 		input:        in,
 		filterInput:  filter,
@@ -315,6 +338,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.LogPath != "" {
 			w.LogPath = msg.LogPath
 		}
+		if msg.Dir != "" {
+			w.Dir = msg.Dir
+		}
 		if msg.Status != "" && msg.Status != w.Status {
 			w.Status = msg.Status
 			if msg.Status == "done" || msg.Status == "failed" {
@@ -331,7 +357,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, Listen(m.feed)
 	case WorkerUsageMsg:
 		if w := m.worker(msg.ID); w != nil {
+			// Live tok/s from output deltas, lightly smoothed; the models
+			// panel shows instantaneous per-endpoint rate, this one is the
+			// worker's own.
+			now := time.Now()
+			r := m.workerRates[msg.ID]
+			if !r.at.IsZero() && msg.Output > r.out && now.After(r.at) {
+				inst := float64(msg.Output-r.out) / now.Sub(r.at).Seconds()
+				if r.rate > 0 {
+					r.rate = 0.6*r.rate + 0.4*inst
+				} else {
+					r.rate = inst
+				}
+			}
+			r.out, r.at = msg.Output, now
+			m.workerRates[msg.ID] = r
 			w.In, w.Out = msg.Input, msg.Output
+			if msg.Ctx > 0 {
+				w.Ctx = msg.Ctx
+			}
 		}
 		return m, Listen(m.feed)
 	case WorkerEventMsg:

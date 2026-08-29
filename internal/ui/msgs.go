@@ -84,6 +84,7 @@ type WorkerUpsertMsg struct {
 	Status  string // queued/running/done/failed; "" keeps existing
 	Summary string
 	LogPath string
+	Dir     string    // working directory; "" keeps existing
 	Started time.Time // zero keeps existing
 	Ended   time.Time // when the worker finished; zero means "now" on a
 	// done/failed transition (live events) vs. the recorded time (replay)
@@ -93,6 +94,9 @@ type WorkerUpsertMsg struct {
 type WorkerUsageMsg struct {
 	ID            string
 	Input, Output int
+	// Ctx is the worker's current context footprint (last request's
+	// prompt size incl. cache reads); 0 = unknown, keeps existing.
+	Ctx int
 }
 
 // WorkerEventMsg appends a transcript line to the worker detail pane.
@@ -112,6 +116,9 @@ type ModelStatMsg struct {
 	Active int
 	Queue  int
 	Note   string // e.g. "vllm · 2×GX10 split"
+	// ContextWindow is the model's context length as the endpoint reports
+	// it (sglang max_model_len); 0 = unknown.
+	ContextWindow int
 }
 
 // RawLogMsg appends to the logs tab.

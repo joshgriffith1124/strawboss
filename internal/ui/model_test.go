@@ -479,3 +479,18 @@ func TestRetryAllFailed(t *testing.T) {
 		t.Errorf("toast = %q", m.toast)
 	}
 }
+
+func TestWorkerDetailShowsThroughputAndContext(t *testing.T) {
+	m := demoState(t)
+	m = apply(t, m,
+		ModelStatMsg{Name: "qwen-coder", Note: "opencode", ContextWindow: 262144},
+		WorkerUsageMsg{ID: "w1", Input: 40000, Output: 9000, Ctx: 30000},
+	)
+	m.selected = 1 // display order: w2 (queued), w1 (running)
+	out := m.viewDetailSplit(120, 20)
+	for _, want := range []string{"ctx 30.0k", "262.1k", "avg", "started", "log "} {
+		if !strings.Contains(out, want) {
+			t.Errorf("detail missing %q:\n%s", want, out)
+		}
+	}
+}

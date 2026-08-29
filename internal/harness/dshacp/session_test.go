@@ -105,7 +105,7 @@ func TestTailSessionIncremental(t *testing.T) {
 	}()
 
 	var kinds []string
-	var lastUsage int
+	var lastUsage, lastCtx int
 	ended := false
 	for it := range ch {
 		switch {
@@ -113,6 +113,7 @@ func TestTailSessionIncremental(t *testing.T) {
 			kinds = append(kinds, it.Event.Kind)
 		case it.Usage != nil:
 			lastUsage = it.Usage.OutputTokens
+			lastCtx = it.Ctx
 		case it.TurnEnded:
 			ended = true
 		}
@@ -122,6 +123,9 @@ func TestTailSessionIncremental(t *testing.T) {
 	}
 	if lastUsage != 52 {
 		t.Errorf("cumulative output = %d, want 52", lastUsage)
+	}
+	if lastCtx != 1000 {
+		t.Errorf("last step ctx = %d, want 1000", lastCtx)
 	}
 	joined := strings.Join(kinds, ",")
 	// tool call, errored tool result, then the final text deltas.

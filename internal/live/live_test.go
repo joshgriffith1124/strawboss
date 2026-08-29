@@ -668,7 +668,7 @@ func TestSessionScopedPerProject(t *testing.T) {
 func TestDshModelProbeNotesNotLoaded(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/models" {
-			w.Write([]byte(`{"data":[{"id":"some-other-model"}]}`))
+			w.Write([]byte(`{"data":[{"id":"some-other-model","max_model_len":262144}]}`))
 			return
 		}
 		w.WriteHeader(404)
@@ -695,6 +695,9 @@ func TestDshModelProbeNotesNotLoaded(t *testing.T) {
 		if ms.Name == "ds-hit" {
 			if ms.Note != "dsh" {
 				t.Errorf("served model note = %q", ms.Note)
+			}
+			if ms.ContextWindow != 262144 {
+				t.Errorf("context window = %d", ms.ContextWindow)
 			}
 			sawHit = true
 		}

@@ -68,6 +68,10 @@ type TailItem struct {
 	Usage     *harness.Usage // cumulative usage, present when it changed
 	TurnEnded bool
 	EndReason string // turn/end reason kind, e.g. "completed"
+	// Ctx is the prompt size of the request this usage chunk closed
+	// (input + cache reads) — the worker's CURRENT context footprint,
+	// distinct from the cumulative Usage. 0 on non-usage items.
+	Ctx int
 	// Replay marks items parsed from content that already existed when the
 	// tail began — history repopulating a transcript, not live activity.
 	// Consumers should render but not log or alert on these.
@@ -130,7 +134,7 @@ func parseLine(line []byte, cum *harness.Usage, info *SessionInfo) []TailItem {
 			if info != nil {
 				info.Usage = u
 			}
-			return []TailItem{{Usage: &u}}
+			return []TailItem{{Usage: &u, Ctx: d.Chunk.Usage.InputTokens + d.Chunk.Usage.CacheReadTokens}}
 		case "finish":
 			if info != nil {
 				info.FinishReason = d.Chunk.Reason.Kind

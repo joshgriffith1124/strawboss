@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -164,24 +165,55 @@ func (m Model) viewDetailSplit(w, h int) string {
 	var lines []string
 	if sel != nil {
 		title = fmt.Sprintf("Worker %s · %s · %s", sel.ID, sel.Model, sel.Status)
-		lines = append(lines, " "+sDim.Render(truncPlain(
-			fmt.Sprintf("%s tok · %s", formatTokens(sel.In+sel.Out), sel.LogPath), leftW-4)))
+
+		// Throughput: live rate while output moves, lifetime average
+		// otherwise (the live number naturally freezes between steps).
+		tok := sText.Render(formatTokens(sel.In+sel.Out)) + sDim.Render(" tok")
+		end := m.now
+		if !sel.Ended.IsZero() {
+			end = sel.Ended
+		}
+		elapsed := end.Sub(sel.Started)
+		if r, ok := m.workerRates[sel.ID]; ok && sel.Status == "running" && r.rate > 0 && m.now.Sub(r.at) < 8*time.Second {
+			tok += sDim.Render(" · ") + sTealB.Render(fmt.Sprintf("%.0f tok/s", r.rate)) + sDim.Render(" live")
+		} else if sel.Out > 0 && elapsed > time.Second {
+			tok += sDim.Render(fmt.Sprintf(" · avg %.0f tok/s", float64(sel.Out)/elapsed.Seconds()))
+		}
+		lines = append(lines, " "+tok)
+
+		// Context footprint vs the model's window, when either is known.
+		if sel.Ctx > 0 {
+			ctx := sText.Render("ctx " + formatTokens(sel.Ctx))
+			if win := m.contextWindowFor(sel.Model); win > 0 {
+				pct := 100 * sel.Ctx / win
+				style := sDim
+				if pct >= 70 {
+					style = sAmberB
+				}
+				ctx += sDim.Render(" / "+formatTokens(win)+" ") + style.Render(fmt.Sprintf("(%d%%)", pct))
+			}
+			lines = append(lines, " "+ctx)
+		}
+
+		meta := fmt.Sprintf("started %s · ran %s", sel.Started.Local().Format("15:04:05"), formatMinSec(elapsed))
+		if sel.Dir != "" {
+			meta += " · " + sel.Dir
+		}
+		lines = append(lines, " "+sDim.Render(truncPlain(meta, leftW-4)))
+		lines = append(lines, " "+sFaint.Render(truncPlain("log "+sel.LogPath, leftW-4)))
 		// The full task lives nowhere else — every other surface truncates.
-		taskRows := 0
 		if leftW >= 16 && strings.TrimSpace(sel.Task) != "" {
 			wrapped := lipgloss.NewStyle().Width(leftW - 6).Render(sel.Task)
 			for i, ln := range strings.Split(wrapped, "\n") {
 				if i == 4 {
 					lines = append(lines, " "+sFaint.Render("…"))
-					taskRows++
 					break
 				}
 				lines = append(lines, " "+sFaint.Render(ln))
-				taskRows++
 			}
 		}
 		evs := m.workerEvents[sel.ID]
-		maxEv := h - 3 - taskRows
+		maxEv := h - 3 - len(lines)
 		if maxEv < 1 {
 			maxEv = 1
 		}

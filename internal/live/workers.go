@@ -87,7 +87,7 @@ func (o *Orchestrator) applyRegistryEvent(ctx context.Context, ev registry.Event
 			go o.tailDshWorker(ctx, ev.Worker, ev.Session)
 		}
 		o.emit(ctx, ui.WorkerUpsertMsg{
-			ID: ev.Worker, Model: ev.Model, Task: ev.Task,
+			ID: ev.Worker, Model: ev.Model, Task: ev.Task, Dir: ev.Dir,
 			Status: "running", Started: ev.TS,
 		})
 	case "finished":
@@ -132,7 +132,7 @@ func (o *Orchestrator) tailDshWorker(ctx context.Context, wid, session string) {
 			o.mu.Lock()
 			o.dshOut[wid] = it.Usage.OutputTokens
 			o.mu.Unlock()
-			o.emit(ctx, ui.WorkerUsageMsg{ID: wid, Input: it.Usage.InputTokens, Output: it.Usage.OutputTokens})
+			o.emit(ctx, ui.WorkerUsageMsg{ID: wid, Input: it.Usage.InputTokens, Output: it.Usage.OutputTokens, Ctx: it.Ctx})
 		case it.TurnEnded:
 			endReason = it.EndReason
 		}
@@ -185,7 +185,7 @@ func (o *Orchestrator) pollWorkers(ctx context.Context) {
 	// server does not serve must show as "not loaded", not healthy idle.
 	type llmProbe struct {
 		reachable bool
-		models    map[string]bool // nil = reachable but list unknown
+		models    map[string]int // id → context length; nil = list unknown
 		at        time.Time
 	}
 	llmProbes := map[string]*llmProbe{}
@@ -300,33 +300,42 @@ func (o *Orchestrator) pollWorkers(ctx context.Context) {
 		for _, mc := range o.Models {
 			base := strings.TrimRight(mc.Endpoint, "/")
 			note := mc.Harness
+			ctxWin := 0
 			if mc.Harness == "dsh" {
 				if p := llmProbes[base]; p != nil {
 					switch {
 					case !p.reachable:
 						note = "endpoint unreachable"
-					case p.models != nil && !p.models[mc.Model]:
-						note = "model not loaded"
+					case p.models == nil: // reachable, list unknown
+					default:
+						win, served := p.models[mc.Model]
+						if !served {
+							note = "model not loaded"
+						} else {
+							ctxWin = win
+						}
 					}
 				}
 			} else if !reachable[base] {
 				note = "endpoint unreachable"
 			}
 			o.emit(ctx, ui.ModelStatMsg{
-				Name:   mc.Name,
-				TokSec: float64(outDeltaPerModel[mc.Name]) / interval.Seconds(),
-				Active: activePerModel[mc.Name],
-				Note:   note,
+				Name:          mc.Name,
+				TokSec:        float64(outDeltaPerModel[mc.Name]) / interval.Seconds(),
+				Active:        activePerModel[mc.Name],
+				Note:          note,
+				ContextWindow: ctxWin,
 			})
 		}
 	}
 }
 
-// llmModels lists an OpenAI-compatible endpoint's served models, dialing
-// IPv4-first like the worker proxy (stale AAAA records must not report a
-// working endpoint as unreachable). A reachable endpoint with an
+// llmModels lists an OpenAI-compatible endpoint's served models with
+// their context lengths (sglang max_model_len; 0 when unreported),
+// dialing IPv4-first like the worker proxy (stale AAAA records must not
+// report a working endpoint as unreachable). A reachable endpoint with an
 // unparseable listing returns (nil, true): reachable, list unknown.
-func llmModels(ctx context.Context, base string) (map[string]bool, bool) {
+func llmModels(ctx context.Context, base string) (map[string]int, bool) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "GET", base+"/models", nil)
@@ -343,15 +352,16 @@ func llmModels(ctx context.Context, base string) (map[string]bool, bool) {
 	}
 	var parsed struct {
 		Data []struct {
-			ID string `json:"id"`
+			ID          string `json:"id"`
+			MaxModelLen int    `json:"max_model_len"`
 		} `json:"data"`
 	}
 	if json.NewDecoder(resp.Body).Decode(&parsed) != nil || len(parsed.Data) == 0 {
 		return nil, true
 	}
-	set := make(map[string]bool, len(parsed.Data))
+	set := make(map[string]int, len(parsed.Data))
 	for _, m := range parsed.Data {
-		set[m.ID] = true
+		set[m.ID] = m.MaxModelLen
 	}
 	return set, true
 }

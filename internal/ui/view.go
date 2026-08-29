@@ -63,7 +63,19 @@ func (m Model) viewTopbar(w int) string {
 	} else {
 		mid = sDim.Render(m.auth)
 	}
-	right := sDim.Render("run " + formatClock(m.now.Sub(m.started)))
+	var rightParts []string
+	if m.remoteChannel != "" {
+		rightParts = append(rightParts, sTeal.Render("⇄ "+m.remoteChannel))
+	}
+	if m.fiveHour > 0 {
+		gauge := sDim.Render(fmt.Sprintf("5h %.0f%%", m.fiveHour*100))
+		if m.fiveHour >= 0.7 {
+			gauge = sAmberB.Render(fmt.Sprintf("5h %.0f%%", m.fiveHour*100))
+		}
+		rightParts = append(rightParts, gauge)
+	}
+	rightParts = append(rightParts, sDim.Render("run "+formatClock(m.now.Sub(m.started))))
+	right := strings.Join(rightParts, sFaint.Render(" · "))
 
 	gap1 := w - lipgloss.Width(left) - lipgloss.Width(mid) - lipgloss.Width(right) - 2
 	if gap1 < 2 {

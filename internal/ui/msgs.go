@@ -124,6 +124,10 @@ type RawLogMsg struct {
 // user-initiated worker actions.
 type ToastMsg struct{ Text string }
 
+// RemoteMsg announces that a remote control channel is armed (OpenClaw
+// two-way): shown in the topbar so leaving the desk is an informed act.
+type RemoteMsg struct{ Channel string }
+
 // SendPromptMsg is emitted BY the UI when the user submits input; the
 // program driver (demo or live) subscribes and acts.
 type SendPromptMsg struct{ Text string }

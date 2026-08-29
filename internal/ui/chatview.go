@@ -77,8 +77,11 @@ func (m Model) viewChatColumn(w, h int) string {
 	}
 
 	lines := tail(strings.TrimRight(b.String(), "\n"), logH)
+	// Bottom-anchor: the conversation grows up from the input box, so the
+	// newest exchange sits beside where you type instead of stranded at
+	// the top of an empty column.
 	for len(lines) < logH {
-		lines = append(lines, "")
+		lines = append([]string{""}, lines...)
 	}
 	log := strings.Join(lines, "\n")
 
@@ -187,18 +190,16 @@ func (m Model) viewWorkersMini(w int) string {
 		if wk.In+wk.Out > 0 {
 			toks = formatTokens(wk.In + wk.Out)
 		}
-		mdl := truncPlain(wk.Model, 10)
-		labelW := w - 24 - len(mdl) // prefix + right columns + 1 gap
-		label := truncPlain(wk.Task, labelW)
+		mdl := truncPlain(wk.Model, 12)
+		// No task fragment here — a five-char "Write…" says nothing; the
+		// dashboard owns task text. Failed rows keep their error, the one
+		// label worth the width.
+		label := ""
 		if wk.Status == "failed" {
-			label = truncPlain(firstLine(wk.Summary), labelW)
+			label = sErr.Render(truncPlain(firstLine(wk.Summary), w-26-len(mdl)))
 		}
-		labelStyle := sText
-		if wk.Status == "failed" {
-			labelStyle = sErr
-		}
-		left := fmt.Sprintf(" %-3s %s %s %s", wk.ID, statusGlyph(wk.Status, m.pulse),
-			sTeal.Render(mdl), labelStyle.Render(label))
+		left := strings.TrimRight(fmt.Sprintf(" %-3s %s %s %s", wk.ID, statusGlyph(wk.Status, m.pulse),
+			sTeal.Render(mdl), label), " ")
 		right := sDim.Render(fmt.Sprintf("%5s %6s ", dur, toks))
 		gap := w - 2 - lipgloss.Width(left) - lipgloss.Width(right)
 		if gap < 1 {
@@ -215,18 +216,20 @@ func (m Model) viewWorkersMini(w int) string {
 func (m Model) viewModelsPanel(w int) string {
 	var lines []string
 	for _, ms := range m.models {
-		val := "idle"
+		// One line per model: name left; state (and load, when any)
+		// right. The harness note only appears when something is running
+		// — as an always-on sub-line it read as layout breakage.
+		val := sFaint.Render("idle")
 		if ms.TokSec > 0 {
-			val = fmt.Sprintf("%.0f tok/s", ms.TokSec)
+			val = sText.Render(fmt.Sprintf("%.0f tok/s", ms.TokSec))
 		}
-		lines = append(lines, kv(w, ms.Name, sText.Render(val)))
-		sub := ms.Note
-		if ms.Active > 0 || ms.Queue > 0 {
-			sub = fmt.Sprintf("%s · %d active · q%d", ms.Note, ms.Active, ms.Queue)
+		if ms.Active > 0 {
+			val = sTealB.Render(fmt.Sprintf("%d▶ ", ms.Active)) + val
 		}
-		if sub != "" {
-			lines = append(lines, " "+sFaint.Render(truncPlain(sub, w-4)))
+		if ms.Note == "endpoint unreachable" {
+			val = sErr.Render("unreachable")
 		}
+		lines = append(lines, kv(w, truncPlain(ms.Name, w-16), val))
 	}
 	// task tally
 	var done, running, queued, failed int
@@ -242,10 +245,22 @@ func (m Model) viewModelsPanel(w int) string {
 			failed++
 		}
 	}
-	tally := sOK.Render(fmt.Sprintf("%d%s", done, glyphDone)) + " " +
-		sRun.Render(fmt.Sprintf("%d%s", running, glyphRun)) + " " +
-		sDim.Render(fmt.Sprintf("%d%s", queued, glyphQueued)) + " " +
-		sErr.Render(fmt.Sprintf("%d%s", failed, glyphFail))
-	lines = append(lines, kv(w, "tasks", tally))
+	lines = append(lines, kv(w, "tasks", taskTally(done, running, queued, failed)))
 	return panel("Models", lines, w, cBord, cDim)
+}
+
+// taskTally renders the done/running/queued/failed counts with breathing
+// room; zero counts fade out rather than clutter.
+func taskTally(done, running, queued, failed int) string {
+	part := func(style lipgloss.Style, n int, glyph string) string {
+		s := fmt.Sprintf("%d%s", n, glyph)
+		if n == 0 {
+			return sFaint.Render(s)
+		}
+		return style.Render(s)
+	}
+	return part(sOK, done, glyphDone) + sFaint.Render(" · ") +
+		part(sRun, running, glyphRun) + sFaint.Render(" · ") +
+		part(sDim, queued, glyphQueued) + sFaint.Render(" · ") +
+		part(sErr, failed, glyphFail)
 }

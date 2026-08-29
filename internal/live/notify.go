@@ -159,6 +159,7 @@ func (o *Orchestrator) openclawLoop(ctx context.Context) {
 	if o.Notify.OpenClawTarget == "" || !o.Notify.OpenClawTwoWay {
 		return
 	}
+	o.emitAsync(ui.RemoteMsg{Channel: o.openclawChannel()})
 	interval := o.OpenClawPollEvery
 	if interval <= 0 {
 		interval = 5 * time.Second

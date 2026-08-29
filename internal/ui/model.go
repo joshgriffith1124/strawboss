@@ -150,9 +150,10 @@ type Model struct {
 	models []modelStat
 
 	// logs + toast
-	logs       []string
-	toast      string
-	toastUntil time.Time
+	logs          []string
+	toast         string
+	toastUntil    time.Time
+	remoteChannel string // armed two-way channel ("" = none)
 
 	quitting bool
 }
@@ -360,6 +361,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ToastMsg:
 		m.showToast(msg.Text)
 		m.log("app", msg.Text)
+		return m, Listen(m.feed)
+	case RemoteMsg:
+		m.remoteChannel = msg.Channel
+		m.log("app", "remote control armed via "+msg.Channel)
 		return m, Listen(m.feed)
 
 	case SendPromptMsg:

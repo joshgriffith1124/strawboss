@@ -81,10 +81,7 @@ func (m Model) viewMetrics(w int) string {
 		}
 	}
 	tasks := panel("Tasks", []string{
-		" " + sOK.Render(fmt.Sprintf("%d%s", done, glyphDone)) + " " +
-			sRun.Render(fmt.Sprintf("%d%s", running, glyphRun)) + " " +
-			sDim.Render(fmt.Sprintf("%d%s", queued, glyphQueued)) + " " +
-			sErr.Render(fmt.Sprintf("%d%s", failed, glyphFail)),
+		" " + taskTally(done, running, queued, failed),
 		" " + sDim.Render(fmt.Sprintf("queue depth %d", queued)),
 	}, w-3*quarter, cBord, cDim)
 
@@ -125,8 +122,12 @@ func (m Model) viewWorkerTable(w, maxRows int) string {
 		if wk.Status == "done" {
 			taskStyle = sDim
 		}
-		row := fmt.Sprintf(" %-4s %s %-8s %s %s %8s %8s ",
-			wk.ID,
+		cursor := " "
+		if i == m.selected {
+			cursor = sTealB.Render("▸")
+		}
+		row := fmt.Sprintf("%s%-4s %s %-8s %s %s %8s %8s ",
+			cursor, wk.ID,
 			statusGlyph(wk.Status, m.pulse), wk.Status,
 			sTeal.Render(fmt.Sprintf("%-12s", truncPlain(wk.Model, 12))),
 			taskStyle.Render(fmt.Sprintf("%-*s", w-54, truncPlain(task, w-54))),

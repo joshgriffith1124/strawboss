@@ -17,6 +17,7 @@ import (
 	"strawboss/internal/harness"
 	"strawboss/internal/harness/opencode"
 	"strawboss/internal/registry"
+	"strawboss/internal/runner"
 )
 
 // runDelegate is the command the supervisor calls to spawn workers. Its
@@ -93,29 +94,30 @@ func runDelegate(args []string, stdout io.Writer) error {
 	ctx, cancelSignals := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancelSignals()
 
-	outcomes := make([]workerOutcome, len(tasks))
+	warn := func(s string) { fmt.Fprintf(os.Stderr, "strawboss: %s\n", s) }
+	outcomes := make([]runner.Outcome, len(tasks))
 	var wg sync.WaitGroup
 	for i, task := range tasks {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			outcomes[i] = runWorker(ctx, h, reg, mc, task, *dir)
+			outcomes[i] = runner.Run(ctx, h, reg, mc, task, *dir, warn)
 		}()
 	}
 	wg.Wait()
 
 	failed := 0
 	for i, oc := range outcomes {
-		if oc.err != nil {
+		if oc.Err != nil {
 			failed++
-			fmt.Fprintf(stdout, "task %d error: %v\n", i+1, oc.err)
+			fmt.Fprintf(stdout, "task %d error: %v\n", i+1, oc.Err)
 			continue
 		}
 		// The terse result. Keep this format stable: the TUI pairs the
 		// supervisor's tool_result against it, and the supervisor reads it.
 		fmt.Fprintf(stdout, "%s %s %s · log %s\n%s\n",
-			oc.wid, oc.res.Status, oc.dur.Round(time.Second), oc.res.LogPath, oc.res.Summary)
-		if oc.res.Status != harness.StatusDone {
+			oc.WorkerID, oc.Res.Status, oc.Duration.Round(time.Second), oc.Res.LogPath, oc.Res.Summary)
+		if oc.Res.Status != harness.StatusDone {
 			failed++
 		}
 	}
@@ -123,57 +125,4 @@ func runDelegate(args []string, stdout io.Writer) error {
 		return fmt.Errorf("%d of %d workers failed", failed, len(tasks))
 	}
 	return nil
-}
-
-type workerOutcome struct {
-	wid string
-	res harness.Result
-	dur time.Duration
-	err error
-}
-
-// runWorker runs one task to completion: spawn, register, wait, record.
-func runWorker(ctx context.Context, h *opencode.Harness, reg *registry.Registry, mc config.ModelConfig, task, dir string) (oc workerOutcome) {
-	start := time.Now()
-	session, err := h.Spawn(ctx, task, mc)
-	if err != nil {
-		oc.err = err
-		return oc
-	}
-	oc.wid, err = reg.Allocate(session, mc.Name, task, dir)
-	if err != nil {
-		oc.err = err
-		return oc
-	}
-
-	res, err := h.Result(ctx, session)
-	if err != nil {
-		if ctx.Err() == nil {
-			oc.err = err
-			return oc
-		}
-		// Timed out or interrupted: abort the worker, report failed.
-		abortCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if aerr := h.Abort(abortCtx, session); aerr != nil {
-			fmt.Fprintf(os.Stderr, "strawboss: %v\n", aerr)
-		}
-		res = harness.Result{
-			WorkerID: session,
-			Status:   harness.StatusFailed,
-			Summary:  fmt.Sprintf("aborted: %v after %s", context.Cause(ctx), time.Since(start).Round(time.Second)),
-		}
-	}
-	oc.res = res
-	oc.dur = time.Since(start)
-
-	var usage harness.Usage
-	if u, uerr := h.Usage(context.Background(), session); uerr == nil {
-		usage = u
-	}
-	if err := reg.Finish(oc.wid, session, string(res.Status), res.Summary, res.LogPath,
-		oc.dur, usage.InputTokens, usage.OutputTokens); err != nil {
-		fmt.Fprintf(os.Stderr, "strawboss: %v\n", err)
-	}
-	return oc
 }

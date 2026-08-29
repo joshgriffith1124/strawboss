@@ -281,3 +281,68 @@ func TestToolLinesWrap(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkerKillRetryKeys(t *testing.T) {
+	m := demoState(t) // w1 running, w2 queued → display order: w2, w1
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	if m.tab != tabDashboard {
+		t.Fatalf("tab = %d", m.tab)
+	}
+	var killed, retried string
+	m.OnKillWorker = func(id string) { killed = id }
+	m.OnRetryWorker = func(id string) { retried = id }
+
+	// Retry on the selected queued worker is refused with a toast.
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	if !strings.Contains(m.toast, "still running") {
+		t.Errorf("toast = %q", m.toast)
+	}
+
+	// Kill emits KillWorkerMsg for the selected worker and reaches the hook.
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatal("x produced no cmd")
+	}
+	km, ok := cmd().(KillWorkerMsg)
+	if !ok || km.ID != "w2" {
+		t.Fatalf("cmd msg = %#v", km)
+	}
+	m = apply(t, m, km)
+	if killed != "w2" {
+		t.Errorf("killed = %q", killed)
+	}
+
+	// Once w2 fails, kill refuses and retry goes through.
+	m = apply(t, m, WorkerUpsertMsg{ID: "w2", Status: "failed", Summary: "aborted"})
+	m.selected = 1 // display order now: w1 (running), w2 (failed)
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	if !strings.Contains(m.toast, "nothing to kill") {
+		t.Errorf("toast = %q", m.toast)
+	}
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatal("r produced no cmd")
+	}
+	rm, ok := cmd().(RetryWorkerMsg)
+	if !ok || rm.ID != "w2" {
+		t.Fatalf("cmd msg = %#v", rm)
+	}
+	m = apply(t, m, rm)
+	if retried != "w2" {
+		t.Errorf("retried = %q", retried)
+	}
+}
+
+func TestToastMsgShowsAndExpires(t *testing.T) {
+	m := New(make(chan tea.Msg))
+	m = apply(t, m, ToastMsg{Text: "retrying w3's task on qwen-coder"})
+	if !strings.Contains(m.toast, "retrying w3") {
+		t.Errorf("toast = %q", m.toast)
+	}
+	m = apply(t, m, tickMsg(time.Now().Add(10*time.Second)))
+	if m.toast != "" {
+		t.Errorf("toast survived expiry: %q", m.toast)
+	}
+}

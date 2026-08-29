@@ -120,5 +120,7 @@ func buildLive(stateDir, modelsPath string, fresh bool) (ui.Model, func(), error
 	m := ui.New(o.Feed())
 	m.OnPrompt = o.OnPrompt
 	m.OnInterrupt = o.OnInterrupt
+	m.OnKillWorker = o.OnKillWorker
+	m.OnRetryWorker = o.OnRetryWorker
 	return m, o.Shutdown, nil
 }

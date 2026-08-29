@@ -284,3 +284,118 @@ func TestRegistryWatcherScopesByRun(t *testing.T) {
 		t.Error("old run's worker tracked as unfinished")
 	}
 }
+
+// TestKillWorkerAbortsSession: dashboard `x` aborts the worker's opencode
+// session; finished workers refuse.
+func TestKillWorkerAbortsSession(t *testing.T) {
+	var aborts atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /session/{sid}/abort", func(w http.ResponseWriter, r *http.Request) {
+		if r.PathValue("sid") == "ses_live" {
+			aborts.Add(1)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	models := []config.ModelConfig{{Name: "m1", Endpoint: srv.URL, Model: "p/x", Harness: "opencode"}}
+	o := New(&supervisor.Driver{}, models, t.TempDir())
+	o.mu.Lock()
+	o.workerSession["w1"] = "ses_live"
+	o.workerModel["w1"] = "m1"
+	o.unfinished["w1"] = true
+	o.mu.Unlock()
+
+	o.OnKillWorker("w1")
+	drainUntil(t, o.Feed(), 5*time.Second, func(m tea.Msg) bool {
+		tm, ok := m.(ui.ToastMsg)
+		return ok && strings.Contains(tm.Text, "killed")
+	})
+	if aborts.Load() != 1 {
+		t.Errorf("aborts = %d, want 1", aborts.Load())
+	}
+
+	// A finished worker has nothing to kill.
+	o.mu.Lock()
+	delete(o.unfinished, "w1")
+	o.mu.Unlock()
+	o.OnKillWorker("w1")
+	drainUntil(t, o.Feed(), 5*time.Second, func(m tea.Msg) bool {
+		tm, ok := m.(ui.ToastMsg)
+		return ok && strings.Contains(tm.Text, "nothing to kill")
+	})
+	if aborts.Load() != 1 {
+		t.Errorf("aborts = %d after refusal, want still 1", aborts.Load())
+	}
+}
+
+// TestRetryWorkerSpawnsNewWorker: dashboard `r` re-runs a finished worker's
+// task as a new worker through the harness + registry; the watcher flows
+// the new row into the feed.
+func TestRetryWorkerSpawnsNewWorker(t *testing.T) {
+	var prompts atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/session", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"data":{"id":"ses_retry"}}`)
+	})
+	mux.HandleFunc("POST /session/{sid}/prompt_async", func(w http.ResponseWriter, r *http.Request) {
+		prompts.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("GET /session/status", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{}`))
+	})
+	mux.HandleFunc("GET /session/{sid}/message", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`[{"info":{"id":"msg_1","sessionID":"ses_retry","role":"assistant","time":{"created":1,"completed":2}},"parts":[{"type":"text","text":"did it right this time"}]}]`))
+	})
+	mux.HandleFunc("GET /api/session/{sid}", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"data":{"id":"ses_retry","tokens":{"input":10,"output":5,"reasoning":0,"cache":{"read":0,"write":0}}}}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	stateDir := t.TempDir()
+	reg := &registry.Registry{Path: filepath.Join(stateDir, "workers.jsonl")}
+	w1, _ := reg.Allocate("ses_old", "m1", "the original task", "/repo")
+	if err := reg.Finish(w1, "ses_old", "failed", "boom", "/l", time.Second, 1, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	models := []config.ModelConfig{{Name: "m1", Endpoint: srv.URL, Model: "p/x", Harness: "opencode"}}
+	o := New(&supervisor.Driver{}, models, stateDir)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go o.watchRegistry(ctx)
+
+	// History replay populates the task/model/dir maps retry reads.
+	drainUntil(t, o.Feed(), 5*time.Second, func(m tea.Msg) bool {
+		u, ok := m.(ui.WorkerUsageMsg)
+		return ok && u.ID == w1
+	})
+
+	o.OnRetryWorker(w1)
+	msgs := drainUntil(t, o.Feed(), 10*time.Second, func(m tea.Msg) bool {
+		u, ok := m.(ui.WorkerUpsertMsg)
+		return ok && u.ID == "w2" && u.Status == "done"
+	})
+	for _, m := range msgs {
+		if u, ok := m.(ui.WorkerUpsertMsg); ok && u.ID == "w2" && u.Task != "" && u.Task != "the original task" {
+			t.Errorf("retry task = %q", u.Task)
+		}
+	}
+	if prompts.Load() != 1 {
+		t.Errorf("prompts = %d, want 1", prompts.Load())
+	}
+
+	// A still-running worker refuses to retry.
+	o.mu.Lock()
+	o.workerTask["w9"] = "t"
+	o.unfinished["w9"] = true
+	o.mu.Unlock()
+	o.OnRetryWorker("w9")
+	drainUntil(t, o.Feed(), 5*time.Second, func(m tea.Msg) bool {
+		tm, ok := m.(ui.ToastMsg)
+		return ok && strings.Contains(tm.Text, "still running")
+	})
+}

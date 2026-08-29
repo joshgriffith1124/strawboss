@@ -399,8 +399,8 @@ func (h *Harness) writeLog(workerID string, msgs []Message) (string, error) {
 	return path, nil
 }
 
-// Abort stops a running worker (used by delegate on timeout/interrupt; not
-// part of WorkerHarness — worker kill from the TUI is out of v1 scope).
+// Abort stops a running worker (used by the runner on timeout/interrupt
+// and by the TUI's worker kill; not part of WorkerHarness).
 func (h *Harness) Abort(ctx context.Context, workerID string) error {
 	if err := h.Client.Abort(ctx, workerID); err != nil {
 		return fmt.Errorf("aborting worker %s: %w", workerID, err)

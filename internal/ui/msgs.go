@@ -117,12 +117,24 @@ type RawLogMsg struct {
 	Line   string
 }
 
+// ToastMsg shows a transient status line (no bell) — feedback for
+// user-initiated worker actions.
+type ToastMsg struct{ Text string }
+
 // SendPromptMsg is emitted BY the UI when the user submits input; the
 // program driver (demo or live) subscribes and acts.
 type SendPromptMsg struct{ Text string }
 
 // InterruptMsg is emitted by the UI on esc.
 type InterruptMsg struct{}
+
+// KillWorkerMsg is emitted by the UI when the user asks to kill the
+// selected running worker (dashboard `x`).
+type KillWorkerMsg struct{ ID string }
+
+// RetryWorkerMsg is emitted by the UI when the user asks to re-run the
+// selected finished worker's task as a new worker (dashboard `r`).
+type RetryWorkerMsg struct{ ID string }
 
 // tickMsg drives the run clock, pulse animation, and toast expiry.
 type tickMsg time.Time

@@ -93,7 +93,7 @@ func (m Model) viewFooter(w int) string {
 	case tabChat:
 		hints = [][2]string{{"↵", "send"}, {"⇥", "tabs"}, {"esc", "interrupt"}, {"ctrl+c", "quit"}}
 	case tabDashboard:
-		hints = [][2]string{{"↑↓", "select"}, {"f", "follow"}, {"⇥/1-3", "tabs"}, {"q", "quit"}}
+		hints = [][2]string{{"↑↓", "select"}, {"x", "kill"}, {"r", "retry"}, {"f", "follow"}, {"⇥/1-3", "tabs"}, {"q", "quit"}}
 	default:
 		hints = [][2]string{{"⇥/1-3", "tabs"}, {"q", "quit"}}
 	}

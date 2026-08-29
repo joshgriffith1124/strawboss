@@ -33,11 +33,16 @@ type Orchestrator struct {
 
 	cancel context.CancelFunc
 
+	// runCtx is the Run lifetime; TUI-spawned retry workers run under it
+	// so Shutdown cancels them like everything else.
+	runCtx context.Context
+
 	mu              sync.Mutex
 	sessionToWorker map[string]string  // opencode session id → wN
 	workerSession   map[string]string  // wN → opencode session id
 	workerModel     map[string]string  // wN → model config name
 	workerDir       map[string]string  // wN → working directory (for scoped status)
+	workerTask      map[string]string  // wN → task text (for retry)
 	unfinished      map[string]bool    // wN spawned but no finished event yet
 	stream          *supervisor.Stream // the persistent supervisor process, if running
 	servers         []*exec.Cmd        // managed opencode serve children
@@ -56,6 +61,7 @@ func New(d *supervisor.Driver, models []config.ModelConfig, stateDir string) *Or
 		workerSession:   map[string]string{},
 		workerModel:     map[string]string{},
 		workerDir:       map[string]string{},
+		workerTask:      map[string]string{},
 		unfinished:      map[string]bool{},
 	}
 }
@@ -100,6 +106,7 @@ func (o *Orchestrator) emitAsync(m tea.Msg) {
 // Run starts every feed goroutine. Call Shutdown when the UI exits.
 func (o *Orchestrator) Run(ctx context.Context) {
 	ctx, o.cancel = context.WithCancel(ctx)
+	o.runCtx = ctx
 	go o.supervisorLoop(ctx)
 	go o.watchRegistry(ctx)
 	go o.pollWorkers(ctx)

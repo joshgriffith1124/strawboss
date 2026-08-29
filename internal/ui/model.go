@@ -112,6 +112,10 @@ type Model struct {
 	// When nil, the UI notes that no supervisor is attached (demo mode).
 	OnPrompt    func(text string)
 	OnInterrupt func()
+	// OnKillWorker/OnRetryWorker connect the dashboard's worker actions to
+	// the live orchestrator; nil in demo mode.
+	OnKillWorker  func(id string)
+	OnRetryWorker func(id string)
 
 	width, height int
 	tab           int
@@ -351,6 +355,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case RawLogMsg:
 		m.log(msg.Source, msg.Line)
 		return m, Listen(m.feed)
+	case ToastMsg:
+		m.showToast(msg.Text)
+		m.log("app", msg.Text)
+		return m, Listen(m.feed)
 
 	case SendPromptMsg:
 		if m.OnPrompt != nil {
@@ -365,6 +373,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.OnInterrupt()
 		} else {
 			m.chat = append(m.chat, chatItem{kind: "note", when: time.Now(), text: "esc-to-interrupt lands in M5"})
+		}
+		return m, nil
+	case KillWorkerMsg:
+		if m.OnKillWorker != nil {
+			m.OnKillWorker(msg.ID)
+		} else {
+			m.showToast("demo replay — worker kill isn't wired to a live harness")
+		}
+		return m, nil
+	case RetryWorkerMsg:
+		if m.OnRetryWorker != nil {
+			m.OnRetryWorker(msg.ID)
+		} else {
+			m.showToast("demo replay — worker retry isn't wired to a live harness")
 		}
 		return m, nil
 
@@ -383,6 +405,21 @@ func (m *Model) ringBell(text string) {
 	m.toast = "⚠ " + text
 	m.toastUntil = time.Now().Add(8 * time.Second)
 	os.Stdout.WriteString("\a")
+}
+
+// showToast shows a transient status line without the bell.
+func (m *Model) showToast(text string) {
+	m.toast = text
+	m.toastUntil = time.Now().Add(5 * time.Second)
+}
+
+// selectedWorker resolves the dashboard selection against display order.
+func (m Model) selectedWorker() *workerRow {
+	rows := m.sortedWorkers()
+	if m.selected >= 0 && m.selected < len(rows) {
+		return &rows[m.selected]
+	}
+	return nil
 }
 
 func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -443,6 +480,34 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "f":
 		m.follow = !m.follow
+	case "x":
+		if m.tab != tabDashboard {
+			break
+		}
+		wk := m.selectedWorker()
+		if wk == nil {
+			break
+		}
+		if wk.Status != "running" && wk.Status != "queued" {
+			m.showToast(wk.ID + " isn't running — nothing to kill")
+			break
+		}
+		id := wk.ID
+		return m, func() tea.Msg { return KillWorkerMsg{ID: id} }
+	case "r":
+		if m.tab != tabDashboard {
+			break
+		}
+		wk := m.selectedWorker()
+		if wk == nil {
+			break
+		}
+		if wk.Status != "done" && wk.Status != "failed" {
+			m.showToast(wk.ID + " is still running — kill it first (x)")
+			break
+		}
+		id := wk.ID
+		return m, func() tea.Msg { return RetryWorkerMsg{ID: id} }
 	}
 	return m, nil
 }

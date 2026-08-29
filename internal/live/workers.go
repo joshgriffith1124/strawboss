@@ -72,6 +72,7 @@ func (o *Orchestrator) applyRegistryEvent(ctx context.Context, ev registry.Event
 		o.workerSession[ev.Worker] = ev.Session
 		o.workerModel[ev.Worker] = ev.Model
 		o.workerDir[ev.Worker] = ev.Dir
+		o.workerTask[ev.Worker] = ev.Task
 		o.unfinished[ev.Worker] = true
 		o.mu.Unlock()
 		o.emit(ctx, ui.WorkerUpsertMsg{

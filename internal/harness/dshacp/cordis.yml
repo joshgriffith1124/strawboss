@@ -15,6 +15,11 @@
     baseURL: !!js process.env.STRAWBOSS_LLM_BASE_URL
     apiKeyEnv: STRAWBOSS_LLM_API_KEY
     thinking: enabled
+    # 'off' keeps reasoning_effort OFF the wire: the adapter only knows
+    # off|low|high|max while sglang accepts xhigh|medium|low — any value
+    # but 'low' is a 400 from one side or the other (docs/NOTES.md). The
+    # server's own default effort still applies.
+    reasoningEffort: !!js process.env.STRAWBOSS_DSH_REASONING ?? 'off'
     maxTokens: !!js "Number(process.env.STRAWBOSS_DSH_MAXTOKENS ?? 16384)"
     models: []
 

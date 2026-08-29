@@ -131,6 +131,7 @@ type worker struct {
 		Close() error
 	}
 	stderr *ringBuffer
+	proxy  *llmProxy
 
 	mu       sync.Mutex
 	nextID   int
@@ -175,11 +176,17 @@ func (h *Harness) Spawn(ctx context.Context, task string, mc config.ModelConfig)
 	if apiKey == "" {
 		apiKey = "local"
 	}
+	// The worker's LLM traffic goes through a local translating proxy
+	// (see proxy.go: sglang's null-bearing tool_calls deltas).
+	proxy, err := startLLMProxy(mc.Endpoint)
+	if err != nil {
+		return "", fmt.Errorf("spawning dsh worker: %w", err)
+	}
 
 	cmd := exec.Command(bin, "--config", cfgPath)
 	cmd.Dir = h.Dir
 	cmd.Env = append(os.Environ(),
-		"STRAWBOSS_LLM_BASE_URL="+strings.TrimRight(mc.Endpoint, "/"),
+		"STRAWBOSS_LLM_BASE_URL="+proxy.URL(),
 		"STRAWBOSS_LLM_API_KEY="+apiKey,
 		"STRAWBOSS_DSH_MODEL="+mc.Model,
 		"STRAWBOSS_DSH_SESSIONS="+sessionsAbs,
@@ -189,21 +196,25 @@ func (h *Harness) Spawn(ctx context.Context, task string, mc config.ModelConfig)
 	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
+		proxy.Close()
 		return "", fmt.Errorf("spawning dsh worker: %w", err)
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		proxy.Close()
 		return "", fmt.Errorf("spawning dsh worker: %w", err)
 	}
 	w := &worker{
 		cmd:     cmd,
 		stdin:   stdin,
 		stderr:  newRingBuffer(4096),
+		proxy:   proxy,
 		pending: map[int]chan rpcReply{},
 		settled: make(chan struct{}),
 	}
 	cmd.Stderr = w.stderr
 	if err := cmd.Start(); err != nil {
+		proxy.Close()
 		return "", fmt.Errorf("spawning dsh worker: %w", err)
 	}
 	go w.readLoop(stdout)
@@ -603,6 +614,9 @@ func (w *worker) settle(stop, failErr string) {
 // shutdown closes stdin (graceful: dsh flushes sessions on EOF) and kills
 // the process if it lingers.
 func (w *worker) shutdown() {
+	if w.proxy != nil {
+		defer w.proxy.Close()
+	}
 	_ = w.stdin.Close()
 	if w.cmd.Process == nil {
 		return

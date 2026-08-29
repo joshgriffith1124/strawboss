@@ -244,3 +244,34 @@ code/both require the `dsh-code-runtime-worker-thread` plugin mounted;
 the strawboss composition mounts it unconditionally — verified inert
 under native mode (same tool list and prompt size as without it). It is
 present in the shared profile packages; no extra install.
+
+## dsh × sglang live integration (verified 2026-08-29, qwen3.8-27b on the GX10)
+
+First real dsh worker ran end-to-end (delegate → dsh-acp-demo → sglang →
+file on disk → terse result, 5s). Three obstacles, all handled:
+
+1. **`reasoning_effort` vocabularies clash**: dsh-llm-deepseek knows
+   off|low|high|max and sends `high` by default; this sglang build accepts
+   xhigh|medium|low (400 otherwise). Only `low` is in both. The worker
+   composition now defaults `reasoningEffort` to `off`
+   (`STRAWBOSS_DSH_REASONING` overrides), which keeps the field off the
+   wire entirely; sglang tolerates the accompanying
+   `thinking: {type: disabled}` (and ignores it — qwen still reasons at
+   the server's default effort).
+2. **sglang streams explicit nulls in tool_calls deltas** (`"id": null`,
+   `"function": {"name": null, ...}` on every chunk after the first) where
+   DeepSeek's API omits the keys. dsh's translator merges with
+   `!== undefined`, so the nulls overwrite the real name/id → every tool
+   call fails as `unknown tool ""`. Same merge on dsh master — reported
+   nowhere yet. Workaround: the dshacp harness routes each worker's LLM
+   traffic through a local reverse proxy (proxy.go) that deletes those
+   null fields from SSE chunks and passes everything else through.
+3. **Go resolves the GX10 hostname to dead IPv6 only**: the WSL DNS path
+   hands Go's pure resolver ten stale AAAA records and no A (glibc callers
+   like curl get the working IPv4 — and this Go toolchain lacks cgo
+   resolver support, so GODEBUG=netdns=cgo is a no-op). The proxy and the
+   endpoint probe now dial IPv4-first over the full address list, but on
+   this box the name still needs a WSL /etc/hosts line
+   (`192.168.1.94 gx10-52e4.attlocal.net`) until the DNS side serves an A
+   record. GX10 endpoint hostname is now gx10-52e4.attlocal.net (the
+   .local name died with the IP change).

@@ -291,7 +291,9 @@ func (o *Orchestrator) pollWorkers(ctx context.Context) {
 	}
 }
 
-// llmReachable probes an OpenAI-compatible endpoint's model listing.
+// llmReachable probes an OpenAI-compatible endpoint's model listing,
+// dialing IPv4-first like the worker proxy (stale AAAA records must not
+// report a working endpoint as unreachable).
 func llmReachable(ctx context.Context, base string) bool {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
@@ -299,7 +301,7 @@ func llmReachable(ctx context.Context, base string) bool {
 	if err != nil {
 		return false
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := dshacp.Transport.RoundTrip(req)
 	if err != nil {
 		return false
 	}

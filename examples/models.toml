@@ -28,7 +28,7 @@ endpoint = "http://127.0.0.1:4477"
 model = "spark-a/qwen3.8-flash-next"
 
 [models.deepseek-dsh]
-endpoint = "http://gx10-52e4.local:8000/v1"  # the LLM endpoint itself — dsh needs no opencode
+endpoint = "http://gx10-52e4.attlocal.net:8000/v1"  # the LLM endpoint itself — dsh needs no opencode
 model = "deepseek-v4-flash"
 harness = "dsh"                  # DeepSeek Harness ACP workers; setup in docs/NOTES.md
 # api_key = "local"              # sent to the endpoint; "local" when omitted
@@ -37,6 +37,6 @@ harness = "dsh"                  # DeepSeek Harness ACP workers; setup in docs/N
 
 # dsh is model-agnostic — any id the OpenAI-compatible endpoint serves works:
 [models.qwen-dsh]
-endpoint = "http://gx10-52e4.local:8000/v1"
+endpoint = "http://gx10-52e4.attlocal.net:8000/v1"
 model = "qwen3.8-27b"            # sglang model id, not an opencode provider/model ref
 harness = "dsh"

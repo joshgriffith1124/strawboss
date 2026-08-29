@@ -3,6 +3,7 @@ package live
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -488,5 +489,58 @@ func TestKillDshWorkerSignalsPid(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Error("worker process not terminated")
+	}
+}
+
+// TestNtfyPushOnLiveFailure: a live failed worker pushes to the ntfy
+// topic; replayed history from before startup never does.
+func TestNtfyPushOnLiveFailure(t *testing.T) {
+	type push struct{ path, body, title string }
+	got := make(chan push, 4)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		got <- push{r.URL.Path, string(b), r.Header.Get("Title")}
+	}))
+	defer srv.Close()
+
+	stateDir := t.TempDir()
+	reg := &registry.Registry{Path: filepath.Join(stateDir, "workers.jsonl")}
+	// History from before this orchestrator existed: must not push.
+	w1, _ := reg.Allocate("ses_hist", "m", "old task", "/repo", 0)
+	if err := reg.Finish(w1, "ses_hist", "failed", "ancient failure", "/l", time.Second, 1, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	o := New(&supervisor.Driver{}, nil, stateDir)
+	o.Notify = config.Notify{NtfyTopic: "sb-test", NtfyServer: srv.URL}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go o.watchRegistry(ctx)
+
+	// Wait for the replay, then a live failure.
+	drainUntil(t, o.Feed(), 5*time.Second, func(m tea.Msg) bool {
+		u, ok := m.(ui.WorkerUsageMsg)
+		return ok && u.ID == w1
+	})
+	w2, _ := reg.Allocate("ses_live", "m", "new task", "/repo", 0)
+	if err := reg.Finish(w2, "ses_live", "failed", "exploded\ndetails", "/l", time.Second, 1, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case p := <-got:
+		if p.path != "/sb-test" || !strings.Contains(p.body, w2+" failed — exploded") || p.title == "" {
+			t.Errorf("push = %+v", p)
+		}
+		if strings.Contains(p.body, "details") {
+			t.Errorf("push leaked past the first line: %q", p.body)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no push for live failure")
+	}
+	select {
+	case p := <-got:
+		t.Errorf("unexpected extra push (replayed history?): %+v", p)
+	case <-time.After(700 * time.Millisecond):
 	}
 }

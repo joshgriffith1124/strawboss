@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -17,6 +19,7 @@ import (
 	"strawboss/internal/harness"
 	"strawboss/internal/registry"
 	"strawboss/internal/runner"
+	"strawboss/internal/worktree"
 )
 
 // runDelegate is the command the supervisor calls to spawn workers. Its
@@ -37,6 +40,7 @@ func runDelegate(args []string, stdout io.Writer) error {
 		return nil
 	})
 	dir := fs.String("dir", "", "worker working directory (default: current directory)")
+	useWorktree := fs.Bool("worktree", false, "run each worker in an isolated git worktree on its own strawboss/* branch")
 	timeout := fs.Duration("timeout", 20*time.Minute, "abort workers after this long")
 	stateDir := fs.String("state-dir", "", "state directory (default ~/.strawboss)")
 	modelsPath := fs.String("models", "", "models.toml path (default <state-dir>/models.toml)")
@@ -79,11 +83,31 @@ func runDelegate(args []string, stdout io.Writer) error {
 		return fmt.Errorf("delegate: no model %q in %s", *model, *modelsPath)
 	}
 
-	// mc.Harness is validated by LoadModels; runner maps it to a harness.
-	h, err := runner.NewHarness(mc, *dir, *stateDir)
-	if err != nil {
-		return fmt.Errorf("delegate: %w", err)
+	// Worktree isolation: every task gets its own checkout + branch
+	// BEFORE anything spawns, so a failure here aborts the whole call.
+	type wtInfo struct{ path, branch string }
+	var wts []wtInfo
+	if *useWorktree {
+		if !worktree.IsRepo(*dir) {
+			return fmt.Errorf("delegate: --worktree: %s is not a git repository", *dir)
+		}
+		root := filepath.Join(*stateDir, "worktrees")
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			return fmt.Errorf("delegate: %w", err)
+		}
+		now := time.Now()
+		stamp := fmt.Sprintf("%s-%s", now.Format("20060102-150405"),
+			strconv.FormatInt(now.UnixNano()%1e9, 36))
+		wts = make([]wtInfo, len(tasks))
+		for i := range tasks {
+			path, branch, err := worktree.Create(*dir, root, fmt.Sprintf("%s-t%d", stamp, i+1))
+			if err != nil {
+				return fmt.Errorf("delegate: %w", err)
+			}
+			wts[i] = wtInfo{path, branch}
+		}
 	}
+
 	// STRAWBOSS_RUN is set by the TUI on the supervisor subprocess and
 	// inherited here; it scopes these workers to that run.
 	reg := &registry.Registry{Path: filepath.Join(*stateDir, "workers.jsonl"), Run: os.Getenv("STRAWBOSS_RUN")}
@@ -100,10 +124,31 @@ func runDelegate(args []string, stdout io.Writer) error {
 	outcomes := make([]runner.Outcome, len(tasks))
 	var wg sync.WaitGroup
 	for i, task := range tasks {
+		workerDir := *dir
+		var decorate func(*harness.Result)
+		if wts != nil {
+			workerDir = wts[i].path
+			wt := wts[i]
+			decorate = func(res *harness.Result) { finalizeWorktree(res, *dir, wt.path, wt.branch, task) }
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			outcomes[i] = runner.Run(ctx, h, reg, mc, task, *dir, warn)
+			// Per-worker harness: with worktrees every worker has its own
+			// working directory, which the harness carries.
+			h, err := runner.NewHarness(mc, workerDir, *stateDir)
+			if err != nil {
+				outcomes[i] = runner.Outcome{Err: err}
+				return
+			}
+			outcomes[i] = runner.Run(ctx, h, reg, mc, task, workerDir, warn, decorate)
+			if outcomes[i].Err != nil && wts != nil {
+				// The worker never ran or couldn't be tracked: nothing of
+				// value in the worktree; drop it.
+				if rmErr := worktree.Remove(*dir, wts[i].path, wts[i].branch); rmErr != nil {
+					warn(rmErr.Error())
+				}
+			}
 		}()
 	}
 	wg.Wait()
@@ -127,4 +172,36 @@ func runDelegate(args []string, stdout io.Writer) error {
 		return fmt.Errorf("%d of %d workers failed", failed, len(tasks))
 	}
 	return nil
+}
+
+// finalizeWorktree commits whatever the worker left in its worktree onto
+// its strawboss/* branch (partial work from failures included) and amends
+// the terse summary with where the work lives. A worktree with no changes
+// is removed — nothing of value is lost. Merging into the user's branch
+// is never done here (the branch is the deliverable).
+func finalizeWorktree(res *harness.Result, repoDir, path, branch, task string) {
+	msg := "strawboss " + res.WorkerID + ": " + firstLineN(task, 60)
+	committed, err := worktree.CommitAll(path, msg)
+	switch {
+	case err != nil:
+		res.Summary += "\n[worktree " + path + ": " + err.Error() + "]"
+	case committed:
+		res.Summary += "\n[work committed on branch " + branch + " — review/merge it; worktree at " + path + "]"
+	default:
+		note := "\n[no file changes; worktree removed]"
+		if rmErr := worktree.Remove(repoDir, path, branch); rmErr != nil {
+			note = "\n[no file changes; " + rmErr.Error() + "]"
+		}
+		res.Summary += note
+	}
+}
+
+func firstLineN(s string, n int) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	if len(s) > n {
+		s = s[:n] + "…"
+	}
+	return s
 }

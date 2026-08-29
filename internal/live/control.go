@@ -114,7 +114,7 @@ func (o *Orchestrator) OnRetryWorker(id string) {
 		defer cancel()
 		reg := &registry.Registry{Path: filepath.Join(o.StateDir, "workers.jsonl"), Run: o.RunID}
 		warn := func(s string) { o.emitAsync(ui.RawLogMsg{Source: "wrk", Line: s}) }
-		if oc := runner.Run(ctx, h, reg, mc, task, dir, warn); oc.Err != nil {
+		if oc := runner.Run(ctx, h, reg, mc, task, dir, warn, nil); oc.Err != nil {
 			o.emitAsync(ui.ToastMsg{Text: "retry of " + id + " failed: " + oc.Err.Error()})
 		}
 	}()

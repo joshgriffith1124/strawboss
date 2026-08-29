@@ -54,8 +54,10 @@ type Outcome struct {
 // Run runs one task to completion. Cancelling ctx aborts the worker and
 // records it failed rather than leaving it running unobserved. warn (may be
 // nil) receives non-fatal problems — an abort that failed, a registry write
-// that failed — for the caller's log.
-func Run(ctx context.Context, h harness.WorkerHarness, reg *registry.Registry, mc config.ModelConfig, task, dir string, warn func(string)) (oc Outcome) {
+// that failed — for the caller's log. decorate (may be nil) can amend the
+// result before it is recorded and returned — worktree finalization uses
+// it so the branch note reaches the supervisor, registry, and TUI alike.
+func Run(ctx context.Context, h harness.WorkerHarness, reg *registry.Registry, mc config.ModelConfig, task, dir string, warn func(string), decorate func(*harness.Result)) (oc Outcome) {
 	if warn == nil {
 		warn = func(string) {}
 	}
@@ -94,6 +96,9 @@ func Run(ctx context.Context, h harness.WorkerHarness, reg *registry.Registry, m
 			Status:   harness.StatusFailed,
 			Summary:  fmt.Sprintf("aborted: %v after %s", context.Cause(ctx), time.Since(start).Round(time.Second)),
 		}
+	}
+	if decorate != nil {
+		decorate(&res)
 	}
 	oc.Res = res
 	oc.Duration = time.Since(start)

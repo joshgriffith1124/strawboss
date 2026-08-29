@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -316,5 +317,105 @@ done
 	}
 	if !sawSpawn {
 		t.Error("no spawned event recorded")
+	}
+}
+
+// TestDelegateWorktree: with --worktree the worker runs in an isolated
+// git worktree, its output is committed on a strawboss/* branch named in
+// the terse result, and the main checkout stays untouched.
+func TestDelegateWorktree(t *testing.T) {
+	// A repo with one commit as the shared working dir.
+	repo := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	run("init", "-q", "-b", "main")
+	run("config", "user.name", "t")
+	run("config", "user.email", "t@t")
+	if err := os.WriteFile(filepath.Join(repo, "base.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "-A")
+	run("commit", "-q", "-m", "base")
+
+	// A fake dsh bin whose "worker" actually writes a file into its cwd
+	// (the worktree) before finishing.
+	fixture, err := filepath.Abs(filepath.Join("..", "..", "internal", "harness", "dshacp", "testdata", "session.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const sid = "ses_wt_e2e"
+	binDir := t.TempDir()
+	script := `#!/bin/sh
+mkdir -p "$STRAWBOSS_DSH_SESSIONS/proj/` + sid + `"
+cp "` + fixture + `" "$STRAWBOSS_DSH_SESSIONS/proj/` + sid + `/session.jsonl"
+echo "made by worker" > worker-output.txt
+while read line; do
+  case "$line" in
+    *'"initialize"'*) echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}';;
+    *'"session/new"'*) echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"` + sid + `"}}';;
+    *'"session/prompt"'*)
+      echo '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"` + sid + `","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"wrote worker-output.txt"}}}}'
+      echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}';;
+  esac
+done
+`
+	bin := filepath.Join(binDir, "dsh-acp-demo")
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := filepath.Join(binDir, "cordis.yml")
+	if err := os.WriteFile(cfg, []byte("[]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("STRAWBOSS_DSH_BIN", bin)
+	t.Setenv("STRAWBOSS_DSH_CONFIG", cfg)
+
+	stateDir := t.TempDir()
+	models := filepath.Join(stateDir, "models.toml")
+	toml := "[models.ds]\nendpoint = \"http://fake:1/v1\"\nmodel = \"m\"\nharness = \"dsh\"\n"
+	if err := os.WriteFile(models, []byte(toml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var out strings.Builder
+	err = runDelegate([]string{"--state-dir", stateDir, "--dir", repo,
+		"--worktree", "--model", "ds", "--task", "write worker-output.txt"}, &out)
+	if err != nil {
+		t.Fatalf("delegate: %v\n%s", err, out.String())
+	}
+	got := out.String()
+	if !strings.Contains(got, "work committed on branch strawboss/") {
+		t.Errorf("result missing branch note:\n%s", got)
+	}
+	// Main checkout untouched; branch carries the file.
+	if _, err := os.Stat(filepath.Join(repo, "worker-output.txt")); !os.IsNotExist(err) {
+		t.Error("worker output leaked into the main checkout")
+	}
+	branches := exec.Command("git", "branch", "--list", "strawboss/*", "--contains")
+	branches.Dir = repo
+	bout, _ := branches.CombinedOutput()
+	if !strings.Contains(string(bout), "strawboss/") {
+		t.Errorf("no strawboss branch: %s", bout)
+	}
+
+	// A second run whose worker writes nothing removes its worktree.
+	noWrite := strings.Replace(script, "echo \"made by worker\" > worker-output.txt\n", "", 1)
+	if err := os.WriteFile(bin, []byte(noWrite), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	err = runDelegate([]string{"--state-dir", stateDir, "--dir", repo,
+		"--worktree", "--model", "ds", "--task", "do nothing"}, &out)
+	if err != nil {
+		t.Fatalf("delegate: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "no file changes; worktree removed") {
+		t.Errorf("result missing removal note:\n%s", out.String())
 	}
 }

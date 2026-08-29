@@ -1,10 +1,21 @@
-# strawboss app config (~/.strawboss/config.toml). Every key is optional.
-
-# state_dir = "~/.strawboss"     # logs + session state (JSONL)
+# Strawboss app config (~/.strawboss/config.toml). Everything is optional.
 
 [supervisor]
-# command = "claude"             # claude binary to spawn (subscription auth;
-#                                # ANTHROPIC_API_KEY is always scrubbed)
-# permission_mode = "dontAsk"    # must never block on an interactive prompt
-# allowed_tools = ["Bash(strawboss delegate:*)", "Read"]
-# system_prompt = ""             # appended via --append-system-prompt
+# command = "claude"              # supervisor binary
+# permission_mode = "dontAsk"
+# allowed_tools = []              # default: delegate + Read/Edit/Write/Glob
+# system_prompt = ""              # default: built-in delegation prompt
+
+[notify]
+# ntfy_topic = "strawboss-yourname-x7k2m9"   # phone pushes via ntfy.sh
+# ntfy_server = "https://ntfy.sh"
+# openclaw_target = "channel:<discord-channel-id>"  # alerts via OpenClaw
+# openclaw_channel = "discord"
+# openclaw_two_way = true         # reply in the channel to steer the supervisor
+
+[budget]
+# Guard the metered side of a run; workers are free and never limited.
+# Crossing 80% of a ceiling warns (toast + push); crossing it blocks new
+# delegations until lifted (--new, or the plan window recovering).
+# max_cost_usd = 5.0              # notional supervisor cost per run
+# max_plan_5h = 80                # percent of the 5-hour plan window

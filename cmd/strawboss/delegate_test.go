@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"strawboss/internal/live"
 	"strawboss/internal/registry"
 )
 
@@ -417,5 +418,31 @@ done
 	}
 	if !strings.Contains(out.String(), "no file changes; worktree removed") {
 		t.Errorf("result missing removal note:\n%s", out.String())
+	}
+}
+
+// TestDelegateRefusesOnBudgetStop: the stop marker turns delegation into
+// a terse refusal before anything spawns.
+func TestDelegateRefusesOnBudgetStop(t *testing.T) {
+	stateDir := t.TempDir()
+	dir := t.TempDir()
+	stop := live.BudgetStopFile(stateDir, dir)
+	if err := os.MkdirAll(filepath.Dir(stop), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stop, []byte("notional cost $5.00 reached the $5.00 ceiling\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	err := runDelegate([]string{"--state-dir", stateDir, "--dir", dir,
+		"--model", "anything", "--task", "t"}, &out)
+	if err == nil {
+		t.Fatal("delegate did not refuse")
+	}
+	got := out.String()
+	for _, want := range []string{"blocked by the budget guard", "$5.00 ceiling", "Do NOT retry"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("refusal missing %q:\n%s", want, got)
+		}
 	}
 }

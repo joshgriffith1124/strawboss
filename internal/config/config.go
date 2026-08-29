@@ -81,10 +81,25 @@ type Notify struct {
 	OpenClawTwoWay bool `toml:"openclaw_two_way"`
 }
 
+// Budget guards the metered side of a run: the supervisor's notional API
+// cost and the plan window. Workers are free and never limited. Crossing
+// 80% of a ceiling warns (toast + push); crossing the ceiling blocks new
+// delegations — the delegate command refuses with advice the supervisor
+// reads, so the stop costs almost nothing in supervisor tokens.
+type Budget struct {
+	// MaxCostUSD is the per-run notional supervisor cost ceiling. 0 = off.
+	MaxCostUSD float64 `toml:"max_cost_usd"`
+	// MaxPlan5h is the 5-hour plan-window utilization ceiling in percent
+	// (e.g. 80). The block lifts automatically when the window recovers.
+	// 0 = off.
+	MaxPlan5h float64 `toml:"max_plan_5h"`
+}
+
 // Config is the app configuration from config.toml.
 type Config struct {
 	Supervisor Supervisor `toml:"supervisor"`
 	Notify     Notify     `toml:"notify"`
+	Budget     Budget     `toml:"budget"`
 
 	// StateDir is where logs and session state live. Default ~/.strawboss.
 	StateDir string `toml:"state_dir"`

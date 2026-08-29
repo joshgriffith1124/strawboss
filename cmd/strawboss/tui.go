@@ -117,9 +117,16 @@ func buildLive(stateDir, modelsPath string, fresh bool) (ui.Model, func(), error
 		}
 	}
 
+	// A fresh run (or a disabled budget) starts unblocked; a window-based
+	// stop from a resumed run re-evaluates live anyway.
+	if fresh || (cfg.Budget.MaxCostUSD <= 0 && cfg.Budget.MaxPlan5h <= 0) {
+		_ = os.Remove(live.BudgetStopFile(stateDir, cwd))
+	}
+
 	o := live.New(driver, models, stateDir)
 	o.RunID = runID
 	o.Notify = cfg.Notify
+	o.Budget = cfg.Budget
 	o.Run(context.Background())
 
 	m := ui.New(o.Feed())

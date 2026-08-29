@@ -17,6 +17,7 @@ import (
 
 	"strawboss/internal/config"
 	"strawboss/internal/harness"
+	"strawboss/internal/live"
 	"strawboss/internal/registry"
 	"strawboss/internal/runner"
 	"strawboss/internal/worktree"
@@ -65,6 +66,15 @@ func runDelegate(args []string, stdout io.Writer) error {
 		if *dir, err = os.Getwd(); err != nil {
 			return fmt.Errorf("delegate: %w", err)
 		}
+	}
+
+	// Budget guard: the TUI writes a stop marker when the run's ceiling is
+	// hit; refusing here is a terse tool result the supervisor reads —
+	// stopping costs almost nothing in its context.
+	if reason, err := os.ReadFile(live.BudgetStopFile(*stateDir, *dir)); err == nil {
+		fmt.Fprintf(stdout, "delegation blocked by the budget guard: %s\nDo NOT retry or work around this. Report current status to the user and wait.\n",
+			strings.TrimSpace(string(reason)))
+		return errors.New("budget ceiling reached")
 	}
 
 	models, err := config.LoadModels(*modelsPath)

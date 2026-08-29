@@ -35,6 +35,8 @@ func main() {
 		err = runDelegate(args, os.Stdout)
 	case "clean":
 		err = runClean(args, os.Stdout)
+	case "costs":
+		err = runCosts(args, os.Stdout)
 	case "version":
 		fmt.Println("strawboss", version)
 	case "-h", "--help", "help":
@@ -56,6 +58,7 @@ func usage(w *os.File) {
   chat       console supervisor driver (spike)
   delegate   spawn a worker (called by the supervisor)
   clean      retention sweep: old logs/sessions, merged worktrees
+  costs      per-run worker token/time summary from the JSONL history
   version    print version
 `)
 }

@@ -47,6 +47,10 @@ func (o *Orchestrator) observeSup(msgs []tea.Msg) {
 			if v.Err != "" {
 				o.notifyText("strawboss: supervisor error", "supervisor error — "+truncN(v.Err, 300))
 			}
+		case ui.SupUsageMsg:
+			o.noteBudgetUsage(v.CostUSD, 0)
+		case ui.SupRateLimitMsg:
+			o.noteBudgetUsage(0, v.FiveHour)
 		}
 	}
 }

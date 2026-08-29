@@ -36,6 +36,8 @@ type Orchestrator struct {
 	// Notify configures optional failure pushes and OpenClaw two-way
 	// remote control (docs: config.Notify).
 	Notify config.Notify
+	// Budget guards the metered side of the run (docs: config.Budget).
+	Budget config.Budget
 	// OpenClawPollEvery is the two-way poll interval. Default 5s.
 	OpenClawPollEvery time.Duration
 
@@ -68,6 +70,12 @@ type Orchestrator struct {
 	dshOut          map[string]int     // wN → latest output tokens seen by its tailer
 	stream          *supervisor.Stream // the persistent supervisor process, if running
 	servers         []*exec.Cmd        // managed opencode serve children
+
+	// budget guard accumulation (see budget.go)
+	supCostTotal  float64
+	fiveHourNow   float64
+	budgetWarned  bool
+	budgetStopped bool
 }
 
 // New builds an orchestrator; call Run to start the feeds.
@@ -184,8 +192,9 @@ func (o *Orchestrator) modelConfig(name string) (config.ModelConfig, bool) {
 // under <stateDir>/projects/<hash>/; a `dir` file inside names the path
 // for humans. Legacy global supervisor-session/run files are ignored.
 
-// projectDir is the state slot for one working directory.
-func projectDir(stateDir, dir string) string {
+// ProjectDir is the state slot for one working directory (exported: the
+// delegate command reads the budget-stop marker from it).
+func ProjectDir(stateDir, dir string) string {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		abs = dir
@@ -196,13 +205,13 @@ func projectDir(stateDir, dir string) string {
 
 // sessionFile persists the supervisor session id across restarts.
 func (o *Orchestrator) sessionFile() string {
-	return filepath.Join(projectDir(o.StateDir, o.Driver.Dir), "supervisor-session")
+	return filepath.Join(ProjectDir(o.StateDir, o.Driver.Dir), "supervisor-session")
 }
 
 // LoadSession returns the supervisor session id last persisted for this
 // working directory.
 func LoadSession(stateDir, dir string) string {
-	b, err := os.ReadFile(filepath.Join(projectDir(stateDir, dir), "supervisor-session"))
+	b, err := os.ReadFile(filepath.Join(ProjectDir(stateDir, dir), "supervisor-session"))
 	if err != nil {
 		return ""
 	}
@@ -214,7 +223,7 @@ func LoadSession(stateDir, dir string) string {
 // fresh one, so a new session starts with an empty worker table while a
 // resumed session replays its own workers.
 func RunID(stateDir, dir string, rotate bool) (string, error) {
-	slot := projectDir(stateDir, dir)
+	slot := ProjectDir(stateDir, dir)
 	path := filepath.Join(slot, "run")
 	if !rotate {
 		if b, err := os.ReadFile(path); err == nil && len(strings.TrimSpace(string(b))) > 0 {

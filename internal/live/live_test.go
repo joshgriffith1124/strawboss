@@ -651,7 +651,7 @@ func TestSessionScopedPerProject(t *testing.T) {
 	}
 
 	// A session persisted for dirA is invisible from dirB.
-	slot := projectDir(stateDir, dirA)
+	slot := ProjectDir(stateDir, dirA)
 	if err := os.WriteFile(filepath.Join(slot, "supervisor-session"), []byte("ses-a\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -702,5 +702,58 @@ func TestDshModelProbeNotesNotLoaded(t *testing.T) {
 	})
 	if !sawHit {
 		t.Error("served model never reported")
+	}
+}
+
+// TestBudgetGuard: warn at 80%, stop at the ceiling (marker written for
+// delegate to refuse on), and a window-based stop lifts when the window
+// recovers.
+func TestBudgetGuard(t *testing.T) {
+	stateDir := t.TempDir()
+	o := New(&supervisor.Driver{Dir: "/proj"}, nil, stateDir)
+	o.Budget = config.Budget{MaxCostUSD: 1.0, MaxPlan5h: 80}
+	stop := BudgetStopFile(stateDir, "/proj")
+
+	o.observeSup([]tea.Msg{ui.SupUsageMsg{CostUSD: 0.85}})
+	drainUntil(t, o.Feed(), 5*time.Second, func(m tea.Msg) bool {
+		tm, ok := m.(ui.ToastMsg)
+		return ok && strings.Contains(tm.Text, "budget at 80%")
+	})
+	if _, err := os.Stat(stop); err == nil {
+		t.Fatal("stop marker written on warning")
+	}
+
+	o.observeSup([]tea.Msg{ui.SupUsageMsg{CostUSD: 0.20}})
+	drainUntil(t, o.Feed(), 5*time.Second, func(m tea.Msg) bool {
+		tm, ok := m.(ui.ToastMsg)
+		return ok && strings.Contains(tm.Text, "blocked")
+	})
+	b, err := os.ReadFile(stop)
+	if err != nil || !strings.Contains(string(b), "ceiling") {
+		t.Fatalf("stop marker: %q err %v", b, err)
+	}
+
+	// A cost stop never lifts on its own (cost cannot shrink)…
+	o.observeSup([]tea.Msg{ui.SupRateLimitMsg{FiveHour: 0.10}})
+	if _, err := os.Stat(stop); err != nil {
+		t.Fatal("cost stop lifted by a rate-limit event")
+	}
+
+	// …but a pure window stop does.
+	o2 := New(&supervisor.Driver{Dir: "/proj2"}, nil, stateDir)
+	o2.Budget = config.Budget{MaxPlan5h: 80}
+	stop2 := BudgetStopFile(stateDir, "/proj2")
+	o2.observeSup([]tea.Msg{ui.SupRateLimitMsg{FiveHour: 0.85}})
+	drainUntil(t, o2.Feed(), 5*time.Second, func(m tea.Msg) bool {
+		tm, ok := m.(ui.ToastMsg)
+		return ok && strings.Contains(tm.Text, "blocked")
+	})
+	o2.observeSup([]tea.Msg{ui.SupRateLimitMsg{FiveHour: 0.40}})
+	drainUntil(t, o2.Feed(), 5*time.Second, func(m tea.Msg) bool {
+		tm, ok := m.(ui.ToastMsg)
+		return ok && strings.Contains(tm.Text, "unblocked")
+	})
+	if _, err := os.Stat(stop2); err == nil {
+		t.Fatal("window stop not lifted after recovery")
 	}
 }

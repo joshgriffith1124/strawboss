@@ -261,6 +261,15 @@ func (m *Model) flushStreaming() {
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case feedBatch:
+		// Fold the whole batch, render once, re-arm once. Every feed
+		// case below returns Listen; the intermediate cmds are dropped.
+		var model tea.Model = m
+		for _, inner := range msg {
+			model, _ = model.Update(inner)
+		}
+		return model, Listen(m.feed)
+
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		return m, nil

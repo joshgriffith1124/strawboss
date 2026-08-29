@@ -173,14 +173,34 @@ func tick() tea.Cmd {
 	return tea.Tick(600*time.Millisecond, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
+// feedBatch carries every feed message already buffered when the
+// listener woke: startup replay floods hundreds of msgs, and rendering
+// them one per update cycle made totals visibly "climb" while history
+// loaded. A batch folds in one render.
+type feedBatch []tea.Msg
+
 // Listen adapts a feed channel into Bubble Tea's message loop; Update
-// re-arms it after every feed message.
+// re-arms it after every batch. It blocks for the first message, then
+// greedily drains whatever else is pending (capped so a firehose can't
+// starve keystrokes).
 func Listen(ch <-chan tea.Msg) tea.Cmd {
 	return func() tea.Msg {
 		msg, ok := <-ch
 		if !ok {
 			return nil
 		}
-		return msg
+		batch := feedBatch{msg}
+		for len(batch) < 512 {
+			select {
+			case more, ok := <-ch:
+				if !ok {
+					return batch
+				}
+				batch = append(batch, more)
+			default:
+				return batch
+			}
+		}
+		return batch
 	}
 }

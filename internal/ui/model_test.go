@@ -687,3 +687,21 @@ func TestMdInlineUnpaired(t *testing.T) {
 		t.Errorf("markers left in: %q", got)
 	}
 }
+
+func TestFeedBatchFoldsInOneUpdate(t *testing.T) {
+	m := New(make(chan tea.Msg))
+	batch := feedBatch{
+		WorkerUpsertMsg{ID: "w1", Model: "m", Task: "a", Status: "running"},
+		WorkerUsageMsg{ID: "w1", Input: 100, Output: 50},
+		WorkerUpsertMsg{ID: "w2", Model: "m", Task: "b", Status: "done"},
+		SupUsageMsg{Input: 10, Output: 5, Turns: 1},
+	}
+	next, cmd := m.Update(batch)
+	m = next.(Model)
+	if len(m.workers) != 2 || m.workers[0].Out != 50 || m.supTurns != 1 {
+		t.Fatalf("batch not folded: workers=%d", len(m.workers))
+	}
+	if cmd == nil {
+		t.Fatal("batch did not re-arm the listener")
+	}
+}

@@ -17,3 +17,8 @@ harness = "opencode"             # optional; "opencode" is the default and only 
 [models.qwen-flash]
 endpoint = "http://127.0.0.1:4477"
 model = "spark-a/qwen3.8-flash-next"
+
+[models.deepseek-flash]
+endpoint = "http://127.0.0.1:4477"
+model = "spark-a/deepseek-v4-flash"   # defined in opencode.json; needs the model loaded in
+                                      # sglang on the GX10 before delegations to it succeed

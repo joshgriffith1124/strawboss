@@ -429,18 +429,15 @@ func TestSidePanelEconomyAndModels(t *testing.T) {
 	if !strings.Contains(models, "not loaded") || !strings.Contains(models, "deepseek-dsh") {
 		t.Errorf("not-loaded model hidden:\n%s", models)
 	}
-	if !strings.Contains(models, "+2 idle") {
-		t.Errorf("idle models not collapsed:\n%s", models)
-	}
-	if strings.Contains(models, "qwen-coder") {
-		t.Errorf("healthy idle model got its own row:\n%s", models)
+	if !strings.Contains(models, "qwen-coder, qwen-dsh") {
+		t.Errorf("idle models not named:\n%s", models)
 	}
 
-	// All idle → a single count line.
+	// All idle → one line naming them (or a count when they don't fit).
 	m = apply(t, m, ModelStatMsg{Name: "deepseek-dsh", Note: "dsh"})
 	models = m.viewModelsPanel(38)
-	if !strings.Contains(models, "3 configured · all idle") {
-		t.Errorf("all-idle collapse missing:\n%s", models)
+	if !strings.Contains(models, "3 models") && !strings.Contains(models, "deepseek-dsh") {
+		t.Errorf("all-idle line missing:\n%s", models)
 	}
 }
 

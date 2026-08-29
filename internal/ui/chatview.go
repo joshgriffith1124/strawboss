@@ -292,10 +292,10 @@ func (m Model) viewWorkersMini(w int) string {
 
 func (m Model) viewModelsPanel(w int) string {
 	// Rows only for models with something to say — active, generating,
-	// unreachable, or configured-but-not-served. A stack of "idle" lines
-	// reads as noise, so healthy idle models collapse to one count.
+	// unreachable, or configured-but-not-served. Healthy idle models
+	// collapse to one line naming them (a bare count reads as a riddle).
 	var lines []string
-	idle := 0
+	var idleNames []string
 	for _, ms := range m.models {
 		val := sFaint.Render("idle")
 		switch {
@@ -313,17 +313,17 @@ func (m Model) viewModelsPanel(w int) string {
 				val = sTealB.Render(fmt.Sprintf("%d▶ ", ms.Active)) + val
 			}
 		default:
-			idle++
+			idleNames = append(idleNames, ms.Name)
 			continue
 		}
 		lines = append(lines, kv(w, truncPlain(ms.Name, w-16), val))
 	}
-	if idle > 0 {
-		label := fmt.Sprintf("+%d idle", idle)
-		if idle == len(m.models) {
-			label = fmt.Sprintf("%d configured · all idle", idle)
+	if len(idleNames) > 0 {
+		label := strings.Join(idleNames, ", ")
+		if len(label) > w-12 {
+			label = fmt.Sprintf("%d models", len(idleNames))
 		}
-		lines = append(lines, kv(w, "models", sFaint.Render(label)))
+		lines = append(lines, kv(w, "idle", sFaint.Render(label)))
 	}
 	// task tally
 	var done, running, queued, failed int

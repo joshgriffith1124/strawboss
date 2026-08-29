@@ -109,7 +109,9 @@ func TestLoadModels(t *testing.T) {
 		check   func(t *testing.T, models []ModelConfig)
 	}{
 		{
-			name: "two models sorted by name",
+			// Declaration order is preference order — deliberately
+			// non-alphabetical here to prove file order wins.
+			name: "declaration order preserved",
 			toml: `
 [models.qwen-coder]
 endpoint = "http://gx10a:4096"
@@ -124,14 +126,14 @@ model = "qwen2.5-7b"
 				if len(models) != 2 {
 					t.Fatalf("got %d models", len(models))
 				}
-				if models[0].Name != "a-small" || models[1].Name != "qwen-coder" {
+				if models[0].Name != "qwen-coder" || models[1].Name != "a-small" {
 					t.Errorf("order = %s, %s", models[0].Name, models[1].Name)
 				}
-				if models[0].Harness != "opencode" {
-					t.Errorf("default harness = %q, want opencode", models[0].Harness)
+				if models[1].Harness != "opencode" {
+					t.Errorf("default harness = %q, want opencode", models[1].Harness)
 				}
-				if models[1].Endpoint != "http://gx10a:4096" {
-					t.Errorf("Endpoint = %q", models[1].Endpoint)
+				if models[0].Endpoint != "http://gx10a:4096" {
+					t.Errorf("Endpoint = %q", models[0].Endpoint)
 				}
 			},
 		},

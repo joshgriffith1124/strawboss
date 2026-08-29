@@ -291,7 +291,7 @@ func BuildSystemPrompt(exe string, models []config.ModelConfig) string {
 Delegate with the Bash tool:
   %s delegate --model <name> --task "<complete, self-contained instructions>"
 
-Available worker models: %s. Workers run in your working directory and cannot see this conversation — every task description must stand alone. The command blocks until every worker finishes and prints one terse result per worker (worker id, status, summary, full-log path); read a log file only when you truly need detail.
+Available worker models, in preference order — use the first unless a task clearly needs another: %s. Workers run in your working directory and cannot see this conversation — every task description must stand alone. The command blocks until every worker finishes and prints one terse result per worker (worker id, status, summary, full-log path); read a log file only when you truly need detail.
 
 Run INDEPENDENT tasks in parallel by repeating --task in ONE delegate call — each task becomes its own concurrent worker:
   %s delegate --model <m> --task "first task" --task "second task"

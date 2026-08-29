@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 
 	"github.com/BurntSushi/toml"
 )
@@ -100,8 +99,10 @@ type modelsFile struct {
 // knownHarnesses gates the harness field; only opencode exists in v1.
 var knownHarnesses = map[string]bool{"opencode": true}
 
-// LoadModels reads models.toml at path and returns configs sorted by name.
-// Unlike Load, a missing file IS an error: there is nothing to delegate to
+// LoadModels reads models.toml at path and returns configs in declaration
+// order — the file's order is the preference order (the supervisor is told
+// to favor earlier entries), so list the preferred model first. Unlike
+// Load, a missing file IS an error: there is nothing to delegate to
 // without model configs.
 func LoadModels(path string) ([]ModelConfig, error) {
 	var mf modelsFile
@@ -116,11 +117,17 @@ func LoadModels(path string) ([]ModelConfig, error) {
 		return nil, fmt.Errorf("loading %s: no [models.<name>] entries", path)
 	}
 
+	// meta.Keys is in file order; the [models.<name>] table headers pick
+	// out each entry's first appearance.
 	names := make([]string, 0, len(mf.Models))
-	for name := range mf.Models {
-		names = append(names, name)
+	seen := map[string]bool{}
+	for _, key := range meta.Keys() {
+		if len(key) < 2 || key[0] != "models" || seen[key[1]] {
+			continue
+		}
+		seen[key[1]] = true
+		names = append(names, key[1])
 	}
-	sort.Strings(names)
 
 	out := make([]ModelConfig, 0, len(names))
 	for _, name := range names {

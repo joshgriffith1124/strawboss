@@ -1,42 +1,34 @@
-# Named model configs workers bind to (~/.strawboss/models.toml).
-# Workers and the UI reference these by name only — hardware stays invisible.
-# File order is preference order: the supervisor is told to favor earlier
-# entries, so list the preferred model first.
+# Worker model configs (~/.strawboss/models.toml). Workers and the UI
+# reference these by name only. File order is preference order: the
+# supervisor is told to favor the first entry.
 #
-# endpoint = harness-dependent: for opencode, the `opencode serve` base URL
-#            (opencode runs locally; the GX10 inference endpoints live behind
-#            opencode's provider config in ~/.config/opencode/opencode.json);
-#            for dsh, the OpenAI-compatible LLM base URL the worker talks to
-#            directly. See docs/NOTES.md.
-# model    = opencode: "provider/model" ref · dsh: the wire model id.
+# Two harness flavors, one entry each below. README "Worker harness
+# setup" walks the prerequisites; docs/NOTES.md has the deep findings.
 
-[models.deepseek-flash]
-endpoint = "http://127.0.0.1:4477"
-model = "spark-a/deepseek-v4-flash"   # defined in opencode.json; needs the model loaded in
-                                      # sglang on the GX10 before delegations to it succeed
-
+# ── opencode harness ────────────────────────────────────────────────────
+# endpoint = the local `opencode serve` URL (strawboss spawns the server
+#            itself for localhost endpoints; your inference host lives in
+#            opencode's provider config, ~/.config/opencode/opencode.json).
+# model    = opencode "provider/model" ref matching that config.
 [models.qwen-coder]
 endpoint = "http://127.0.0.1:4477"
-model = "spark-a/qwen3.8-27b"
-harness = "opencode"             # optional; "opencode" is the default and only v1 harness
-# variant = "non-thinking"       # optional opencode model variant — reasoning models can
-#                                # exhaust their whole output budget thinking; a non-thinking
-#                                # variant (if the provider defines one) avoids that
+model = "local/qwen3.8-27b"
+harness = "opencode"          # optional here — opencode is the default
+# variant = "non-thinking"    # opencode model variant, if the provider
+#                             # defines one (reasoning models can burn the
+#                             # whole output budget thinking)
 
-[models.qwen-flash]
-endpoint = "http://127.0.0.1:4477"
-model = "spark-a/qwen3.8-flash-next"
-
-[models.deepseek-dsh]
-endpoint = "http://your-inference-host:8000/v1"      # the LLM endpoint itself — dsh needs no opencode
-model = "deepseek-v4-flash"
-harness = "dsh"                  # DeepSeek Harness ACP workers; setup in docs/NOTES.md
-# api_key = "local"              # sent to the endpoint; "local" when omitted
-# tools_mode = "native"          # dsh tool transport: native (default) · code (one
-#                                # run_code tool + ~4k-token TS SDK prompt) · both
-
-# dsh is model-agnostic — any id the OpenAI-compatible endpoint serves works:
+# ── dsh harness (DeepSeek Harness) ──────────────────────────────────────
+# endpoint = your OpenAI-compatible inference URL directly — no opencode
+#            in the path.
+# model    = the id the server serves (see <endpoint>/models).
 [models.qwen-dsh]
 endpoint = "http://your-inference-host:8000/v1"
-model = "qwen3.8-27b"            # sglang model id, not an opencode provider/model ref
+model = "qwen3.8-27b"
 harness = "dsh"
+# api_key = "local"           # sent to the endpoint; "local" when omitted
+# max_tokens = 49152          # per-request output cap (shared with the
+#                             # model's reasoning); default 49152
+# tools_mode = "native"       # tool transport: native (default) · code
+#                             # (one run_code tool + a ~4k-token generated
+#                             # TypeScript SDK prompt) · both

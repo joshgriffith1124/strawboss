@@ -41,7 +41,7 @@ KICKOFF.md. Add to this file whenever reality disagrees with the docs.
 ## Actual worker topology (differs from KICKOFF's picture; verified 2026-08-28)
 
 - **opencode runs locally on this box** (npm global under nvm, v1.18.25), not on the GX10s.
-  The GX10 is a bare sglang OpenAI-compatible endpoint (`http://gx10-52e4.local:8000/v1`)
+  The GX10 is a bare sglang OpenAI-compatible endpoint (`http://<gx10-host>:8000/v1`)
   behind opencode's `spark-a` provider in `~/.config/opencode/opencode.json`.
 - Consequently `models.toml` `endpoint` = the **opencode server URL** (local), and `model` =
   opencode's `provider/model` ref (e.g. `spark-a/qwen3.8-27b`). GX10 endpoints stay
@@ -271,10 +271,10 @@ file on disk → terse result, 5s). Three obstacles, all handled:
    like curl get the working IPv4 — and this Go toolchain lacks cgo
    resolver support, so GODEBUG=netdns=cgo is a no-op). The proxy and the
    endpoint probe now dial IPv4-first over the full address list, but on
-   this box the name still needs a WSL /etc/hosts line
-   (`192.168.1.94 gx10-52e4.attlocal.net`) until the DNS side serves an A
-   record. GX10 endpoint hostname is now gx10-52e4.attlocal.net (the
-   .local name died with the IP change).
+   this box the name still needs a WSL /etc/hosts line mapping the GX10
+   hostname to its IPv4 until the DNS side serves an A record. (The
+   box's mDNS .local name also died with an IP change — the router's
+   DNS name is the stable one.)
 
 ## dsh parallel workers vs session-query.db (2026-08-29, live TUI run)
 

@@ -51,6 +51,7 @@ type Orchestrator struct {
 	feed      chan tea.Msg
 	prompts   chan string
 	interrupt chan struct{}
+	rewind    chan struct{} // registry watcher: re-read from the top
 
 	cancel context.CancelFunc
 
@@ -76,6 +77,8 @@ type Orchestrator struct {
 	fiveHourNow   float64
 	budgetWarned  bool
 	budgetStopped bool
+
+	lastPrompt string // first prompt of the current session (history label)
 }
 
 // New builds an orchestrator; call Run to start the feeds.
@@ -88,6 +91,7 @@ func New(d *supervisor.Driver, models []config.ModelConfig, stateDir string) *Or
 		feed:            make(chan tea.Msg, 64),
 		prompts:         make(chan string, 4),
 		interrupt:       make(chan struct{}, 1),
+		rewind:          make(chan struct{}, 1),
 		sessionToWorker: map[string]string{},
 		workerSession:   map[string]string{},
 		workerModel:     map[string]string{},
@@ -268,6 +272,11 @@ func (o *Orchestrator) supervisorLoop(ctx context.Context) {
 				s.Interrupt() // process exits; next prompt respawns with --resume
 			}
 		case prompt := <-o.prompts:
+			o.mu.Lock()
+			if o.lastPrompt == "" {
+				o.lastPrompt = prompt // labels the session in the history
+			}
+			o.mu.Unlock()
 			s := current()
 			if s == nil || !s.Alive() {
 				var err error
@@ -300,6 +309,10 @@ func (o *Orchestrator) startStream(ctx context.Context) (*supervisor.Stream, err
 				if err := os.WriteFile(o.sessionFile(), []byte(init.SessionID), 0o644); err != nil {
 					o.emit(ctx, ui.RawLogMsg{Source: "app", Line: "persisting session id: " + err.Error()})
 				}
+				o.mu.Lock()
+				run, label := o.RunID, o.lastPrompt
+				o.mu.Unlock()
+				o.appendSessionHistory(init.SessionID, run, label)
 			}
 			msgs := mapSupEvent(ev, pid)
 			o.observeSup(msgs)

@@ -29,12 +29,14 @@ func (m Model) View() string {
 	}
 
 	var body string
-	switch m.tab {
-	case tabChat:
+	switch {
+	case m.picking:
+		body = m.viewSessionPicker(w, contentH)
+	case m.tab == tabChat:
 		body = m.viewChat(w, contentH)
-	case tabDashboard:
+	case m.tab == tabDashboard:
 		body = m.viewDashboard(w, contentH)
-	case tabLogs:
+	case m.tab == tabLogs:
 		body = m.viewLogs(w, contentH)
 	}
 
@@ -101,13 +103,15 @@ func (m Model) viewTabs(w int) string {
 
 func (m Model) viewFooter(w int) string {
 	var hints [][2]string
-	switch m.tab {
-	case tabChat:
+	switch {
+	case m.picking:
+		hints = [][2]string{{"↑↓", "select"}, {"↵", "switch"}, {"esc", "close"}}
+	case m.tab == tabChat:
 		hints = [][2]string{{"↵", "send"}, {"⇥", "tabs"}, {"esc", "interrupt"}, {"ctrl+c", "quit"}}
-	case tabDashboard:
-		hints = [][2]string{{"↑↓", "select"}, {"/", "filter"}, {"x", "kill"}, {"r", "retry"}, {"R", "retry-failed"}, {"⇥/1-3", "tabs"}, {"q", "quit"}}
+	case m.tab == tabDashboard:
+		hints = [][2]string{{"↑↓", "select"}, {"/", "filter"}, {"s", "sessions"}, {"x", "kill"}, {"r", "retry"}, {"R", "retry-failed"}, {"⇥/1-3", "tabs"}, {"q", "quit"}}
 	default:
-		hints = [][2]string{{"f", "filter"}, {"⇥/1-3", "tabs"}, {"q", "quit"}}
+		hints = [][2]string{{"f", "filter"}, {"s", "sessions"}, {"⇥/1-3", "tabs"}, {"q", "quit"}}
 	}
 	var parts []string
 	for _, h := range hints {

@@ -31,6 +31,10 @@ func (o *Orchestrator) watchRegistry(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-o.rewind:
+			// Session switch: replay the whole file so the new run's
+			// history repopulates (events are run-filtered on apply).
+			offset = 0
 		case <-time.After(400 * time.Millisecond):
 		}
 	}
@@ -64,7 +68,10 @@ func (o *Orchestrator) readRegistryFrom(ctx context.Context, path string, offset
 }
 
 func (o *Orchestrator) applyRegistryEvent(ctx context.Context, ev registry.Event) {
-	if o.RunID != "" && ev.Run != o.RunID {
+	o.mu.Lock()
+	run := o.RunID
+	o.mu.Unlock()
+	if run != "" && ev.Run != run {
 		return // another run's worker — not this session's story
 	}
 	switch ev.Type {

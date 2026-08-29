@@ -135,6 +135,22 @@ type ToastMsg struct{ Text string }
 // two-way): shown in the topbar so leaving the desk is an informed act.
 type RemoteMsg struct{ Channel string }
 
+// SessionInfo is one entry in the session picker (this project only).
+type SessionInfo struct {
+	ID      string
+	Run     string
+	Started time.Time
+	Label   string // first prompt of the session
+	Workers int
+	Done    int
+	Failed  int
+	Current bool
+}
+
+// SessionSwitchedMsg announces a completed session switch: the UI resets
+// chat and worker state; the conversation resumes on the next prompt.
+type SessionSwitchedMsg struct{ ID string }
+
 // SendPromptMsg is emitted BY the UI when the user submits input; the
 // program driver (demo or live) subscribes and acts.
 type SendPromptMsg struct{ Text string }

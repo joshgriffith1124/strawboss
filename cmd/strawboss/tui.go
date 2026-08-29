@@ -134,5 +134,7 @@ func buildLive(stateDir, modelsPath string, fresh bool) (ui.Model, func(), error
 	m.OnInterrupt = o.OnInterrupt
 	m.OnKillWorker = o.OnKillWorker
 	m.OnRetryWorker = o.OnRetryWorker
+	m.OnListSessions = o.ListSessions
+	m.OnSwitchSession = o.SwitchSession
 	return m, o.Shutdown, nil
 }

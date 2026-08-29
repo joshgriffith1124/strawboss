@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -145,6 +146,9 @@ type Model struct {
 	// the live orchestrator; nil in demo mode.
 	OnKillWorker  func(id string)
 	OnRetryWorker func(id string)
+	// OnListSessions/OnSwitchSession drive the session picker.
+	OnListSessions  func() []SessionInfo
+	OnSwitchSession func(id, run string)
 
 	width, height int
 	tab           int
@@ -179,6 +183,11 @@ type Model struct {
 	filterInput  textinput.Model
 	filtering    bool   // filter input focused
 	filter       string // applied worker-table filter
+
+	// session picker overlay
+	picking  bool
+	sessions []SessionInfo
+	sessIdx  int
 
 	// models
 	models []modelStat
@@ -450,6 +459,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.remoteChannel = msg.Channel
 		m.log("app", "remote control armed via "+msg.Channel)
 		return m, Listen(m.feed)
+	case SessionSwitchedMsg:
+		// Old session's chat and workers no longer apply; the registry
+		// replay repopulates the new run's workers.
+		m.chat = nil
+		m.streaming.Reset()
+		m.workers = nil
+		m.workerEvents = map[string][]workerEvent{}
+		m.workerRates = map[string]workerRate{}
+		m.recentResults = nil
+		m.selected = 0
+		m.sessionID = msg.ID
+		m.chat = append(m.chat, chatItem{kind: "note", when: time.Now(),
+			text: "switched to session " + msg.ID + " — the conversation resumes on your next message"})
+		m.showToast("switched to session " + truncPlain(msg.ID, 12))
+		return m, Listen(m.feed)
 
 	case SendPromptMsg:
 		if m.OnPrompt != nil {
@@ -541,6 +565,35 @@ func (m Model) visibleWorkers() []workerRow {
 func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	typing := m.tab == tabChat
 
+	// The session picker owns the keyboard while open.
+	if m.picking {
+		switch msg.String() {
+		case "esc", "q", "s":
+			m.picking = false
+		case "up", "k":
+			if m.sessIdx > 0 {
+				m.sessIdx--
+			}
+		case "down", "j":
+			if m.sessIdx < len(m.sessions)-1 {
+				m.sessIdx++
+			}
+		case "enter":
+			m.picking = false
+			if m.sessIdx < len(m.sessions) {
+				s := m.sessions[m.sessIdx]
+				if s.Current {
+					m.showToast("already on that session")
+				} else if m.OnSwitchSession != nil {
+					m.OnSwitchSession(s.ID, s.Run)
+				} else {
+					m.showToast("demo replay — session switching isn't wired")
+				}
+			}
+		}
+		return m, nil
+	}
+
 	// Filter entry owns the keyboard while focused.
 	if m.filtering {
 		switch msg.String() {
@@ -587,7 +640,7 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if typing {
 		switch msg.String() {
 		case "enter":
-			text := strings.TrimSpace(m.input.Value())
+			text := normalizeDroppedPaths(strings.TrimSpace(m.input.Value()))
 			if text == "" {
 				return m, nil
 			}
@@ -624,6 +677,14 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.filtering = true
 			m.filterInput.SetValue(m.filter)
 			m.filterInput.Focus()
+		}
+	case "s":
+		if m.OnListSessions != nil {
+			m.sessions = m.OnListSessions()
+			m.sessIdx = 0
+			m.picking = true
+		} else {
+			m.showToast("demo replay — no session history")
 		}
 	case "f":
 		if m.tab == tabLogs {
@@ -695,6 +756,26 @@ func firstLine(s string) string {
 		return s[:i]
 	}
 	return s
+}
+
+// normalizeDroppedPaths makes drag-and-dropped file paths usable by the
+// supervisor: terminals paste the path as text, but on WSL a Windows
+// Terminal drop arrives Windows-style ("C:\Users\…", possibly quoted) —
+// unreadable from the Linux side. Quoted Windows paths become /mnt/<drive>
+// form; everything else passes through untouched.
+// Quoted paths may contain spaces (how terminals quote dropped paths);
+// bare ones end at whitespace so two pasted paths stay separate.
+var winPathRe = regexp.MustCompile(`"([A-Za-z]):\\([^"]+)"|([A-Za-z]):\\([^\s"']+)`)
+
+func normalizeDroppedPaths(s string) string {
+	return winPathRe.ReplaceAllStringFunc(s, func(match string) string {
+		p := winPathRe.FindStringSubmatch(match)
+		drive, rest := p[1], p[2]
+		if drive == "" {
+			drive, rest = p[3], p[4]
+		}
+		return "/mnt/" + strings.ToLower(drive) + "/" + strings.ReplaceAll(rest, `\`, "/")
+	})
 }
 
 // isDelegationResult recognizes the terse-result header ("wN status …")

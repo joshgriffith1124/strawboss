@@ -760,3 +760,71 @@ func TestBudgetGuard(t *testing.T) {
 		t.Fatal("window stop not lifted after recovery")
 	}
 }
+
+// TestSessionHistoryAndSwitch: sessions append once each, list newest
+// first with run tallies, and switching repoints the pointers, resets
+// worker state, and replays the chosen run.
+func TestSessionHistoryAndSwitch(t *testing.T) {
+	stateDir := t.TempDir()
+	proj := t.TempDir()
+	reg := &registry.Registry{Path: filepath.Join(stateDir, "workers.jsonl"), Run: "run-1"}
+	w1, _ := reg.Allocate("ses_w_old", "m", "old farkle task", "/repo", 0)
+	_ = reg.Finish(w1, "ses_w_old", "done", "ok", "/l", time.Second, 1, 1)
+	reg2 := &registry.Registry{Path: reg.Path, Run: "run-2"}
+	w2, _ := reg2.Allocate("ses_w_new", "m", "new task", "/repo", 0)
+	_ = reg2.Finish(w2, "ses_w_new", "failed", "boom", "/l", time.Second, 1, 1)
+
+	o := New(&supervisor.Driver{Dir: proj}, nil, stateDir)
+	o.RunID = "run-2"
+	o.appendSessionHistory("ses-1", "run-1", "build the farkle game")
+	o.appendSessionHistory("ses-2", "run-2", "continue the project")
+	o.appendSessionHistory("ses-2", "run-2", "dup must not append")
+
+	list := o.ListSessions()
+	if len(list) != 2 {
+		t.Fatalf("sessions = %+v", list)
+	}
+	if list[0].ID != "ses-2" || !list[0].Current || list[0].Failed != 1 {
+		t.Errorf("newest = %+v", list[0])
+	}
+	if list[1].ID != "ses-1" || list[1].Current || list[1].Done != 1 || list[1].Label != "build the farkle game" {
+		t.Errorf("oldest = %+v", list[1])
+	}
+
+	// Seed some current-run worker state, then switch to run-1.
+	o.mu.Lock()
+	o.unfinished[w2] = true
+	o.workerSession[w2] = "ses_w_new"
+	o.mu.Unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go o.watchRegistry(ctx)
+	o.SwitchSession("ses-1", "run-1")
+
+	if got := o.Driver.SessionID(); got != "ses-1" {
+		t.Errorf("driver session = %q", got)
+	}
+	if got := LoadSession(stateDir, proj); got != "ses-1" {
+		t.Errorf("persisted session = %q", got)
+	}
+	if run, _ := RunID(stateDir, proj, false); run != "run-1" {
+		t.Errorf("persisted run = %q", run)
+	}
+	o.mu.Lock()
+	if len(o.unfinished) != 0 && o.unfinished[w2] {
+		t.Error("old run's worker state survived the switch")
+	}
+	o.mu.Unlock()
+
+	sawSwitch := false
+	drainUntil(t, o.Feed(), 10*time.Second, func(m tea.Msg) bool {
+		if _, ok := m.(ui.SessionSwitchedMsg); ok {
+			sawSwitch = true
+		}
+		u, ok := m.(ui.WorkerUpsertMsg)
+		return ok && u.ID == w1 && u.Status == "done" // run-1 replayed
+	})
+	if !sawSwitch {
+		t.Error("no SessionSwitchedMsg")
+	}
+}

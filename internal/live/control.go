@@ -108,11 +108,14 @@ func (o *Orchestrator) OnRetryWorker(id string) {
 		o.emitAsync(ui.ToastMsg{Text: "retry " + id + ": " + err.Error()})
 		return
 	}
+	o.mu.Lock()
+	run := o.RunID
+	o.mu.Unlock()
 	o.emitAsync(ui.ToastMsg{Text: "retrying " + id + "'s task on " + model})
 	go func() {
 		ctx, cancel := context.WithTimeout(ctx, retryTimeout)
 		defer cancel()
-		reg := &registry.Registry{Path: filepath.Join(o.StateDir, "workers.jsonl"), Run: o.RunID}
+		reg := &registry.Registry{Path: filepath.Join(o.StateDir, "workers.jsonl"), Run: run}
 		warn := func(s string) { o.emitAsync(ui.RawLogMsg{Source: "wrk", Line: s}) }
 		if oc := runner.Run(ctx, h, reg, mc, task, dir, warn, nil); oc.Err != nil {
 			o.emitAsync(ui.ToastMsg{Text: "retry of " + id + " failed: " + oc.Err.Error()})

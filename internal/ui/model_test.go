@@ -542,3 +542,60 @@ func TestDetailExtrasAndRecentResults(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeDroppedPaths(t *testing.T) {
+	cases := map[string]string{
+		`look at "C:\Users\josh\my file.txt" please`: "look at /mnt/c/Users/josh/my file.txt please",
+		`check C:\temp\x.log`:                        "check /mnt/c/temp/x.log",
+		"plain /home/josh/file.go untouched":         "plain /home/josh/file.go untouched",
+		`D:\data\set.csv and E:\other\y.txt`:         "/mnt/d/data/set.csv and /mnt/e/other/y.txt",
+	}
+	for in, want := range cases {
+		if got := normalizeDroppedPaths(in); got != want {
+			t.Errorf("normalize(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestSessionPicker(t *testing.T) {
+	m := demoState(t)
+	var switched []string
+	m.OnListSessions = func() []SessionInfo {
+		return []SessionInfo{
+			{ID: "ses-new", Run: "run-2", Label: "current work", Current: true, Workers: 3, Done: 2},
+			{ID: "ses-old", Run: "run-1", Label: "farkle game", Workers: 12, Done: 9, Failed: 3},
+		}
+	}
+	m.OnSwitchSession = func(id, run string) { switched = append(switched, id+"/"+run) }
+
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyTab}) // dashboard
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+	if !m.picking || len(m.sessions) != 2 {
+		t.Fatalf("picking=%v sessions=%d", m.picking, len(m.sessions))
+	}
+	out := m.viewSessionPicker(120, 20)
+	for _, want := range []string{"farkle game", "current work", "current", "12w"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("picker missing %q", want)
+		}
+	}
+	// Enter on the current session: no switch.
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if len(switched) != 0 || m.picking {
+		t.Fatalf("switched=%v picking=%v", switched, m.picking)
+	}
+	// Reopen, pick the old one.
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")},
+		tea.KeyMsg{Type: tea.KeyDown}, tea.KeyMsg{Type: tea.KeyEnter})
+	if len(switched) != 1 || switched[0] != "ses-old/run-1" {
+		t.Fatalf("switched = %v", switched)
+	}
+	// The switch announcement resets chat and workers.
+	m = apply(t, m, SessionSwitchedMsg{ID: "ses-old"})
+	if len(m.workers) != 0 || m.sessionID != "ses-old" {
+		t.Errorf("workers=%d session=%q", len(m.workers), m.sessionID)
+	}
+	if len(m.chat) != 1 || m.chat[0].kind != "note" {
+		t.Errorf("chat = %+v", m.chat)
+	}
+}

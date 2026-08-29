@@ -18,8 +18,9 @@ tested at the end (same rule as milestones). Struck items are done.
     task shape instead of the supervisor hand-picking (needs ≥2 models
     actually loaded on the GX10 to matter — deepseek-v4-flash still
     pending).
-11. **Permission prompts in-chat** — surface supervisor permission
-    requests interactively instead of pre-approving everything.
+11. ~~Permission prompts (lite)~~ — denials are loud (chat note with a
+    paste-ready allowed_tools fix, toast, remote push). Full interactive
+    prompts deferred until the denial log shows they'd pay.
 
 Explicitly not planned: web UI, remote/mobile control beyond OpenClaw,
 MCP management — agent-deck does these; strawboss stays a local TUI with

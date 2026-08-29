@@ -15,6 +15,14 @@ any OpenAI-compatible endpoint). The TUI shows the live worker table,
 streaming transcripts, and the token economy: what the plan-metered
 supervisor spent vs. what your free local workers churned through.
 
+![The chat tab: supervisor conversation, inline delegations, and the token
+economy — 180k fresh plan tokens steering 4M free local
+tokens](docs/screenshot-chat.png)
+
+![The dashboard: live worker table, per-worker transcript with tok/s and
+context usage, supervisor detail with recent delegation
+results](docs/screenshot-dashboard.png)
+
 ```
 ┌────────────────────────── strawboss (Go, one process) ────────────────────┐
 │  chat tab · dashboard (worker table + live transcripts) · logs            │

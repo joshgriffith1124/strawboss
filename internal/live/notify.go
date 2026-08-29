@@ -47,6 +47,29 @@ func (o *Orchestrator) observeSup(msgs []tea.Msg) {
 			if v.Err != "" {
 				o.notifyText("strawboss: supervisor error", "supervisor error — "+truncN(v.Err, 300))
 			}
+		case ui.SupToolMsg:
+			o.mu.Lock()
+			o.toolCmds[v.ToolID] = v.Name + " " + v.Command
+			if len(o.toolCmds) > 100 {
+				o.toolCmds = map[string]string{v.ToolID: v.Name + " " + v.Command}
+			}
+			o.mu.Unlock()
+		case ui.SupToolResultMsg:
+			// Silent auto-denials get a remote notice too, once per
+			// suggestion — while away, a dead-ended supervisor is exactly
+			// what the Discord channel exists to surface.
+			if tool := ui.DeniedTool(v.Content); tool != "" {
+				o.mu.Lock()
+				cmd := o.toolCmds[v.ToolID]
+				sug := ui.AllowSuggestion(tool, cmd)
+				dup := o.deniedNotified[sug]
+				o.deniedNotified[sug] = true
+				o.mu.Unlock()
+				if !dup {
+					o.notifyText("strawboss: supervisor denied "+tool,
+						"supervisor was denied "+truncN(cmd, 120)+" — allow with "+sug+" in supervisor.allowed_tools")
+				}
+			}
 		case ui.SupUsageMsg:
 			o.noteBudgetUsage(v.CostUSD, 0)
 		case ui.SupRateLimitMsg:

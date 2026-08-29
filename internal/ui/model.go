@@ -192,6 +192,8 @@ type Model struct {
 	// models
 	models []modelStat
 
+	deniedSeen map[string]bool // allowlist suggestions already shown
+
 	// logs + toast
 	logs          []logLine
 	logSrc        string // logs-tab source filter: "" all, else sup/wrk/app
@@ -314,6 +316,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.recentResults = append(m.recentResults, resultLine{text: fl, isError: msg.IsError})
 			if len(m.recentResults) > 5 {
 				m.recentResults = m.recentResults[len(m.recentResults)-5:]
+			}
+		}
+		// Permission denials are silent auto-denies in dontAsk mode; make
+		// them LOUD with a ready-made allowlist fix, once per suggestion.
+		if tool := DeniedTool(msg.Content); tool != "" {
+			cmd := ""
+			for i := len(m.chat) - 1; i >= 0; i-- {
+				if m.chat[i].kind == "tool-out" && m.chat[i].toolID == msg.ToolID {
+					cmd = m.chat[i].text
+					break
+				}
+			}
+			if sug := AllowSuggestion(tool, cmd); sug != "" && !m.deniedSeen[sug] {
+				if m.deniedSeen == nil {
+					m.deniedSeen = map[string]bool{}
+				}
+				m.deniedSeen[sug] = true
+				m.chat = append(m.chat, chatItem{kind: "note", isError: true, when: time.Now(),
+					text: fmt.Sprintf("⛔ supervisor was denied %s — to allow permanently, add %q to supervisor.allowed_tools in ~/.strawboss/config.toml", tool, sug)})
+				m.showToast("supervisor denied " + tool + " — see chat for the allowlist fix")
 			}
 		}
 		m.log("sup", "← "+truncPlain(msg.Content, 120))
@@ -776,6 +798,33 @@ func normalizeDroppedPaths(s string) string {
 		}
 		return "/mnt/" + strings.ToLower(drive) + "/" + strings.ReplaceAll(rest, `\`, "/")
 	})
+}
+
+// DeniedTool extracts the tool name from a permission-denial tool result
+// ("" when the result isn't one). Exported: the orchestrator uses the
+// same detection for remote denial notices.
+var deniedRe = regexp.MustCompile(`^Permission to use (\w+) has been denied`)
+
+func DeniedTool(content string) string {
+	if match := deniedRe.FindStringSubmatch(content); match != nil {
+		return match[1]
+	}
+	return ""
+}
+
+// AllowSuggestion builds the allowed_tools entry that would have let the
+// denied call through: command-prefixed for Bash, the bare tool otherwise.
+func AllowSuggestion(tool, cmd string) string {
+	if tool != "Bash" {
+		return tool
+	}
+	// The chat's tool line reads "Bash <command…>"; the first command
+	// token drives the prefix rule.
+	cmd = strings.TrimSpace(strings.TrimPrefix(cmd, "Bash"))
+	if fields := strings.Fields(cmd); len(fields) > 0 {
+		return "Bash(" + fields[0] + ":*)"
+	}
+	return "Bash"
 }
 
 // isDelegationResult recognizes the terse-result header ("wN status …")

@@ -599,3 +599,44 @@ func TestSessionPicker(t *testing.T) {
 		t.Errorf("chat = %+v", m.chat)
 	}
 }
+
+func TestLoudDenials(t *testing.T) {
+	m := demoState(t)
+	denial := "Permission to use Bash has been denied because Claude Code is running in don't ask mode. IMPORTANT: ..."
+	m = apply(t, m,
+		SupToolMsg{ToolID: "t9", Name: "Bash", Command: "ls -la /home/josh/git/test_job/"},
+		SupToolResultMsg{ToolID: "t9", Content: denial, IsError: true},
+	)
+	last := m.chat[len(m.chat)-2] // note lands before the tool-in? order: tool-out, tool-in, note appended after
+	found := false
+	for _, it := range m.chat {
+		if it.kind == "note" && strings.Contains(it.text, `"Bash(ls:*)"`) &&
+			strings.Contains(it.text, "allowed_tools") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no loud denial note; last chat = %+v", last)
+	}
+	if !strings.Contains(m.toast, "denied Bash") {
+		t.Errorf("toast = %q", m.toast)
+	}
+	// The same suggestion never repeats.
+	notes := 0
+	m = apply(t, m,
+		SupToolMsg{ToolID: "t10", Name: "Bash", Command: "ls /tmp"},
+		SupToolResultMsg{ToolID: "t10", Content: denial, IsError: true},
+	)
+	for _, it := range m.chat {
+		if it.kind == "note" && strings.Contains(it.text, "Bash(ls:*)") {
+			notes++
+		}
+	}
+	if notes != 1 {
+		t.Errorf("suggestion repeated %d times", notes)
+	}
+	// A non-Bash denial suggests the bare tool.
+	if got := AllowSuggestion("WebSearch", ""); got != "WebSearch" {
+		t.Errorf("suggestion = %q", got)
+	}
+}

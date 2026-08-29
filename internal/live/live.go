@@ -79,6 +79,10 @@ type Orchestrator struct {
 	budgetStopped bool
 
 	lastPrompt string // first prompt of the current session (history label)
+
+	// loud-denial tracking (see notify.go)
+	toolCmds       map[string]string // toolID → "Name command…"
+	deniedNotified map[string]bool   // suggestions already pushed
 }
 
 // New builds an orchestrator; call Run to start the feeds.
@@ -101,6 +105,8 @@ func New(d *supervisor.Driver, models []config.ModelConfig, stateDir string) *Or
 		unfinished:      map[string]bool{},
 		tailing:         map[string]bool{},
 		dshOut:          map[string]int{},
+		toolCmds:        map[string]string{},
+		deniedNotified:  map[string]bool{},
 	}
 }
 

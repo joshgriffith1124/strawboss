@@ -34,3 +34,9 @@ harness = "dsh"                  # DeepSeek Harness ACP workers; setup in docs/N
 # api_key = "local"              # sent to the endpoint; "local" when omitted
 # tools_mode = "native"          # dsh tool transport: native (default) · code (one
 #                                # run_code tool + ~4k-token TS SDK prompt) · both
+
+# dsh is model-agnostic — any id the OpenAI-compatible endpoint serves works:
+[models.qwen-dsh]
+endpoint = "http://gx10-52e4.local:8000/v1"
+model = "qwen3.8-27b"            # sglang model id, not an opencode provider/model ref
+harness = "dsh"

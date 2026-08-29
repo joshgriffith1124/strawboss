@@ -434,3 +434,48 @@ func TestSidePanelEconomyAndModels(t *testing.T) {
 		t.Errorf("all-idle collapse missing:\n%s", models)
 	}
 }
+
+func TestRetryAllFailed(t *testing.T) {
+	m := demoState(t)
+	m = apply(t, m,
+		WorkerUpsertMsg{ID: "w1", Status: "failed", Summary: "boom"},
+		WorkerUpsertMsg{ID: "w3", Model: "qwen-dsh", Task: "t3", Status: "failed", Summary: "bang"},
+		tea.KeyMsg{Type: tea.KeyTab})
+	var retried []string
+	m.OnRetryWorker = func(id string) { retried = append(retried, id) }
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("R")})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatal("R produced no cmd")
+	}
+	// Batch cmds resolve to RetryWorkerMsg per failed worker; feed them back.
+	if msg := cmd(); msg != nil {
+		collect := func(ms tea.Msg) {
+			if rm, ok := ms.(RetryWorkerMsg); ok {
+				m = apply(t, m, rm)
+			}
+			if batch, ok := ms.(tea.BatchMsg); ok {
+				for _, c := range batch {
+					if inner := c(); inner != nil {
+						if rm, ok := inner.(RetryWorkerMsg); ok {
+							m = apply(t, m, rm)
+						}
+					}
+				}
+			}
+		}
+		collect(msg)
+	}
+	if len(retried) != 2 {
+		t.Fatalf("retried = %v, want w1 and w3", retried)
+	}
+	// A filter scopes the sweep.
+	m.filter = "bang"
+	retried = nil
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("R")})
+	m = next.(Model)
+	if !strings.Contains(m.toast, "retrying 1 failed") {
+		t.Errorf("toast = %q", m.toast)
+	}
+}

@@ -596,6 +596,26 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		id := wk.ID
 		return m, func() tea.Msg { return RetryWorkerMsg{ID: id} }
+	case "R":
+		if m.tab != tabDashboard {
+			break
+		}
+		// Recover-all: retry every FAILED worker in the current (possibly
+		// filtered) view — narrow with `/` first to scope the sweep.
+		var cmds []tea.Cmd
+		for _, wk := range m.visibleWorkers() {
+			if wk.Status != "failed" {
+				continue
+			}
+			id := wk.ID
+			cmds = append(cmds, func() tea.Msg { return RetryWorkerMsg{ID: id} })
+		}
+		if len(cmds) == 0 {
+			m.showToast("no failed workers in view")
+			break
+		}
+		m.showToast(fmt.Sprintf("retrying %d failed worker(s)", len(cmds)))
+		return m, tea.Batch(cmds...)
 	}
 	return m, nil
 }

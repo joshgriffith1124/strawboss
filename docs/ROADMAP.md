@@ -11,11 +11,8 @@ tested at the end (same rule as milestones). Struck items are done.
    (inject prompts / relay replies) (db681cf, d64d067)
 6. ~~Worker table filter + logs source filter~~ (31e202b; UI polish pass
    69bc0ce, 737fea0)
-7. **Budget guard** — per-run notional-cost / plan-window ceiling: warn at
-   a threshold (through the remote channel too), hard-stop new
-   delegations past it; `costs recompute` from the JSONL history.
-8. **Recover-all** — one-key restart of every down worker (double-probe
-   liveness before declaring death).
+7. ~~Budget guard~~ (`[budget]` config, delegate stop marker, `strawboss costs`)
+8. ~~Recover-all~~ (`R` retries every failed worker in the filtered view)
 9. **Session picker / history browser** — browse and resume past
    supervisor sessions and replay recorded runs from the TUI.
 10. **Per-task auto model routing** — strawboss picks the worker model by

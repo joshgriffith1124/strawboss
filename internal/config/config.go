@@ -49,14 +49,30 @@ type Supervisor struct {
 	SystemPrompt string `toml:"system_prompt"`
 }
 
-// Notify configures optional push notifications. The bell stays; this
-// adds a phone ping through ntfy (https://ntfy.sh or self-hosted) —
-// local HTTP from the TUI, zero supervisor tokens.
+// Notify configures optional push notifications. The bell stays; these
+// add remote reach — all local HTTP/CLI from the TUI, zero supervisor
+// tokens (the OpenClaw two-way path injects prompts the same way typing
+// does, which is user input, not observability overhead).
 type Notify struct {
 	// NtfyTopic enables worker-failure pushes to <server>/<topic>.
 	NtfyTopic string `toml:"ntfy_topic"`
 	// NtfyServer overrides the default https://ntfy.sh.
 	NtfyServer string `toml:"ntfy_server"`
+
+	// OpenClawTarget enables notifications through an OpenClaw gateway
+	// channel (e.g. Discord): the `--target` value openclaw expects,
+	// such as "channel:<id>". Empty disables the OpenClaw path.
+	OpenClawTarget string `toml:"openclaw_target"`
+	// OpenClawChannel is the chat channel type. Default "discord".
+	OpenClawChannel string `toml:"openclaw_channel"`
+	// OpenClawBin overrides the openclaw CLI path. Default "openclaw".
+	OpenClawBin string `toml:"openclaw_bin"`
+	// OpenClawTwoWay also polls the channel: messages you send there are
+	// injected into the supervisor as prompts (mid-turn works), and the
+	// supervisor's replies are relayed back — remote unblocking when
+	// strawboss is stuck and you are away. Bot-authored messages are
+	// ignored, so notifications never feed back.
+	OpenClawTwoWay bool `toml:"openclaw_two_way"`
 }
 
 // Config is the app configuration from config.toml.

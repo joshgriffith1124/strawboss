@@ -544,3 +544,84 @@ func TestNtfyPushOnLiveFailure(t *testing.T) {
 	case <-time.After(700 * time.Millisecond):
 	}
 }
+
+// TestOpenClawTwoWay: channel history is baseline (never commands); a new
+// human message becomes a supervisor prompt and is echoed to the chat;
+// bot messages are ignored; supervisor replies relay back out while the
+// remote conversation is active and stop after local input resumes.
+func TestOpenClawTwoWay(t *testing.T) {
+	dir := t.TempDir()
+	sends := filepath.Join(dir, "sends.log")
+	served := filepath.Join(dir, "served")
+	script := `#!/bin/sh
+case "$*" in
+  *" read "*"--after"*)
+    if [ -f ` + served + ` ]; then echo '{"payload":{"messages":[]}}'; else
+      touch ` + served + `
+      echo '{"payload":{"messages":[{"id":"201","content":"bot chatter","author":{"bot":true,"username":"TheJarvis"}},{"id":"200","content":"kill w3 and retry it","author":{"bot":false,"username":"josh"}}]}}'
+    fi;;
+  *" read "*)
+    echo '{"payload":{"messages":[{"id":"101","content":"old human message","author":{"bot":false,"username":"josh"}},{"id":"100","content":"old bot","author":{"bot":true,"username":"TheJarvis"}}]}}';;
+  *" send "*)
+    echo "$*" >> ` + sends + `
+    echo '{"messageId":"1"}';;
+esac
+`
+	bin := filepath.Join(dir, "openclaw")
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	o := New(&supervisor.Driver{}, nil, t.TempDir())
+	o.Notify = config.Notify{OpenClawTarget: "channel:1", OpenClawBin: bin, OpenClawTwoWay: true}
+	o.OpenClawPollEvery = 40 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go o.openclawLoop(ctx)
+
+	// The injected prompt reaches the supervisor queue…
+	select {
+	case p := <-o.prompts:
+		if !strings.Contains(p, "kill w3 and retry it") || !strings.Contains(p, "via discord") {
+			t.Errorf("prompt = %q", p)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no prompt injected")
+	}
+	// …and is echoed into the chat as a user message.
+	drainUntil(t, o.Feed(), 5*time.Second, func(m tea.Msg) bool {
+		u, ok := m.(ui.SupUserMsg)
+		return ok && strings.Contains(u.Text, "[discord] kill w3")
+	})
+	if !o.remoteActive.Load() {
+		t.Error("remoteActive not set")
+	}
+
+	// Supervisor replies relay to the channel while remote is active.
+	o.observeSup([]tea.Msg{ui.SupTextDoneMsg{Text: "w3 killed and retried"}})
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if b, err := os.ReadFile(sends); err == nil && strings.Contains(string(b), "w3 killed and retried") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("reply not relayed")
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+
+	// Local input ends the remote conversation: no further relays.
+	o.OnPrompt("back at the keyboard")
+	<-o.prompts
+	o.observeSup([]tea.Msg{ui.SupTextDoneMsg{Text: "local-only reply"}})
+	time.Sleep(300 * time.Millisecond)
+	if b, _ := os.ReadFile(sends); strings.Contains(string(b), "local-only reply") {
+		t.Error("relay continued after local input")
+	}
+	// History was never injected as a command.
+	select {
+	case p := <-o.prompts:
+		t.Errorf("unexpected prompt: %q", p)
+	default:
+	}
+}

@@ -286,3 +286,31 @@ immune — one server process). Fixed by giving each worker its own
 persistence subtree `<stateDir>/dsh-sessions/w-<pid>-<nano36>/`;
 FindSessionLog globs both depths. Parallel dsh delegation works after
 this — no need to run dsh tasks sequentially.
+
+## OpenClaw remote notify + two-way control (verified 2026-08-29, OpenClaw 2026.7.1-2)
+
+Verified against the live gateway (ws://127.0.0.1:18789) and the real
+Discord channel:
+
+- Outbound: `openclaw message send --channel discord --target channel:<id>
+  --message … --json` returns the platform message id. Target ids come
+  from `openclaw sessions list --json` (key
+  `agent:main:discord:channel:<id>`) or `openclaw directory`.
+- Inbound: `openclaw message read --channel discord --target … --json
+  [--after <id>] --limit N` returns Discord-shaped messages (newest
+  first): `id` (snowflake, strictly increasing — a clean poll cursor),
+  `content`, `author.bot`/`author.username`. Filtering on `author.bot`
+  excludes both our own notifications and the OpenClaw agent's replies,
+  so the loop cannot feed itself.
+- strawboss polls (default 5s) instead of receiving webhooks — no server
+  in strawboss (KICKOFF stack rule); the exec-per-poll cost is a node
+  startup, fine at that cadence. Channel history at startup is baseline,
+  never treated as commands.
+- Two-way semantics: a human message becomes a supervisor prompt (tagged
+  "[via discord]", injected mid-turn like typed input — user input, not
+  observability, so invariant 2 is untouched), the message is echoed
+  into the chat tab, and completed supervisor replies relay back to the
+  channel until local TUI input resumes.
+- Note: the OpenClaw agent ALSO sees messages in that channel and may
+  reply on its own — that's OpenClaw config territory (channel routing /
+  allowlists), not something strawboss can suppress.

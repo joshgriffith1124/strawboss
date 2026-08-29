@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -30,12 +31,18 @@ type Orchestrator struct {
 	// the owning delegate to record the finish before declaring the
 	// worker orphaned. Default 10s; tests shorten it.
 	DshRecoverGrace time.Duration
-	// Notify configures optional failure pushes (ntfy).
+	// Notify configures optional failure pushes and OpenClaw two-way
+	// remote control (docs: config.Notify).
 	Notify config.Notify
+	// OpenClawPollEvery is the two-way poll interval. Default 5s.
+	OpenClawPollEvery time.Duration
 
 	// started marks this orchestrator's birth: replayed history from
 	// before it must not re-trigger notifications.
 	started time.Time
+	// remoteActive: the last prompt came from the remote channel, so
+	// supervisor replies relay back there until local input resumes.
+	remoteActive atomic.Bool
 
 	feed      chan tea.Msg
 	prompts   chan string
@@ -86,8 +93,14 @@ func New(d *supervisor.Driver, models []config.ModelConfig, stateDir string) *Or
 // Feed is the channel the UI listens on.
 func (o *Orchestrator) Feed() <-chan tea.Msg { return o.feed }
 
-// OnPrompt queues a user prompt for the supervisor (ui hook).
+// OnPrompt queues a user prompt for the supervisor (ui hook). Local
+// input ends any remote conversation — replies stop relaying out.
 func (o *Orchestrator) OnPrompt(text string) {
+	o.remoteActive.Store(false)
+	o.enqueuePrompt(text)
+}
+
+func (o *Orchestrator) enqueuePrompt(text string) {
 	select {
 	case o.prompts <- text:
 	default:
@@ -128,6 +141,7 @@ func (o *Orchestrator) Run(ctx context.Context) {
 	go o.watchRegistry(ctx)
 	go o.pollWorkers(ctx)
 	go o.ensureServers(ctx)
+	go o.openclawLoop(ctx)
 	for _, base := range o.endpoints() {
 		go o.subscribeWorkerEvents(ctx, base)
 	}
@@ -254,7 +268,9 @@ func (o *Orchestrator) startStream(ctx context.Context) (*supervisor.Stream, err
 					o.emit(ctx, ui.RawLogMsg{Source: "app", Line: "persisting session id: " + err.Error()})
 				}
 			}
-			o.emit(ctx, mapSupEvent(ev, pid)...)
+			msgs := mapSupEvent(ev, pid)
+			o.observeSup(msgs)
+			o.emit(ctx, msgs...)
 		}
 	}()
 	return s, nil

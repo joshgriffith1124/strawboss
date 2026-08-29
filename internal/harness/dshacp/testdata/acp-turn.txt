@@ -1,0 +1,7 @@
+>> {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false}}}
+<< {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentInfo":{"name":"deepseek-harness-acp","version":"0.0.1"},"agentCapabilities":{"promptCapabilities":{"image":false,"audio":false,"embeddedContext":false}},"authMethods":[]}}
+>> {"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/tmp/claude-1000/-home-josh-git-strawboss/46813c3a-6b3d-4793-ae7b-a88c9a4c667e/scratchpad/spike/workdir","mcpServers":[]}}
+<< {"jsonrpc":"2.0","id":2,"result":{"sessionId":"bbe8a47e-16af-4aa1-aafc-b7a0d1ba19e3"}}
+>> {"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"bbe8a47e-16af-4aa1-aafc-b7a0d1ba19e3","prompt":[{"type":"text","text":"Create dsh-spike.txt containing a hello line, then confirm."}]}}
+<< {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"bbe8a47e-16af-4aa1-aafc-b7a0d1ba19e3","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Created dsh-spike.txt with the expected content."}}}}
+<< {"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}

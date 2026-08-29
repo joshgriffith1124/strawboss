@@ -26,6 +26,10 @@ type Orchestrator struct {
 	// RunID scopes which registry events this UI shows; events stamped
 	// with a different run (or none) belong to other runs and are skipped.
 	RunID string
+	// DshRecoverGrace is how long a dsh tailer waits after turn/end for
+	// the owning delegate to record the finish before declaring the
+	// worker orphaned. Default 10s; tests shorten it.
+	DshRecoverGrace time.Duration
 
 	feed      chan tea.Msg
 	prompts   chan string
@@ -38,12 +42,15 @@ type Orchestrator struct {
 	runCtx context.Context
 
 	mu              sync.Mutex
-	sessionToWorker map[string]string  // opencode session id → wN
-	workerSession   map[string]string  // wN → opencode session id
+	sessionToWorker map[string]string  // session id → wN
+	workerSession   map[string]string  // wN → harness session id
 	workerModel     map[string]string  // wN → model config name
 	workerDir       map[string]string  // wN → working directory (for scoped status)
 	workerTask      map[string]string  // wN → task text (for retry)
+	workerPID       map[string]int     // wN → worker subprocess pid (dsh; 0 for opencode)
 	unfinished      map[string]bool    // wN spawned but no finished event yet
+	tailing         map[string]bool    // wN with a session-log tailer running (dsh)
+	dshOut          map[string]int     // wN → latest output tokens seen by its tailer
 	stream          *supervisor.Stream // the persistent supervisor process, if running
 	servers         []*exec.Cmd        // managed opencode serve children
 }
@@ -62,7 +69,10 @@ func New(d *supervisor.Driver, models []config.ModelConfig, stateDir string) *Or
 		workerModel:     map[string]string{},
 		workerDir:       map[string]string{},
 		workerTask:      map[string]string{},
+		workerPID:       map[string]int{},
 		unfinished:      map[string]bool{},
+		tailing:         map[string]bool{},
+		dshOut:          map[string]int{},
 	}
 }
 
@@ -116,10 +126,16 @@ func (o *Orchestrator) Run(ctx context.Context) {
 	}
 }
 
+// endpoints lists distinct opencode server base URLs. dsh model entries
+// point at raw LLM endpoints — never polled, subscribed, or managed as
+// opencode servers.
 func (o *Orchestrator) endpoints() []string {
 	seen := map[string]bool{}
 	var out []string
 	for _, mc := range o.Models {
+		if mc.Harness != "" && mc.Harness != "opencode" {
+			continue
+		}
 		base := strings.TrimRight(mc.Endpoint, "/")
 		if !seen[base] {
 			seen[base] = true
@@ -127,6 +143,16 @@ func (o *Orchestrator) endpoints() []string {
 		}
 	}
 	return out
+}
+
+// modelConfig resolves a model config by name.
+func (o *Orchestrator) modelConfig(name string) (config.ModelConfig, bool) {
+	for _, mc := range o.Models {
+		if mc.Name == name {
+			return mc, true
+		}
+	}
+	return config.ModelConfig{}, false
 }
 
 // sessionFile persists the supervisor session id across restarts.
@@ -235,18 +261,29 @@ func (o *Orchestrator) Shutdown() {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 
-	type target struct{ session, model string }
+	type target struct {
+		session, model string
+		pid            int
+	}
 	o.mu.Lock()
 	var workers []target
 	for wid := range o.unfinished {
-		workers = append(workers, target{o.workerSession[wid], o.workerModel[wid]})
+		workers = append(workers, target{o.workerSession[wid], o.workerModel[wid], o.workerPID[wid]})
 	}
 	stream := o.stream
 	servers := append([]*exec.Cmd(nil), o.servers...)
 	o.mu.Unlock()
 
-	// Abort workers first, while any managed server is still up.
+	// Abort workers first, while any managed server is still up. dsh
+	// workers are subprocesses of their delegate — SIGTERM the recorded
+	// pid; opencode workers are server sessions — abort via the API.
 	for _, w := range workers {
+		if mc, ok := o.modelConfig(w.model); ok && mc.Harness == "dsh" {
+			if w.pid > 0 {
+				_ = syscall.Kill(w.pid, syscall.SIGTERM)
+			}
+			continue
+		}
 		if c := o.clientFor(w.model); c != nil {
 			_ = c.Abort(ctx, w.session)
 		}

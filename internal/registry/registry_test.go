@@ -15,11 +15,11 @@ func TestAllocateSequentialAcrossInstances(t *testing.T) {
 	a := &Registry{Path: path}
 	b := &Registry{Path: path}
 
-	id1, err := a.Allocate("ses_1", "qwen-coder", "task one", "/repo")
+	id1, err := a.Allocate("ses_1", "qwen-coder", "task one", "/repo", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	id2, err := b.Allocate("ses_2", "qwen-coder", "task two", "/repo")
+	id2, err := b.Allocate("ses_2", "qwen-coder", "task two", "/repo", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestAllocateConcurrent(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			r := &Registry{Path: path}
-			id, err := r.Allocate(fmt.Sprintf("ses_%d", i), "m", "t", "/")
+			id, err := r.Allocate(fmt.Sprintf("ses_%d", i), "m", "t", "/", 0)
 			if err != nil {
 				t.Error(err)
 				return
@@ -58,8 +58,8 @@ func TestAllocateConcurrent(t *testing.T) {
 
 func TestFinishLoadReduce(t *testing.T) {
 	r := &Registry{Path: filepath.Join(t.TempDir(), "workers.jsonl"), Run: "run-77"}
-	w1, _ := r.Allocate("ses_1", "qwen-coder", "build the thing", "/repo")
-	w2, _ := r.Allocate("ses_2", "qwen-small", "docstrings", "/repo")
+	w1, _ := r.Allocate("ses_1", "qwen-coder", "build the thing", "/repo", 0)
+	w2, _ := r.Allocate("ses_2", "qwen-small", "docstrings", "/repo", 0)
 	if err := r.Finish(w1, "ses_1", "done", "built; tests pass", "/logs/ses_1.jsonl", 95*time.Second, 12000, 800); err != nil {
 		t.Fatal(err)
 	}

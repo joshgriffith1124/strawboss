@@ -30,6 +30,10 @@ type Event struct {
 	Model string `json:"model,omitempty"`
 	Task  string `json:"task,omitempty"`
 	Dir   string `json:"dir,omitempty"`
+	// PID is the worker's subprocess pid when the harness owns one (dsh);
+	// 0 for server-backed workers (opencode). The TUI kills by pid when
+	// there is no server to ask.
+	PID int `json:"pid,omitempty"`
 	// finished fields
 	Status       string `json:"status,omitempty"`
 	Summary      string `json:"summary,omitempty"`
@@ -77,8 +81,9 @@ func (r *Registry) append(ev Event) error {
 }
 
 // Allocate assigns the next worker id (w1, w2, …) and records the spawned
-// event. Safe across concurrent delegate processes.
-func (r *Registry) Allocate(session, model, task, dir string) (string, error) {
+// event. Safe across concurrent delegate processes. pid is 0 when the
+// harness has no per-worker subprocess.
+func (r *Registry) Allocate(session, model, task, dir string, pid int) (string, error) {
 	var id string
 	err := r.withLock(func() error {
 		events, err := r.Load()
@@ -95,7 +100,7 @@ func (r *Registry) Allocate(session, model, task, dir string) (string, error) {
 		id = fmt.Sprintf("w%d", max+1)
 		return r.append(Event{
 			TS: time.Now(), Type: "spawned", Worker: id, Run: r.Run,
-			Session: session, Model: model, Task: task, Dir: dir,
+			Session: session, Model: model, Task: task, Dir: dir, PID: pid,
 		})
 	})
 	if err != nil {

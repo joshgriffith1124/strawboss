@@ -3,10 +3,10 @@ package live
 import (
 	"context"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"strawboss/internal/config"
-	"strawboss/internal/harness/opencode"
 	"strawboss/internal/registry"
 	"strawboss/internal/runner"
 	"strawboss/internal/ui"
@@ -26,11 +26,27 @@ func (o *Orchestrator) OnKillWorker(id string) {
 	o.mu.Lock()
 	session := o.workerSession[id]
 	model := o.workerModel[id]
+	pid := o.workerPID[id]
 	unfinished := o.unfinished[id]
 	o.mu.Unlock()
 
 	if session == "" || !unfinished {
 		o.emitAsync(ui.ToastMsg{Text: id + " isn't running — nothing to kill"})
+		return
+	}
+	// dsh workers are subprocesses owned by their delegate: SIGTERM the
+	// recorded pid; the waiting delegate then records the failure. No pid
+	// on record (pre-upgrade registry rows) is a displayed state.
+	if mc, ok := o.modelConfig(model); ok && mc.Harness == "dsh" {
+		if pid <= 0 {
+			o.emitAsync(ui.ToastMsg{Text: "kill " + id + ": no pid on record"})
+			return
+		}
+		if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
+			o.emitAsync(ui.ToastMsg{Text: "kill " + id + ": " + err.Error()})
+			return
+		}
+		o.emitAsync(ui.ToastMsg{Text: id + " killed — waiting for the result to close"})
 		return
 	}
 	c := o.clientFor(model)
@@ -87,11 +103,15 @@ func (o *Orchestrator) OnRetryWorker(id string) {
 		ctx = context.Background()
 	}
 
+	h, err := runner.NewHarness(mc, dir, o.StateDir)
+	if err != nil {
+		o.emitAsync(ui.ToastMsg{Text: "retry " + id + ": " + err.Error()})
+		return
+	}
 	o.emitAsync(ui.ToastMsg{Text: "retrying " + id + "'s task on " + model})
 	go func() {
 		ctx, cancel := context.WithTimeout(ctx, retryTimeout)
 		defer cancel()
-		h := opencode.New(mc, dir, filepath.Join(o.StateDir, "logs"))
 		reg := &registry.Registry{Path: filepath.Join(o.StateDir, "workers.jsonl"), Run: o.RunID}
 		warn := func(s string) { o.emitAsync(ui.RawLogMsg{Source: "wrk", Line: s}) }
 		if oc := runner.Run(ctx, h, reg, mc, task, dir, warn); oc.Err != nil {

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -103,7 +104,7 @@ func TestRegistryWatcher(t *testing.T) {
 	reg := &registry.Registry{Path: filepath.Join(stateDir, "workers.jsonl")}
 
 	// Pre-existing history: w1 done before startup.
-	w1, _ := reg.Allocate("ses_a", "qwen-coder", "old task", "/repo")
+	w1, _ := reg.Allocate("ses_a", "qwen-coder", "old task", "/repo", 0)
 	if err := reg.Finish(w1, "ses_a", "done", "all good", "/logs/a.jsonl", time.Second, 100, 20); err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +124,7 @@ func TestRegistryWatcher(t *testing.T) {
 	}
 
 	// Live tail: a new delegation lands while watching.
-	w2, err := reg.Allocate("ses_b", "qwen-small", "new task", "/repo")
+	w2, err := reg.Allocate("ses_b", "qwen-small", "new task", "/repo", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,11 +258,11 @@ func TestShutdownKillsEverything(t *testing.T) {
 func TestRegistryWatcherScopesByRun(t *testing.T) {
 	stateDir := t.TempDir()
 	oldReg := &registry.Registry{Path: filepath.Join(stateDir, "workers.jsonl"), Run: "run-old"}
-	w1, _ := oldReg.Allocate("ses_old", "qwen-coder", "ancient history", "/repo")
+	w1, _ := oldReg.Allocate("ses_old", "qwen-coder", "ancient history", "/repo", 0)
 	_ = oldReg.Finish(w1, "ses_old", "done", "old", "/l", time.Second, 1, 1)
 
 	newReg := &registry.Registry{Path: oldReg.Path, Run: "run-new"}
-	w2, _ := newReg.Allocate("ses_new", "qwen-coder", "current work", "/repo")
+	w2, _ := newReg.Allocate("ses_new", "qwen-coder", "current work", "/repo", 0)
 
 	o := New(&supervisor.Driver{}, nil, stateDir)
 	o.RunID = "run-new"
@@ -357,7 +358,7 @@ func TestRetryWorkerSpawnsNewWorker(t *testing.T) {
 
 	stateDir := t.TempDir()
 	reg := &registry.Registry{Path: filepath.Join(stateDir, "workers.jsonl")}
-	w1, _ := reg.Allocate("ses_old", "m1", "the original task", "/repo")
+	w1, _ := reg.Allocate("ses_old", "m1", "the original task", "/repo", 0)
 	if err := reg.Finish(w1, "ses_old", "failed", "boom", "/l", time.Second, 1, 1); err != nil {
 		t.Fatal(err)
 	}
@@ -398,4 +399,94 @@ func TestRetryWorkerSpawnsNewWorker(t *testing.T) {
 		tm, ok := m.(ui.ToastMsg)
 		return ok && strings.Contains(tm.Text, "still running")
 	})
+}
+
+// TestDshWorkerTailAndRecovery: a dsh worker's registry row starts a
+// session-log tailer that feeds transcript + usage msgs; with no finished
+// event after turn/end (delegate gone), the row closes as recovered.
+func TestDshWorkerTailAndRecovery(t *testing.T) {
+	stateDir := t.TempDir()
+	const sid = "ses_dsh_1"
+	logDir := filepath.Join(stateDir, "dsh-sessions", "proj", sid)
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fixture, err := os.ReadFile(filepath.Join("..", "harness", "dshacp", "testdata", "session.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(logDir, "session.jsonl"), fixture, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	reg := &registry.Registry{Path: filepath.Join(stateDir, "workers.jsonl")}
+	w1, err := reg.Allocate(sid, "m-dsh", "the dsh task", "/repo", 12345)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	models := []config.ModelConfig{{Name: "m-dsh", Endpoint: "http://fake:1/v1", Model: "x", Harness: "dsh"}}
+	o := New(&supervisor.Driver{}, models, stateDir)
+	o.DshRecoverGrace = 100 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go o.watchRegistry(ctx)
+
+	var sawTool, sawText, sawUsage bool
+	drainUntil(t, o.Feed(), 10*time.Second, func(m tea.Msg) bool {
+		switch v := m.(type) {
+		case ui.WorkerEventMsg:
+			if v.ID == w1 && v.Kind == "tool" {
+				sawTool = true
+			}
+			if v.ID == w1 && v.Kind == "text" {
+				sawText = true
+			}
+		case ui.WorkerUsageMsg:
+			if v.ID == w1 && v.Output == 52 {
+				sawUsage = true
+			}
+		case ui.WorkerUpsertMsg:
+			return v.ID == w1 && v.Status == "done" && strings.Contains(v.Summary, "recovered")
+		}
+		return false
+	})
+	if !sawTool || !sawText || !sawUsage {
+		t.Errorf("tool=%v text=%v usage=%v", sawTool, sawText, sawUsage)
+	}
+	if o.workerPID[w1] != 12345 {
+		t.Errorf("pid = %d", o.workerPID[w1])
+	}
+}
+
+// TestKillDshWorkerSignalsPid: killing a dsh worker SIGTERMs the recorded
+// subprocess pid instead of calling any opencode API.
+func TestKillDshWorkerSignalsPid(t *testing.T) {
+	sleeper := exec.Command("sleep", "60")
+	if err := sleeper.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() { _ = sleeper.Wait(); close(done) }()
+	defer sleeper.Process.Kill()
+
+	models := []config.ModelConfig{{Name: "m-dsh", Endpoint: "http://fake:1/v1", Model: "x", Harness: "dsh"}}
+	o := New(&supervisor.Driver{}, models, t.TempDir())
+	o.mu.Lock()
+	o.workerSession["w1"] = "ses_dsh"
+	o.workerModel["w1"] = "m-dsh"
+	o.workerPID["w1"] = sleeper.Process.Pid
+	o.unfinished["w1"] = true
+	o.mu.Unlock()
+
+	o.OnKillWorker("w1")
+	drainUntil(t, o.Feed(), 5*time.Second, func(m tea.Msg) bool {
+		tm, ok := m.(ui.ToastMsg)
+		return ok && strings.Contains(tm.Text, "killed")
+	})
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Error("worker process not terminated")
+	}
 }

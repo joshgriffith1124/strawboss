@@ -3,10 +3,12 @@
 # File order is preference order: the supervisor is told to favor earlier
 # entries, so list the preferred model first.
 #
-# endpoint = the `opencode serve` base URL (opencode runs locally; the GX10
-#            inference endpoints live behind opencode's provider config in
-#            ~/.config/opencode/opencode.json — see docs/NOTES.md).
-# model    = opencode model ref, "provider/model".
+# endpoint = harness-dependent: for opencode, the `opencode serve` base URL
+#            (opencode runs locally; the GX10 inference endpoints live behind
+#            opencode's provider config in ~/.config/opencode/opencode.json);
+#            for dsh, the OpenAI-compatible LLM base URL the worker talks to
+#            directly. See docs/NOTES.md.
+# model    = opencode: "provider/model" ref · dsh: the wire model id.
 
 [models.deepseek-flash]
 endpoint = "http://127.0.0.1:4477"
@@ -24,3 +26,9 @@ harness = "opencode"             # optional; "opencode" is the default and only 
 [models.qwen-flash]
 endpoint = "http://127.0.0.1:4477"
 model = "spark-a/qwen3.8-flash-next"
+
+[models.deepseek-dsh]
+endpoint = "http://gx10-52e4.local:8000/v1"  # the LLM endpoint itself — dsh needs no opencode
+model = "deepseek-v4-flash"
+harness = "dsh"                  # DeepSeek Harness ACP workers; setup in docs/NOTES.md
+# api_key = "local"              # sent to the endpoint; "local" when omitted

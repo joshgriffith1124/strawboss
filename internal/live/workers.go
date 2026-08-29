@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"strawboss/internal/harness"
+	"strawboss/internal/harness/dshacp"
 	"strawboss/internal/harness/opencode"
 	"strawboss/internal/registry"
 	"strawboss/internal/ui"
@@ -73,8 +75,17 @@ func (o *Orchestrator) applyRegistryEvent(ctx context.Context, ev registry.Event
 		o.workerModel[ev.Worker] = ev.Model
 		o.workerDir[ev.Worker] = ev.Dir
 		o.workerTask[ev.Worker] = ev.Task
+		o.workerPID[ev.Worker] = ev.PID
 		o.unfinished[ev.Worker] = true
+		startTail := false
+		if mc, ok := o.modelConfig(ev.Model); ok && mc.Harness == "dsh" && !o.tailing[ev.Worker] {
+			o.tailing[ev.Worker] = true
+			startTail = true
+		}
 		o.mu.Unlock()
+		if startTail {
+			go o.tailDshWorker(ctx, ev.Worker, ev.Session)
+		}
 		o.emit(ctx, ui.WorkerUpsertMsg{
 			ID: ev.Worker, Model: ev.Model, Task: ev.Task,
 			Status: "running", Started: ev.TS,
@@ -87,6 +98,60 @@ func (o *Orchestrator) applyRegistryEvent(ctx context.Context, ev registry.Event
 			ui.WorkerUpsertMsg{ID: ev.Worker, Status: ev.Status, Summary: ev.Summary, LogPath: ev.LogPath, Ended: ev.TS},
 			ui.WorkerUsageMsg{ID: ev.Worker, Input: ev.InputTokens, Output: ev.OutputTokens},
 		)
+	}
+}
+
+// tailDshWorker streams one dsh worker's session log into transcript and
+// usage msgs — dsh has no server to poll or subscribe to; the JSONL under
+// the persistence root is the observability surface (docs/NOTES.md). The
+// tailer ends at turn/end; if the worker is still unfinished then (its
+// delegate died — an orphaned dsh subprocess runs to completion on its
+// own), the row is closed as recovered like the opencode path.
+func (o *Orchestrator) tailDshWorker(ctx context.Context, wid, session string) {
+	defer func() {
+		o.mu.Lock()
+		delete(o.tailing, wid)
+		o.mu.Unlock()
+	}()
+	root := dshacp.SessionsRootFor(o.StateDir)
+	endReason := ""
+	for it := range dshacp.TailSession(ctx, root, session, 0) {
+		switch {
+		case it.Event != nil:
+			o.emit(ctx, ui.WorkerEventMsg{ID: wid, Kind: it.Event.Kind, Text: it.Event.Text})
+		case it.Usage != nil:
+			o.mu.Lock()
+			o.dshOut[wid] = it.Usage.OutputTokens
+			o.mu.Unlock()
+			o.emit(ctx, ui.WorkerUsageMsg{ID: wid, Input: it.Usage.InputTokens, Output: it.Usage.OutputTokens})
+		case it.TurnEnded:
+			endReason = it.EndReason
+		}
+	}
+	if ctx.Err() != nil || endReason == "" {
+		return
+	}
+	// Give the owning delegate a moment to record the finished event.
+	grace := o.DshRecoverGrace
+	if grace == 0 {
+		grace = 10 * time.Second
+	}
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(grace):
+	}
+	o.mu.Lock()
+	orphaned := o.unfinished[wid]
+	delete(o.unfinished, wid)
+	o.mu.Unlock()
+	if orphaned {
+		status := "done"
+		if endReason != "completed" {
+			status = "failed"
+		}
+		o.emit(ctx, ui.WorkerUpsertMsg{ID: wid, Status: status,
+			Summary: "(recovered — delegate process gone; turn " + endReason + ")"})
 	}
 }
 
@@ -115,9 +180,18 @@ func (o *Orchestrator) pollWorkers(ctx context.Context) {
 
 		type snapshot struct{ worker, session, model, dir string }
 		o.mu.Lock()
-		var open []snapshot
+		var open, openDsh []snapshot
 		for wid := range o.unfinished {
-			open = append(open, snapshot{wid, o.workerSession[wid], o.workerModel[wid], o.workerDir[wid]})
+			s := snapshot{wid, o.workerSession[wid], o.workerModel[wid], o.workerDir[wid]}
+			if mc, ok := o.modelConfig(s.model); ok && mc.Harness == "dsh" {
+				openDsh = append(openDsh, s)
+				continue
+			}
+			open = append(open, s)
+		}
+		dshOut := make(map[string]int, len(o.dshOut))
+		for k, v := range o.dshOut {
+			dshOut[k] = v
 		}
 		o.mu.Unlock()
 
@@ -182,10 +256,29 @@ func (o *Orchestrator) pollWorkers(ctx context.Context) {
 			}
 		}
 
+		// dsh workers have no server to poll: usage flows from their
+		// session-log tailers; active = unfinished; tok/s from tailer
+		// output deltas; reachability = a cheap probe of the LLM endpoint.
+		dshReachable := map[string]bool{}
+		for _, s := range openDsh {
+			mc, _ := o.modelConfig(s.model)
+			activePerModel[s.model]++
+			outDeltaPerModel[s.model] += dshOut[s.worker] - lastOut[s.worker]
+			lastOut[s.worker] = dshOut[s.worker]
+			base := strings.TrimRight(mc.Endpoint, "/")
+			if _, seen := dshReachable[base]; !seen {
+				dshReachable[base] = llmReachable(ctx, base)
+			}
+		}
+
 		for _, mc := range o.Models {
 			base := strings.TrimRight(mc.Endpoint, "/")
 			note := mc.Harness
-			if !reachable[base] {
+			if mc.Harness == "dsh" {
+				if up, probed := dshReachable[base]; probed && !up {
+					note = "endpoint unreachable"
+				}
+			} else if !reachable[base] {
 				note = "endpoint unreachable"
 			}
 			o.emit(ctx, ui.ModelStatMsg{
@@ -196,6 +289,22 @@ func (o *Orchestrator) pollWorkers(ctx context.Context) {
 			})
 		}
 	}
+}
+
+// llmReachable probes an OpenAI-compatible endpoint's model listing.
+func llmReachable(ctx context.Context, base string) bool {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "GET", base+"/models", nil)
+	if err != nil {
+		return false
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode < 500
 }
 
 // subscribeWorkerEvents streams one endpoint's /global/event feed into

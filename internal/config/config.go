@@ -13,6 +13,10 @@ import (
 
 // ModelConfig is a named inference target a worker can bind to. Workers and
 // the UI reference models by Name only — hardware/hosts stay invisible.
+//
+// Endpoint's meaning depends on the harness: for opencode it is the
+// `opencode serve` base URL; for dsh it is the OpenAI-compatible LLM base
+// URL the worker talks to directly.
 type ModelConfig struct {
 	Name     string `toml:"-"`
 	Endpoint string `toml:"endpoint"`
@@ -21,6 +25,10 @@ type ModelConfig struct {
 	// Variant selects the opencode model variant (e.g. a non-thinking mode
 	// for reasoning models). Empty uses the provider default.
 	Variant string `toml:"variant"`
+	// APIKey is sent to the endpoint by harnesses that talk to the LLM
+	// directly (dsh). Local OpenAI-compatible servers accept any value;
+	// empty defaults to "local".
+	APIKey string `toml:"api_key"`
 }
 
 // Supervisor holds settings for spawning the claude CLI.
@@ -96,8 +104,9 @@ type modelsFile struct {
 	Models map[string]ModelConfig `toml:"models"`
 }
 
-// knownHarnesses gates the harness field; only opencode exists in v1.
-var knownHarnesses = map[string]bool{"opencode": true}
+// knownHarnesses gates the harness field: opencode (v1) and dsh (DeepSeek
+// Harness ACP workers, docs/NOTES.md).
+var knownHarnesses = map[string]bool{"opencode": true, "dsh": true}
 
 // LoadModels reads models.toml at path and returns configs in declaration
 // order — the file's order is the preference order (the supervisor is told

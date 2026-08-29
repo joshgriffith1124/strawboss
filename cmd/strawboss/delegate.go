@@ -15,7 +15,6 @@ import (
 
 	"strawboss/internal/config"
 	"strawboss/internal/harness"
-	"strawboss/internal/harness/opencode"
 	"strawboss/internal/registry"
 	"strawboss/internal/runner"
 )
@@ -80,8 +79,11 @@ func runDelegate(args []string, stdout io.Writer) error {
 		return fmt.Errorf("delegate: no model %q in %s", *model, *modelsPath)
 	}
 
-	// mc.Harness is validated by LoadModels; opencode is the only v1 value.
-	h := opencode.New(mc, *dir, filepath.Join(*stateDir, "logs"))
+	// mc.Harness is validated by LoadModels; runner maps it to a harness.
+	h, err := runner.NewHarness(mc, *dir, *stateDir)
+	if err != nil {
+		return fmt.Errorf("delegate: %w", err)
+	}
 	// STRAWBOSS_RUN is set by the TUI on the supervisor subprocess and
 	// inherited here; it scopes these workers to that run.
 	reg := &registry.Registry{Path: filepath.Join(*stateDir, "workers.jsonl"), Run: os.Getenv("STRAWBOSS_RUN")}

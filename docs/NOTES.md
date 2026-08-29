@@ -177,3 +177,49 @@ Handled three ways:
 
 Also worth knowing: `limit.output` in ~/.config/opencode/opencode.json is the
 lever for the budget itself (currently 16384 for spark-a models).
+
+## DeepSeek Harness (dsh) 0.1.1-rc.2 as a second worker harness (verified 2026-08-29)
+
+Verified live against the installed npm global `@deepseek-ai/dsh` and a fake
+OpenAI-compatible endpoint; fixtures in `internal/harness/dshacp/testdata/`.
+
+- **The worker entry point is the `dsh-acp-demo` bin** (an [Agent Client
+  Protocol](https://agentclientprotocol.com) JSON-RPC server on stdio), run
+  directly with `--config <cordis.yml>` — NOT via the `dsh` profile launcher.
+  ndjson framing (no Content-Length headers). Sequence: `initialize` →
+  `session/new {cwd}` → `session/prompt` (BLOCKS until the turn quiesces,
+  returns `{stopReason: end_turn|cancelled}`). Committed assistant text
+  arrives as `session/update` `agent_message_chunk` notifications — a
+  natural terse summary. Reasoning, tool activity, and usage deliberately
+  stay OFF the ACP wire.
+- **Plugin specifiers resolve relative to the config file's directory**, so
+  the cordis.yml must live inside the dsh profile tree; strawboss writes
+  `~/.dsh/profiles/acp/strawboss.cordis.yml` (env-parameterized, never
+  touches the profile's own files). The acp profile must hold the acp-demo
+  packages: `dsh plugin --profile acp add @deepseek-ai/dsh-acp-demo
+  @deepseek-ai/dsh-acp @deepseek-ai/dsh-agent-spine-demo` plus the leaf
+  plugins (llm-deepseek, sandbox-*, bash-sandbox, subprocess-local,
+  user-approval, system-prompt, fs-*, tool-fs). pnpm `autoInstallPeers` is
+  false: peers do NOT come in automatically (the missing-peers state is
+  exactly where the 2026-08-28 session died mid-setup).
+- **Observability = the session JSONL**: with `persistenceCompression:
+  none`, every event lands in
+  `<persistenceRoot>/<mangled-cwd>/<sessionId>/session.jsonl` live:
+  `assistant/chunk` (`text-delta`/`reasoning`-typed blocks,
+  `tool-call-delta`, `usage {inputTokens,outputTokens}`, `finish`),
+  `tool/call`, `tool/result`, `turn/start`, `turn/end {reason}`. Find the
+  file by globbing for the session id — don't reimplement the cwd mangling.
+- **`dsh-llm-deepseek` takes a `baseURL` override** (chat-completions +
+  SSE), so workers can point straight at the GX10 sglang endpoint; model
+  ids pass through unchanged. `apiKeyEnv` names the env var. Requests carry
+  `reasoning_effort` and `thinking:{type}` — sglang tolerance for those
+  fields is UNVERIFIED (GX10 was down); revisit at live integration.
+- **`dsh-user-approval` `policy: never` means never ASK = auto-REJECT**,
+  not auto-allow. Unattended workers therefore need `sandbox-policy`
+  `mode: danger-full-access` (nothing asks) — the runtime-context message
+  confirms: "actions that require approval are rejected automatically".
+- The bash tool schema requires `description` alongside `command`; a
+  malformed tool call yields a clean `Error: invalid arguments` tool result
+  and the loop continues.
+- Boot diagnostics go to stderr (stdout is the wire); stdin EOF is
+  graceful shutdown. Kill from outside = SIGTERM the bin's PID.

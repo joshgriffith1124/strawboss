@@ -245,3 +245,76 @@ func TestDelegateParallelTasks(t *testing.T) {
 		t.Errorf("tasks = %v", tasks)
 	}
 }
+
+// TestDelegateDsh runs a delegation end-to-end over the dsh harness
+// against a fake dsh-acp-demo bin, checking the terse result and that the
+// registry recorded the worker subprocess pid for TUI kill.
+func TestDelegateDsh(t *testing.T) {
+	dir := t.TempDir()
+	fixture, err := filepath.Abs(filepath.Join("..", "..", "internal", "harness", "dshacp", "testdata", "session.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const sid = "ses_dsh_e2e"
+	script := `#!/bin/sh
+mkdir -p "$STRAWBOSS_DSH_SESSIONS/proj/` + sid + `"
+cp "` + fixture + `" "$STRAWBOSS_DSH_SESSIONS/proj/` + sid + `/session.jsonl"
+while read line; do
+  case "$line" in
+    *'"initialize"'*) echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}';;
+    *'"session/new"'*) echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"` + sid + `"}}';;
+    *'"session/prompt"'*)
+      echo '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"` + sid + `","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"dsh worker all done."}}}}'
+      echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}';;
+  esac
+done
+`
+	bin := filepath.Join(dir, "dsh-acp-demo")
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := filepath.Join(dir, "cordis.yml")
+	if err := os.WriteFile(cfg, []byte("[]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("STRAWBOSS_DSH_BIN", bin)
+	t.Setenv("STRAWBOSS_DSH_CONFIG", cfg)
+
+	stateDir := t.TempDir()
+	models := filepath.Join(stateDir, "models.toml")
+	toml := "[models.ds-worker]\nendpoint = \"http://fake:1/v1\"\nmodel = \"fake-model\"\nharness = \"dsh\"\n"
+	if err := os.WriteFile(models, []byte(toml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var out strings.Builder
+	err = runDelegate([]string{"--state-dir", stateDir, "--dir", t.TempDir(),
+		"--model", "ds-worker", "--task", "do the dsh thing"}, &out)
+	if err != nil {
+		t.Fatalf("delegate: %v\n%s", err, out.String())
+	}
+	got := out.String()
+	for _, want := range []string{"done", "dsh worker all done."} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output missing %q:\n%s", want, got)
+		}
+	}
+
+	reg := &registry.Registry{Path: filepath.Join(stateDir, "workers.jsonl")}
+	events, err := reg.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sawSpawn := false
+	for _, ev := range events {
+		if ev.Type == "spawned" {
+			sawSpawn = true
+			if ev.PID <= 0 {
+				t.Errorf("spawned event pid = %d, want the dsh subprocess pid", ev.PID)
+			}
+		}
+	}
+	if !sawSpawn {
+		t.Error("no spawned event recorded")
+	}
+}

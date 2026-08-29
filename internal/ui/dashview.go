@@ -92,10 +92,19 @@ func (m Model) viewWorkerTable(w, maxRows int) string {
 	head := fmt.Sprintf(" %-4s %-10s %-12s %-*s %8s %8s ",
 		"ID", "STATUS", "MODEL", w-52, "TASK", "TIME", "TOKENS")
 	lines := []string{sDim.Render(truncPlain(head, w-2))}
+	if m.filtering {
+		lines = append(lines, " "+m.filterInput.View())
+	} else if m.filter != "" {
+		lines = append(lines, " "+sTeal.Render("/ "+m.filter)+sFaint.Render("  (esc clears)"))
+	}
 
-	rows := m.sortedWorkers()
+	rows := m.visibleWorkers()
 	if len(rows) == 0 {
-		lines = append(lines, " "+sFaint.Render("no workers yet — delegations appear here live"))
+		empty := "no workers yet — delegations appear here live"
+		if m.filter != "" {
+			empty = "no workers match / " + m.filter
+		}
+		lines = append(lines, " "+sFaint.Render(empty))
 	}
 	for i, wk := range rows {
 		if maxRows > 0 && i >= maxRows {
@@ -145,7 +154,7 @@ func (m Model) viewDetailSplit(w, h int) string {
 	leftW := w * 55 / 100
 	rightW := w - leftW
 
-	rows := m.sortedWorkers()
+	rows := m.visibleWorkers()
 	var sel *workerRow
 	if m.selected < len(rows) {
 		sel = &rows[m.selected]

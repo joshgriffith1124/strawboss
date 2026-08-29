@@ -346,3 +346,50 @@ func TestToastMsgShowsAndExpires(t *testing.T) {
 		t.Errorf("toast survived expiry: %q", m.toast)
 	}
 }
+
+func TestWorkerFilter(t *testing.T) {
+	m := demoState(t)
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyTab}) // dashboard
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+	if !m.filtering {
+		t.Fatal("/ did not open the filter")
+	}
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("w2")},
+		tea.KeyMsg{Type: tea.KeyEnter})
+	if m.filtering || m.filter != "w2" {
+		t.Fatalf("filtering=%v filter=%q", m.filtering, m.filter)
+	}
+	rows := m.visibleWorkers()
+	if len(rows) != 1 || rows[0].ID != "w2" {
+		t.Fatalf("rows = %+v", rows)
+	}
+	// "!" shorthand = running.
+	m.filter = "!"
+	rows = m.visibleWorkers()
+	if len(rows) != 1 || rows[0].Status != "running" {
+		t.Fatalf("running rows = %+v", rows)
+	}
+	// esc clears an applied filter before leaving the tab.
+	m.filter = "w2"
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.filter != "" || m.tab != tabDashboard {
+		t.Fatalf("filter=%q tab=%d", m.filter, m.tab)
+	}
+}
+
+func TestLogsSourceFilterCycles(t *testing.T) {
+	m := demoState(t)
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("3")})
+	t.Log("won't reach logs from chat; go via tab")
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyTab}, tea.KeyMsg{Type: tea.KeyTab}) // chat→dash→logs
+	if m.tab != tabLogs {
+		t.Fatalf("tab = %d", m.tab)
+	}
+	want := []string{"sup", "wrk", "app", ""}
+	for _, exp := range want {
+		m = apply(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("f")})
+		if m.logSrc != exp {
+			t.Fatalf("logSrc = %q, want %q", m.logSrc, exp)
+		}
+	}
+}

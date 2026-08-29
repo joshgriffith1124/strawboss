@@ -145,12 +145,16 @@ type Model struct {
 	workerEvents map[string][]workerEvent
 	selected     int
 	follow       bool
+	filterInput  textinput.Model
+	filtering    bool   // filter input focused
+	filter       string // applied worker-table filter
 
 	// models
 	models []modelStat
 
 	// logs + toast
-	logs          []string
+	logs          []logLine
+	logSrc        string // logs-tab source filter: "" all, else sup/wrk/app
 	toast         string
 	toastUntil    time.Time
 	remoteChannel string // armed two-way channel ("" = none)
@@ -164,6 +168,8 @@ func New(feed <-chan tea.Msg) Model {
 	in.Prompt = sTealB.Render("› ")
 	in.Placeholder = ""
 	in.Focus()
+	filter := textinput.New()
+	filter.Prompt = sTealB.Render("/ ")
 	return Model{
 		feed:         feed,
 		started:      time.Now(),
@@ -171,6 +177,7 @@ func New(feed <-chan tea.Msg) Model {
 		workerEvents: map[string][]workerEvent{},
 		follow:       true,
 		input:        in,
+		filterInput:  filter,
 		auth:         "starting…",
 	}
 }
@@ -188,8 +195,15 @@ func (m Model) worker(id string) *workerRow {
 	return nil
 }
 
+// logLine is one logs-tab entry, kept with its source for filtering.
+type logLine struct {
+	src  string // "sup", "wrk", "app"
+	text string // fully formatted line
+}
+
 func (m *Model) log(source, line string) {
-	m.logs = append(m.logs, fmt.Sprintf("%s %-3s %s", time.Now().Format("15:04:05"), source, line))
+	m.logs = append(m.logs, logLine{src: source,
+		text: fmt.Sprintf("%s %-3s %s", time.Now().Format("15:04:05"), source, line)})
 	if len(m.logs) > 2000 {
 		m.logs = m.logs[len(m.logs)-2000:]
 	}
@@ -422,15 +436,59 @@ func (m *Model) showToast(text string) {
 
 // selectedWorker resolves the dashboard selection against display order.
 func (m Model) selectedWorker() *workerRow {
-	rows := m.sortedWorkers()
+	rows := m.visibleWorkers()
 	if m.selected >= 0 && m.selected < len(rows) {
 		return &rows[m.selected]
 	}
 	return nil
 }
 
+// visibleWorkers is display order with the table filter applied: a
+// case-insensitive substring match across id, model, status, task, and
+// summary. "!" alone means running, "x" alone means failed.
+func (m Model) visibleWorkers() []workerRow {
+	rows := m.sortedWorkers()
+	f := strings.ToLower(strings.TrimSpace(m.filter))
+	if f == "" {
+		return rows
+	}
+	switch f {
+	case "!":
+		f = "running"
+	case "x":
+		f = "failed"
+	}
+	var out []workerRow
+	for _, wk := range rows {
+		hay := strings.ToLower(wk.ID + " " + wk.Model + " " + wk.Status + " " + wk.Task + " " + wk.Summary)
+		if strings.Contains(hay, f) {
+			out = append(out, wk)
+		}
+	}
+	return out
+}
+
 func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	typing := m.tab == tabChat
+
+	// Filter entry owns the keyboard while focused.
+	if m.filtering {
+		switch msg.String() {
+		case "enter":
+			m.filter = strings.TrimSpace(m.filterInput.Value())
+			m.filtering = false
+			m.selected = 0
+			return m, nil
+		case "esc":
+			m.filtering = false
+			m.filter = ""
+			m.filterInput.SetValue("")
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.filterInput, cmd = m.filterInput.Update(msg)
+		return m, cmd
+	}
 
 	switch msg.String() {
 	case "ctrl+c":
@@ -445,6 +503,12 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		if m.tab == tabChat {
 			return m, func() tea.Msg { return InterruptMsg{} }
+		}
+		if m.tab == tabDashboard && m.filter != "" {
+			m.filter = ""
+			m.filterInput.SetValue("")
+			m.selected = 0
+			return m, nil
 		}
 		m.tab = tabChat
 		return m, nil
@@ -482,11 +546,28 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.selected--
 		}
 	case "down", "j":
-		if m.tab == tabDashboard && m.selected < len(m.workers)-1 {
+		if m.tab == tabDashboard && m.selected < len(m.visibleWorkers())-1 {
 			m.selected++
 		}
+	case "/":
+		if m.tab == tabDashboard {
+			m.filtering = true
+			m.filterInput.SetValue(m.filter)
+			m.filterInput.Focus()
+		}
 	case "f":
-		m.follow = !m.follow
+		if m.tab == tabLogs {
+			// Cycle the logs source filter: all → sup → wrk → app.
+			order := []string{"", "sup", "wrk", "app"}
+			for i, s := range order {
+				if m.logSrc == s {
+					m.logSrc = order[(i+1)%len(order)]
+					break
+				}
+			}
+		} else {
+			m.follow = !m.follow
+		}
 	case "x":
 		if m.tab != tabDashboard {
 			break

@@ -40,13 +40,21 @@ type workerRow struct {
 	Ended   time.Time
 	In, Out int
 	Ctx     int // current context footprint (0 = unknown)
+	Steps   int // completed model steps (dsh; 0 = unknown)
 }
 
 // workerRate is per-worker throughput derived from usage deltas.
 type workerRate struct {
 	out  int
 	at   time.Time
-	rate float64 // smoothed output tok/s
+	rate float64   // smoothed output tok/s
+	hist []float64 // rate samples for the sparkline (capped)
+}
+
+// resultLine is one recent delegation result for the supervisor pane.
+type resultLine struct {
+	text    string
+	isError bool
 }
 
 // modelStat mirrors ModelStatMsg field-for-field (conversion below).
@@ -159,7 +167,8 @@ type Model struct {
 	supCost                                    float64
 	supTurns                                   int
 	fiveHour, sevenDay                         float64
-	delegationResultTokens                     []int // per-result estimate, for the avg
+	delegationResultTokens                     []int        // per-result estimate, for the avg
+	recentResults                              []resultLine // last delegation results (capped)
 
 	// workers
 	workers      []workerRow
@@ -290,6 +299,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.chat = append(m.chat, chatItem{kind: "tool-in", when: time.Now(), toolID: msg.ToolID,
 			text: truncPlain(msg.Content, 600), isError: msg.IsError})
 		m.delegationResultTokens = append(m.delegationResultTokens, len(msg.Content)/4)
+		// Delegation results (terse "wN status …" lines and budget
+		// refusals) also feed the supervisor pane's recent list.
+		if fl := firstLine(msg.Content); isDelegationResult(fl) {
+			m.recentResults = append(m.recentResults, resultLine{text: fl, isError: msg.IsError})
+			if len(m.recentResults) > 5 {
+				m.recentResults = m.recentResults[len(m.recentResults)-5:]
+			}
+		}
 		m.log("sup", "← "+truncPlain(msg.Content, 120))
 		return m, Listen(m.feed)
 	case SupStatusMsg:
@@ -370,11 +387,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					r.rate = inst
 				}
 			}
+			if r.rate > 0 {
+				r.hist = append(r.hist, r.rate)
+				if len(r.hist) > 120 {
+					r.hist = r.hist[len(r.hist)-120:]
+				}
+			}
 			r.out, r.at = msg.Output, now
 			m.workerRates[msg.ID] = r
 			w.In, w.Out = msg.Input, msg.Output
 			if msg.Ctx > 0 {
 				w.Ctx = msg.Ctx
+				// dsh emits exactly one context-bearing usage per model
+				// step, so these double as a step counter.
+				w.Steps++
 			}
 		}
 		return m, Listen(m.feed)
@@ -669,6 +695,24 @@ func firstLine(s string) string {
 		return s[:i]
 	}
 	return s
+}
+
+// isDelegationResult recognizes the terse-result header ("wN status …")
+// and budget refusals among tool results — other tool output (Read,
+// Glob…) stays out of the recent-results list.
+func isDelegationResult(line string) bool {
+	if strings.Contains(line, "blocked by the budget guard") {
+		return true
+	}
+	if len(line) < 3 || line[0] != 'w' {
+		return false
+	}
+	rest := line[1:]
+	i := 0
+	for i < len(rest) && rest[i] >= '0' && rest[i] <= '9' {
+		i++
+	}
+	return i > 0 && i < len(rest) && rest[i] == ' '
 }
 
 // sortedWorkers returns the display order: queued+running first (newest

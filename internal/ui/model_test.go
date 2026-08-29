@@ -494,3 +494,51 @@ func TestWorkerDetailShowsThroughputAndContext(t *testing.T) {
 		}
 	}
 }
+
+func TestDetailExtrasAndRecentResults(t *testing.T) {
+	m := demoState(t)
+	// Three usage updates with growing output → rate history + steps.
+	for i, out := range []int{1000, 3000, 6000} {
+		r := m.workerRates["w1"]
+		r.at = time.Now().Add(-time.Second) // age the sample so a delta computes
+		m.workerRates["w1"] = r
+		m = apply(t, m, WorkerUsageMsg{ID: "w1", Input: 10000 + i, Output: out, Ctx: 5000 + i})
+	}
+	if m.worker("w1").Steps != 3 {
+		t.Errorf("steps = %d", m.worker("w1").Steps)
+	}
+	if len(m.workerRates["w1"].hist) < 2 {
+		t.Fatalf("hist = %v", m.workerRates["w1"].hist)
+	}
+
+	// Failed worker surfaces its last transcript error above the summary.
+	m = apply(t, m,
+		WorkerEventMsg{ID: "w1", Kind: "error", Text: "bash: tests exploded"},
+		WorkerUpsertMsg{ID: "w1", Status: "failed", Summary: "worker stopped"},
+		SupToolResultMsg{ToolID: "t1", Content: "w1 failed 2m10s · log /l\nworker stopped", IsError: true},
+		SupToolResultMsg{ToolID: "t2", Content: "some Read output that is not a delegation"},
+	)
+	m.selected = 0 // failed w1 sorts after queued w2… find it
+	rows := m.visibleWorkers()
+	for i, r := range rows {
+		if r.ID == "w1" {
+			m.selected = i
+		}
+	}
+	out := m.viewDetailSplit(140, 24)
+	for _, want := range []string{"tests exploded", "summary: worker stopped", "step 3",
+		"recent delegation results", "w1 failed 2m10s"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("detail missing %q", want)
+		}
+	}
+	if strings.Contains(out, "not a delegation") {
+		t.Error("non-delegation tool result leaked into recent results")
+	}
+	if len(m.workerRates["w1"].hist) >= 3 {
+		spark := sparkline(m.workerRates["w1"].hist, 20)
+		if spark == "" {
+			t.Error("sparkline empty despite history")
+		}
+	}
+}

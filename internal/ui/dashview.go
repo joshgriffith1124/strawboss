@@ -181,6 +181,18 @@ func (m Model) viewDetailSplit(w, h int) string {
 		}
 		lines = append(lines, " "+tok)
 
+		// Throughput history as a sparkline, once there's enough of it.
+		if r, ok := m.workerRates[sel.ID]; ok && len(r.hist) >= 3 && leftW >= 24 {
+			peak := 0.0
+			for _, v := range r.hist {
+				if v > peak {
+					peak = v
+				}
+			}
+			lines = append(lines, " "+sTeal.Render(sparkline(r.hist, leftW-16))+
+				sDim.Render(fmt.Sprintf(" peak %.0f", peak)))
+		}
+
 		// Context footprint vs the model's window, when either is known.
 		if sel.Ctx > 0 {
 			ctx := sText.Render("ctx " + formatTokens(sel.Ctx))
@@ -196,6 +208,9 @@ func (m Model) viewDetailSplit(w, h int) string {
 		}
 
 		meta := fmt.Sprintf("started %s · ran %s", sel.Started.Local().Format("15:04:05"), formatMinSec(elapsed))
+		if sel.Steps > 0 {
+			meta += fmt.Sprintf(" · step %d", sel.Steps)
+		}
 		if sel.Dir != "" {
 			meta += " · " + sel.Dir
 		}
@@ -213,7 +228,7 @@ func (m Model) viewDetailSplit(w, h int) string {
 			}
 		}
 		evs := m.workerEvents[sel.ID]
-		maxEv := h - 3 - len(lines)
+		maxEv := h - 4 - len(lines) // room for the error + summary tail
 		if maxEv < 1 {
 			maxEv = 1
 		}
@@ -235,6 +250,16 @@ func (m Model) viewDetailSplit(w, h int) string {
 				style = sFaint
 			}
 			lines = append(lines, " "+sFaint.Render(branch)+" "+style.Render(truncPlain(ev.text, leftW-8)))
+		}
+		if sel.Status == "failed" {
+			// The last error the worker hit, straight from the transcript —
+			// usually more specific than the summary.
+			for i := len(m.workerEvents[sel.ID]) - 1; i >= 0; i-- {
+				if ev := m.workerEvents[sel.ID][i]; ev.kind == "error" {
+					lines = append(lines, " "+sErr.Render(truncPlain(glyphFail+" "+ev.text, leftW-4)))
+					break
+				}
+			}
 		}
 		if sel.Status == "done" || sel.Status == "failed" {
 			lines = append(lines, " "+sDim.Render(truncPlain("summary: "+firstLine(sel.Summary), leftW-4)))
@@ -265,9 +290,51 @@ func (m Model) viewDetailSplit(w, h int) string {
 	if m.fiveHour > 0 {
 		supLines = append(supLines, " "+sDim.Render(fmt.Sprintf("plan window: 5h %.0f%% · 7d %.0f%%", m.fiveHour*100, m.sevenDay*100)))
 	}
+	if len(m.recentResults) > 0 {
+		supLines = append(supLines, "", " "+sDim.Render("recent delegation results"))
+		for _, r := range m.recentResults {
+			style := sText
+			if r.isError {
+				style = sErr
+			}
+			supLines = append(supLines, "  "+style.Render(truncPlain(r.text, rightW-6)))
+		}
+	}
 	right := panel("Supervisor detail", padLines(supLines, h-2), rightW, cSupBorder, cAmber)
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, right)
+}
+
+// sparkline renders rate samples as block glyphs, newest at the right.
+func sparkline(vals []float64, width int) string {
+	if width < 1 {
+		return ""
+	}
+	if len(vals) > width {
+		vals = vals[len(vals)-width:]
+	}
+	max := 0.0
+	for _, v := range vals {
+		if v > max {
+			max = v
+		}
+	}
+	if max <= 0 {
+		return ""
+	}
+	glyphs := []rune("▁▂▃▄▅▆▇█")
+	out := make([]rune, len(vals))
+	for i, v := range vals {
+		idx := int(v / max * float64(len(glyphs)-1))
+		if idx < 0 {
+			idx = 0
+		}
+		if idx >= len(glyphs) {
+			idx = len(glyphs) - 1
+		}
+		out[i] = glyphs[idx]
+	}
+	return string(out)
 }
 
 func padLines(lines []string, n int) []string {

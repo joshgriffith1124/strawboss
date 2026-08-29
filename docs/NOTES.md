@@ -314,3 +314,23 @@ Discord channel:
 - Note: the OpenClaw agent ALSO sees messages in that channel and may
   reply on its own — that's OpenClaw config territory (channel routing /
   allowlists), not something strawboss can suppress.
+
+## dsh vs opencode speed (verified 2026-08-29, controlled comparison)
+
+Perceived dsh slowness investigated; dsh is NOT slower per worker.
+Identical task (write+run fib.py), same model, same box: qwen-dsh 20.0s
+vs qwen-coder/opencode 30.1s — dsh won (smaller system prompt, lean
+loop; node boot ≈ 0.4s of the 20s; sglang prompt cache works across
+steps: cacheReadTokens grow per request). Raw generation throughput was
+equivalent all day (55–78 out-tok/s both harnesses). The slowness was:
+
+1. **Output budget mismatch**: the dsh template capped maxTokens at
+   16384 while opencode.json limit.output had been raised to 49152 —
+   big tasks ground ~290s to an output-budget FAILURE on dsh (w40, w41:
+   out≈16.4k, failed) where opencode finished (w32: 17.8k output, done).
+   Fixed: models.toml `max_tokens` (dsh only), default 49152 for parity.
+2. The since-fixed session-query.db lock forcing sequential dsh runs.
+
+Also fixed for comparability: dsh usage now counts cacheReadTokens as
+input, matching opencode's session-total accounting (dsh "in" numbers
+looked misleadingly tiny before).

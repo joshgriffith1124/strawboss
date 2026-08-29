@@ -29,7 +29,7 @@ type chunkData struct {
 		Type   string `json:"type"`
 		Text   string `json:"text"`
 		Name   string `json:"name"`
-		Usage  struct{ InputTokens, OutputTokens int }
+		Usage  struct{ InputTokens, OutputTokens, CacheReadTokens int }
 		Reason struct {
 			Kind string `json:"kind"`
 		} `json:"reason"`
@@ -116,7 +116,9 @@ func parseLine(line []byte, cum *harness.Usage, info *SessionInfo) []TailItem {
 		case "reasoning-delta", "reasoning":
 			return []TailItem{{Event: &harness.Event{Time: time.Now(), Kind: "reasoning", Text: d.Chunk.Text}}}
 		case "usage":
-			cum.InputTokens += d.Chunk.Usage.InputTokens
+			// Cache reads count as input — the same accounting opencode
+			// session totals use, so the TUI token economy compares.
+			cum.InputTokens += d.Chunk.Usage.InputTokens + d.Chunk.Usage.CacheReadTokens
 			cum.OutputTokens += d.Chunk.Usage.OutputTokens
 			u := *cum
 			if info != nil {

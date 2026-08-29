@@ -33,6 +33,12 @@ type ModelConfig struct {
 	// "code" (one run_code tool + a generated TypeScript SDK prompt), or
 	// "both". Ignored by the opencode harness.
 	ToolsMode string `toml:"tools_mode"`
+	// MaxTokens caps a dsh worker's per-request output (shared with
+	// reasoning). Default 49152 — parity with the opencode limit; an
+	// undersized cap makes big tasks grind to an output-budget failure
+	// (docs/NOTES.md). Ignored by the opencode harness (opencode.json
+	// limit.output owns it there).
+	MaxTokens int `toml:"max_tokens"`
 }
 
 // Supervisor holds settings for spawning the claude CLI.

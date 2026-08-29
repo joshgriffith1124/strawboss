@@ -201,6 +201,11 @@ func (h *Harness) Spawn(ctx context.Context, task string, mc config.ModelConfig)
 	if mc.ToolsMode != "" {
 		cmd.Env = append(cmd.Env, "STRAWBOSS_DSH_TOOLS_MODE="+mc.ToolsMode)
 	}
+	maxTokens := mc.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = 49152 // opencode-limit parity; see config.ModelConfig
+	}
+	cmd.Env = append(cmd.Env, "STRAWBOSS_DSH_MAXTOKENS="+strconv.Itoa(maxTokens))
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		proxy.Close()

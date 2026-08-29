@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"strawboss/internal/ui"
+	"github.com/joshgriffith1124/strawboss/internal/ui"
 )
 
 // ensureServers keeps `opencode serve` alive for every localhost endpoint

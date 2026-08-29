@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"strawboss/internal/ui"
+	"github.com/joshgriffith1124/strawboss/internal/ui"
 )
 
 // The budget guard watches the metered side of a run — notional

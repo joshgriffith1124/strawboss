@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"strawboss/internal/config"
-	"strawboss/internal/harness"
+	"github.com/joshgriffith1124/strawboss/internal/config"
+	"github.com/joshgriffith1124/strawboss/internal/harness"
 )
 
 // fakeBin writes a shell script speaking just enough ACP: initialize and

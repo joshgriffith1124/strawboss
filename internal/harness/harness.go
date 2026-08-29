@@ -9,7 +9,7 @@ import (
 	"context"
 	"time"
 
-	"strawboss/internal/config"
+	"github.com/joshgriffith1124/strawboss/internal/config"
 )
 
 // Status is a worker's lifecycle state.

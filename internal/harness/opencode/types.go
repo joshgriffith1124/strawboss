@@ -1,7 +1,7 @@
 // Package opencode implements harness.WorkerHarness against a local
 // `opencode serve` HTTP API (verified against opencode 1.18.25 — see
 // docs/NOTES.md). opencode runs on this machine; the model configs it
-// serves point at the GX10 inference endpoints.
+// serves point at the local inference endpoints.
 package opencode
 
 import "encoding/json"

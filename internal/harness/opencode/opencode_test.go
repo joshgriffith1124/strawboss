@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"strawboss/internal/config"
-	"strawboss/internal/harness"
+	"github.com/joshgriffith1124/strawboss/internal/config"
+	"github.com/joshgriffith1124/strawboss/internal/harness"
 )
 
 // fixtureSID is the real session id inside the captured fixtures

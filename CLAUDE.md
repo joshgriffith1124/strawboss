@@ -1,13 +1,13 @@
 # Strawboss
 
 Go TUI that runs a Claude Code supervisor (headless CLI, subscription auth) which delegates
-coding tasks to local AI workers (opencode on the GX10 boxes) and visualizes the whole operation:
+coding tasks to local AI workers (opencode/dsh against local inference endpoints) and visualizes the whole operation:
 chat with the supervisor, live worker table, supervisor-vs-local token economy.
 
 Docs: `docs/KICKOFF.md` (milestones, stack), `docs/IDEA.md` (full design rationale),
 `docs/MOCKUP.html` (UI spec — match its layout, colors, and glyphs).
 
-## Invariants — do not violate without Josh's sign-off
+## Invariants — do not violate without the maintainer's sign-off
 
 1. **Subscription auth only.** Spawn the `claude` CLI with `ANTHROPIC_API_KEY` scrubbed from the
    subprocess env. Never pass `--bare`. Never use the Agent SDK (requires API key). Marginal

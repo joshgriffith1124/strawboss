@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"strawboss/internal/worktree"
+	"github.com/joshgriffith1124/strawboss/internal/worktree"
 )
 
 func TestClean(t *testing.T) {

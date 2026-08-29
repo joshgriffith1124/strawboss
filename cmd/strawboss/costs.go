@@ -8,8 +8,8 @@ import (
 	"sort"
 	"time"
 
-	"strawboss/internal/config"
-	"strawboss/internal/registry"
+	"github.com/joshgriffith1124/strawboss/internal/config"
+	"github.com/joshgriffith1124/strawboss/internal/registry"
 )
 
 // runCosts recomputes the token economy from the replayable JSONL

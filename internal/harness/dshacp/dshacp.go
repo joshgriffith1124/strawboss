@@ -19,8 +19,8 @@ import (
 	"syscall"
 	"time"
 
-	"strawboss/internal/config"
-	"strawboss/internal/harness"
+	"github.com/joshgriffith1124/strawboss/internal/config"
+	"github.com/joshgriffith1124/strawboss/internal/harness"
 )
 
 //go:embed cordis.yml

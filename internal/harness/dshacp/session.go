@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"strawboss/internal/harness"
+	"github.com/joshgriffith1124/strawboss/internal/harness"
 )
 
 // The dsh session log (`persistenceCompression: none`) is the worker's

@@ -7,8 +7,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"strawboss/internal/supervisor"
-	"strawboss/internal/ui"
+	"github.com/joshgriffith1124/strawboss/internal/supervisor"
+	"github.com/joshgriffith1124/strawboss/internal/ui"
 )
 
 func TestParseDelegate(t *testing.T) {

@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"strawboss/internal/ui"
+	"github.com/joshgriffith1124/strawboss/internal/ui"
 )
 
 // TestTimeline drains the replay feed at high speed and checks the shape:

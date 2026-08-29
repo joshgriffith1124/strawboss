@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"strawboss/internal/registry"
-	"strawboss/internal/ui"
+	"github.com/joshgriffith1124/strawboss/internal/registry"
+	"github.com/joshgriffith1124/strawboss/internal/ui"
 )
 
 // Per-project session history: one JSONL line per supervisor session,

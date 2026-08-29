@@ -14,11 +14,11 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"strawboss/internal/harness"
-	"strawboss/internal/harness/dshacp"
-	"strawboss/internal/harness/opencode"
-	"strawboss/internal/registry"
-	"strawboss/internal/ui"
+	"github.com/joshgriffith1124/strawboss/internal/harness"
+	"github.com/joshgriffith1124/strawboss/internal/harness/dshacp"
+	"github.com/joshgriffith1124/strawboss/internal/harness/opencode"
+	"github.com/joshgriffith1124/strawboss/internal/registry"
+	"github.com/joshgriffith1124/strawboss/internal/ui"
 )
 
 // watchRegistry tails workers.jsonl: historical events replay at startup
@@ -398,7 +398,7 @@ func (o *Orchestrator) subscribeWorkerEvents(ctx context.Context, base string) {
 }
 
 // mapWorkerEvent turns one opencode SSE event into transcript msgs for the
-// worker it belongs to (unknown sessions — e.g. Josh's own opencode TUI
+// worker it belongs to (unknown sessions — e.g. the user's own opencode TUI
 // sessions — are ignored).
 func (o *Orchestrator) mapWorkerEvent(ev opencode.ServerEvent) []tea.Msg {
 	o.mu.Lock()

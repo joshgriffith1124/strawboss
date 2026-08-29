@@ -12,12 +12,12 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"strawboss/internal/ui"
+	"github.com/joshgriffith1124/strawboss/internal/ui"
 )
 
 // Remote reach lives here: alerts fan out to ntfy and/or an OpenClaw
 // channel (Discord etc.), and with two-way enabled the OpenClaw channel
-// is polled so Josh can steer a stuck operation from his phone — replies
+// is polled so the user can steer a stuck operation from a phone — replies
 // are injected as ordinary supervisor prompts (mid-turn input works) and
 // the supervisor's answers are relayed back. All of it is local HTTP or
 // CLI execs; nothing observes the supervisor by talking to it.
@@ -178,7 +178,7 @@ func (o *Orchestrator) openclawRead(ctx context.Context, afterID uint64) ([]open
 	return parsed.Payload.Messages, nil
 }
 
-// openclawLoop polls the channel and turns Josh's messages into
+// openclawLoop polls the channel and turns the user's messages into
 // supervisor prompts. History from before startup is baseline, never
 // commands; bot-authored messages (our own notifications, the OpenClaw
 // agent) are ignored, so nothing can feed back.

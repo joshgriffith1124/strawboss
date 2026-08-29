@@ -9,7 +9,7 @@ import (
 	"strings"
 	"syscall"
 
-	"strawboss/internal/supervisor"
+	"github.com/joshgriffith1124/strawboss/internal/supervisor"
 )
 
 // runChat is the M1 console harness: a multi-turn conversation with the

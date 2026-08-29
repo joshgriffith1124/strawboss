@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"strawboss/internal/config"
-	"strawboss/internal/harness"
+	"github.com/joshgriffith1124/strawboss/internal/config"
+	"github.com/joshgriffith1124/strawboss/internal/harness"
 )
 
 // Harness implements harness.WorkerHarness against one `opencode serve`

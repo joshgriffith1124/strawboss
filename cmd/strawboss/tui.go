@@ -9,11 +9,11 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"strawboss/internal/config"
-	"strawboss/internal/live"
-	"strawboss/internal/supervisor"
-	"strawboss/internal/ui"
-	"strawboss/internal/ui/replay"
+	"github.com/joshgriffith1124/strawboss/internal/config"
+	"github.com/joshgriffith1124/strawboss/internal/live"
+	"github.com/joshgriffith1124/strawboss/internal/supervisor"
+	"github.com/joshgriffith1124/strawboss/internal/ui"
+	"github.com/joshgriffith1124/strawboss/internal/ui/replay"
 )
 
 // runTUI launches the Bubble Tea app over the live feeds (supervisor

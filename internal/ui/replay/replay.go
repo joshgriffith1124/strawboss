@@ -14,9 +14,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"strawboss/internal/harness/opencode"
-	"strawboss/internal/supervisor"
-	"strawboss/internal/ui"
+	"github.com/joshgriffith1124/strawboss/internal/harness/opencode"
+	"github.com/joshgriffith1124/strawboss/internal/supervisor"
+	"github.com/joshgriffith1124/strawboss/internal/ui"
 )
 
 //go:embed testdata/sup_turn.jsonl

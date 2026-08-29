@@ -11,11 +11,11 @@ import (
 	"path/filepath"
 	"time"
 
-	"strawboss/internal/config"
-	"strawboss/internal/harness"
-	"strawboss/internal/harness/dshacp"
-	"strawboss/internal/harness/opencode"
-	"strawboss/internal/registry"
+	"github.com/joshgriffith1124/strawboss/internal/config"
+	"github.com/joshgriffith1124/strawboss/internal/harness"
+	"github.com/joshgriffith1124/strawboss/internal/harness/dshacp"
+	"github.com/joshgriffith1124/strawboss/internal/harness/opencode"
+	"github.com/joshgriffith1124/strawboss/internal/registry"
 )
 
 // NewHarness builds the WorkerHarness a model config names. LoadModels

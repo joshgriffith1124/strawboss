@@ -11,7 +11,7 @@ import (
 
 // TestViewNeverPanics renders every tab at a sweep of terminal sizes with
 // busy state — a View panic at some odd width must be caught here, not in
-// Josh's terminal.
+// a live terminal.
 func TestViewNeverPanics(t *testing.T) {
 	m := New(make(chan tea.Msg))
 	msgs := []tea.Msg{

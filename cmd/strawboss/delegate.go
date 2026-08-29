@@ -15,12 +15,12 @@ import (
 	"syscall"
 	"time"
 
-	"strawboss/internal/config"
-	"strawboss/internal/harness"
-	"strawboss/internal/live"
-	"strawboss/internal/registry"
-	"strawboss/internal/runner"
-	"strawboss/internal/worktree"
+	"github.com/joshgriffith1124/strawboss/internal/config"
+	"github.com/joshgriffith1124/strawboss/internal/harness"
+	"github.com/joshgriffith1124/strawboss/internal/live"
+	"github.com/joshgriffith1124/strawboss/internal/registry"
+	"github.com/joshgriffith1124/strawboss/internal/runner"
+	"github.com/joshgriffith1124/strawboss/internal/worktree"
 )
 
 // runDelegate is the command the supervisor calls to spawn workers. Its

@@ -6,10 +6,10 @@ import (
 	"syscall"
 	"time"
 
-	"strawboss/internal/config"
-	"strawboss/internal/registry"
-	"strawboss/internal/runner"
-	"strawboss/internal/ui"
+	"github.com/joshgriffith1124/strawboss/internal/config"
+	"github.com/joshgriffith1124/strawboss/internal/registry"
+	"github.com/joshgriffith1124/strawboss/internal/runner"
+	"github.com/joshgriffith1124/strawboss/internal/ui"
 )
 
 // retryTimeout bounds a TUI-spawned retry worker, matching delegate's

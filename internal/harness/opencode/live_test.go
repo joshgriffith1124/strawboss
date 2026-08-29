@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"strawboss/internal/config"
-	"strawboss/internal/harness"
+	"github.com/joshgriffith1124/strawboss/internal/config"
+	"github.com/joshgriffith1124/strawboss/internal/harness"
 )
 
 // TestLiveWorker proves the harness against a real `opencode serve` and a

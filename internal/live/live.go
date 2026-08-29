@@ -16,9 +16,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"strawboss/internal/config"
-	"strawboss/internal/supervisor"
-	"strawboss/internal/ui"
+	"github.com/joshgriffith1124/strawboss/internal/config"
+	"github.com/joshgriffith1124/strawboss/internal/supervisor"
+	"github.com/joshgriffith1124/strawboss/internal/ui"
 )
 
 // Orchestrator runs the live feeds and exposes them as one tea.Msg channel.

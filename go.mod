@@ -1,4 +1,4 @@
-module strawboss
+module github.com/joshgriffith1124/strawboss
 
 go 1.27.0
 

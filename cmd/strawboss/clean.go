@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"strawboss/internal/config"
-	"strawboss/internal/worktree"
+	"github.com/joshgriffith1124/strawboss/internal/config"
+	"github.com/joshgriffith1124/strawboss/internal/worktree"
 )
 
 // runClean is the retention sweep: worker logs and dsh session logs older

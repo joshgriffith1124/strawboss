@@ -11,8 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"strawboss/internal/live"
-	"strawboss/internal/registry"
+	"github.com/joshgriffith1124/strawboss/internal/live"
+	"github.com/joshgriffith1124/strawboss/internal/registry"
 )
 
 // fakeOpencode serves the minimal API surface delegate exercises. mode

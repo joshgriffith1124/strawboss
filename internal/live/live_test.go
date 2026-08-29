@@ -16,11 +16,11 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"strawboss/internal/config"
-	"strawboss/internal/harness/opencode"
-	"strawboss/internal/registry"
-	"strawboss/internal/supervisor"
-	"strawboss/internal/ui"
+	"github.com/joshgriffith1124/strawboss/internal/config"
+	"github.com/joshgriffith1124/strawboss/internal/harness/opencode"
+	"github.com/joshgriffith1124/strawboss/internal/registry"
+	"github.com/joshgriffith1124/strawboss/internal/supervisor"
+	"github.com/joshgriffith1124/strawboss/internal/ui"
 )
 
 // drainUntil pulls feed msgs until pred returns true or the timeout hits.

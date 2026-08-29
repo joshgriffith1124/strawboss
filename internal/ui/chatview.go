@@ -205,13 +205,14 @@ func (m Model) viewTokensPanel(w int) string {
 	// Headline numbers are FRESH tokens: supervisor cache reads are the
 	// conversation prefix re-read every turn — folding them into the
 	// headline made the paid side look enormous. They get their own dim
-	// line instead.
-	freshSup := m.supIn + m.supCacheWrite + m.supOut
+	// line instead. Totals include the RUNNING turn's live estimate.
+	supIn, supCacheRead, supCacheWrite, supOut := m.supTokens()
+	freshSup := supIn + supCacheWrite + supOut
 	lines := []string{
 		kv(w, "supervisor", sText.Render(formatTokens(freshSup)+" · ")+sAmberB.Render("plan")),
 	}
-	if m.supCacheRead > 0 {
-		lines = append(lines, kv(w, "  cache reads", sFaint.Render(formatTokens(m.supCacheRead)+" · free-ish")))
+	if supCacheRead > 0 {
+		lines = append(lines, kv(w, "  cache reads", sFaint.Render(formatTokens(supCacheRead)+" · free-ish")))
 	}
 	lines = append(lines,
 		kv(w, "workers", sText.Render(formatTokens(wrkTotal)+" · ")+sTealB.Render("$0.00")),

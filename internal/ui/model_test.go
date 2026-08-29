@@ -705,3 +705,37 @@ func TestFeedBatchFoldsInOneUpdate(t *testing.T) {
 		t.Fatal("batch did not re-arm the listener")
 	}
 }
+
+// TestLiveTurnUsageShowsMidTurn: the supervisor counter must move DURING
+// a long turn (per-call estimates), then snap to the authoritative turn
+// totals without double-counting.
+func TestLiveTurnUsageShowsMidTurn(t *testing.T) {
+	m := New(make(chan tea.Msg))
+	m = apply(t, m,
+		tea.WindowSizeMsg{Width: 120, Height: 40},
+		SupTurnUsageMsg{Input: 100, Output: 50, CacheRead: 2000, CacheWrite: 500},
+		SupTurnUsageMsg{Input: 30, Output: 20, CacheRead: 2500},
+	)
+	in, cacheR, cacheW, out := m.supTokens()
+	if in != 130 || out != 70 || cacheR != 4500 || cacheW != 500 {
+		t.Fatalf("mid-turn totals = %d/%d/%d/%d", in, cacheR, cacheW, out)
+	}
+	tokens := m.viewTokensPanel(38)
+	if !strings.Contains(tokens, "700 · ") {
+		t.Errorf("mid-turn fresh total (700) not shown:\n%s", tokens)
+	}
+
+	// The turn result is authoritative: commit and drop the estimate.
+	m = apply(t, m, SupUsageMsg{Input: 140, Output: 75, CacheRead: 4600, CacheWrite: 500, Turns: 1})
+	in, cacheR, _, out = m.supTokens()
+	if in != 140 || out != 75 || cacheR != 4600 {
+		t.Fatalf("post-turn totals double-counted: %d/%d/%d", in, cacheR, out)
+	}
+
+	// An interrupted turn keeps its estimates.
+	m = apply(t, m, SupTurnUsageMsg{Input: 10, Output: 5}, SupTurnDoneMsg{Interrupted: true})
+	in, _, _, out = m.supTokens()
+	if in != 150 || out != 80 {
+		t.Fatalf("interrupted-turn estimate lost: %d/%d", in, out)
+	}
+}

@@ -68,6 +68,13 @@ type modelStat struct {
 	ContextWindow int
 }
 
+// supTokens is the display view of supervisor usage: committed turn
+// totals plus the running turn's live estimate.
+func (m Model) supTokens() (in, cacheRead, cacheWrite, out int) {
+	return m.supIn + m.turnIn, m.supCacheRead + m.turnCacheRead,
+		m.supCacheWrite + m.turnCacheWrite, m.supOut + m.turnOut
+}
+
 // contextWindowFor is the model's reported context length, 0 if unknown.
 func (m Model) contextWindowFor(name string) int {
 	for _, ms := range m.models {
@@ -166,13 +173,16 @@ type Model struct {
 	chat      []chatItem
 	input     textinput.Model
 
-	// token economy
-	supIn, supOut, supCacheRead, supCacheWrite int
-	supCost                                    float64
-	supTurns                                   int
-	fiveHour, sevenDay                         float64
-	delegationResultTokens                     []int        // per-result estimate, for the avg
-	recentResults                              []resultLine // last delegation results (capped)
+	// token economy: committed totals (from turn results) plus a live
+	// bucket for the running turn (per-call estimates, replaced by the
+	// authoritative result when the turn ends).
+	supIn, supOut, supCacheRead, supCacheWrite     int
+	turnIn, turnOut, turnCacheRead, turnCacheWrite int
+	supCost                                        float64
+	supTurns                                       int
+	fiveHour, sevenDay                             float64
+	delegationResultTokens                         []int        // per-result estimate, for the avg
+	recentResults                                  []resultLine // last delegation results (capped)
 
 	// workers
 	workers      []workerRow
@@ -352,13 +362,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case SupStatusMsg:
 		m.supStatus = msg.Status
 		return m, Listen(m.feed)
+	case SupTurnUsageMsg:
+		m.turnIn += msg.Input
+		m.turnOut += msg.Output
+		m.turnCacheRead += msg.CacheRead
+		m.turnCacheWrite += msg.CacheWrite
+		return m, Listen(m.feed)
 	case SupUsageMsg:
+		// Authoritative turn totals: commit them and drop the live
+		// estimate so nothing double-counts.
 		m.supIn += msg.Input
 		m.supOut += msg.Output
 		m.supCacheRead += msg.CacheRead
 		m.supCacheWrite += msg.CacheWrite
 		m.supCost += msg.CostUSD
 		m.supTurns += msg.Turns
+		m.turnIn, m.turnOut, m.turnCacheRead, m.turnCacheWrite = 0, 0, 0, 0
 		return m, Listen(m.feed)
 	case SupRateLimitMsg:
 		m.fiveHour, m.sevenDay = msg.FiveHour, msg.SevenDay
@@ -366,6 +385,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case SupTurnDoneMsg:
 		m.flushStreaming()
 		m.supStatus = ""
+		// A turn that died without a result (interrupt, crash) keeps its
+		// per-call estimates as the best available record.
+		m.supIn += m.turnIn
+		m.supOut += m.turnOut
+		m.supCacheRead += m.turnCacheRead
+		m.supCacheWrite += m.turnCacheWrite
+		m.turnIn, m.turnOut, m.turnCacheRead, m.turnCacheWrite = 0, 0, 0, 0
 		if msg.Err != "" {
 			m.chat = append(m.chat, chatItem{kind: "note", when: time.Now(), text: "supervisor error: " + msg.Err, isError: true})
 			m.ringBell("supervisor error")

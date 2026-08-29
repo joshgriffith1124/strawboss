@@ -30,8 +30,10 @@ func (m Model) viewDashboard(w, h int) string {
 
 func (m Model) viewMetrics(w int) string {
 	quarter := w / 4
-	// Fresh tokens headline; cache reads noted, never folded in.
-	supFresh := m.supIn + m.supCacheWrite + m.supOut
+	// Fresh tokens headline; cache reads noted, never folded in. Totals
+	// include the running turn's live estimate.
+	supMIn, supMCacheR, supMCacheW, supMOut := m.supTokens()
+	supFresh := supMIn + supMCacheW + supMOut
 	wrkIn, wrkOut, active := 0, 0, 0
 	for _, wk := range m.workers {
 		wrkIn += wk.In
@@ -43,7 +45,7 @@ func (m Model) viewMetrics(w int) string {
 
 	sup := panel("● Supervisor · plan", []string{
 		" " + sBoldT.Render(formatTokens(supFresh)+" fresh tok · ") + sAmberB.Render(fmt.Sprintf("$%.2f", 0.0)),
-		" " + sDim.Render(fmt.Sprintf("%s auth · +%s cached · %d turns", m.auth, formatTokens(m.supCacheRead), m.supTurns)),
+		" " + sDim.Render(fmt.Sprintf("%s auth · +%s cached · %d turns", m.auth, formatTokens(supMCacheR), m.supTurns)),
 	}, quarter, cBord, cAmber)
 
 	wrk := panel("● Workers · local", []string{
@@ -266,10 +268,11 @@ func (m Model) viewDetailSplit(w, h int) string {
 	}
 	left := panel(title, padLines(lines, h-2), leftW, cWrkBorder, cTeal)
 
-	supIn := m.supIn + m.supCacheWrite // fresh input; cache reads separate
+	dIn, dCacheR, dCacheW, dOut := m.supTokens()
+	supIn := dIn + dCacheW // fresh input; cache reads separate
 	cachePct := 0
-	if total := supIn + m.supCacheRead; total > 0 {
-		cachePct = 100 * m.supCacheRead / total
+	if total := supIn + dCacheR; total > 0 {
+		cachePct = 100 * dCacheR / total
 	}
 	avgResult := 0
 	for _, n := range m.delegationResultTokens {
@@ -280,8 +283,8 @@ func (m Model) viewDetailSplit(w, h int) string {
 	}
 	supLines := []string{
 		" " + sDim.Render("auth ") + sAmber.Render(m.auth) + sDim.Render(" · marginal cost ") + sTeal.Render("$0.00"),
-		" " + sDim.Render(fmt.Sprintf("fresh in %8s   cache-read %s (%d%%)", formatTokens(supIn), formatTokens(m.supCacheRead), cachePct)),
-		" " + sDim.Render(fmt.Sprintf("output   %8s", formatTokens(m.supOut))),
+		" " + sDim.Render(fmt.Sprintf("fresh in %8s   cache-read %s (%d%%)", formatTokens(supIn), formatTokens(dCacheR), cachePct)),
+		" " + sDim.Render(fmt.Sprintf("output   %8s", formatTokens(dOut))),
 		" " + sDim.Render(fmt.Sprintf("notional API value $%.2f · avg %d tok/delegation result", m.supCost, avgResult)),
 	}
 	if m.fiveHour > 0 {

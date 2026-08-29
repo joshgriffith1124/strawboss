@@ -35,6 +35,14 @@ func mapSupEvent(ev supervisor.Event, pid int) []tea.Msg {
 		return []tea.Msg{ui.SupStatusMsg{Status: ""}, ui.SupTextDeltaMsg{Text: e.Text}}
 	case supervisor.AssistantEvent:
 		var msgs []tea.Msg
+		if e.Usage.InputTokens+e.Usage.OutputTokens+e.Usage.CacheReadTokens+e.Usage.CacheCreationTokens > 0 {
+			msgs = append(msgs, ui.SupTurnUsageMsg{
+				Input:      e.Usage.InputTokens,
+				Output:     e.Usage.OutputTokens,
+				CacheRead:  e.Usage.CacheReadTokens,
+				CacheWrite: e.Usage.CacheCreationTokens,
+			})
+		}
 		if strings.TrimSpace(e.Text) != "" {
 			ts := e.Timestamp
 			if ts.IsZero() {

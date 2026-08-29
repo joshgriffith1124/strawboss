@@ -59,12 +59,23 @@ type SupToolResultMsg struct {
 // SupStatusMsg drives the "✻ thinking…" line ("" clears it).
 type SupStatusMsg struct{ Status string }
 
-// SupUsageMsg accumulates supervisor token totals (per completed turn).
+// SupUsageMsg accumulates supervisor token totals (per completed turn —
+// the authoritative numbers from the result event; arriving, it replaces
+// the live-turn estimate built from SupTurnUsageMsg).
 type SupUsageMsg struct {
 	Input, Output         int
 	CacheRead, CacheWrite int
 	CostUSD               float64
 	Turns                 int // increment
+}
+
+// SupTurnUsageMsg is one API call's usage WITHIN the running turn (from
+// each complete assistant message) — without it the supervisor counter
+// sits at zero through a whole long turn (seen live: 11 minutes of
+// visible work, "supervisor 0 · plan").
+type SupTurnUsageMsg struct {
+	Input, Output         int
+	CacheRead, CacheWrite int
 }
 
 // SupRateLimitMsg is live plan-window utilization (0..1).

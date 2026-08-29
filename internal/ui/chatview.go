@@ -40,10 +40,10 @@ func (m Model) viewChatColumn(w, h int) string {
 			// .Local(): stream timestamps arrive in UTC; wall-clock labels
 			// must agree with the user's clock.
 			b.WriteString(sRun.Render("YOU · "+it.when.Local().Format("15:04")) + "\n")
-			b.WriteString(wrap.Render(sBrite.Render(it.text)) + "\n\n")
+			b.WriteString(wrap.Render(sBrite.Render(hardWrap(it.text, w-4))) + "\n\n")
 		case "sup":
 			b.WriteString(sAmber.Render("SUPERVISOR · "+it.when.Local().Format("15:04")) + "\n")
-			b.WriteString(wrap.Render(sText.Render(it.text)) + "\n\n")
+			b.WriteString(wrap.Render(mdInline(hardWrap(it.text, w-4))) + "\n\n")
 		case "tool-out":
 			b.WriteString(toolBlock(sAmber.Render(glyphOut), it.text, 240, sText, w))
 		case "tool-in":
@@ -51,9 +51,18 @@ func (m Model) viewChatColumn(w, h int) string {
 			if it.isError {
 				mark = sErr.Render(glyphFail)
 			}
-			// Results get more room: the terse-result contract caps them,
-			// and their content (summaries, denial reasons) is the point.
-			b.WriteString(toolBlock(sTeal.Render(glyphIn)+" "+mark, it.text, 500, sDim, w))
+			// Delegation results get room — their content (summaries,
+			// refusals) is the point. Every other tool result (Read blobs,
+			// edit confirmations) collapses to one dim line: the raw
+			// content is supervisor food, not conversation.
+			maxLen := 500
+			if !isDelegationResult(firstLine(it.text)) && !it.isError {
+				maxLen = w - 20
+				if maxLen > 160 {
+					maxLen = 160
+				}
+			}
+			b.WriteString(toolBlock(sTeal.Render(glyphIn)+" "+mark, it.text, maxLen, sDim, w))
 		case "note":
 			style := sDim
 			if it.isError {
@@ -64,7 +73,7 @@ func (m Model) viewChatColumn(w, h int) string {
 	}
 	if m.streaming.Len() > 0 {
 		b.WriteString(sAmber.Render("SUPERVISOR") + "\n")
-		b.WriteString(wrap.Render(sText.Render(m.streaming.String())) + "\n")
+		b.WriteString(wrap.Render(mdInline(hardWrap(m.streaming.String(), w-4))) + "\n")
 	}
 	if m.supStatus != "" {
 		star := glyphStream
@@ -95,15 +104,75 @@ func (m Model) viewChatColumn(w, h int) string {
 
 // toolBlock renders an inline tool line that WRAPS instead of vanishing
 // behind an ellipsis: denial reasons and task text must stay readable. cap
-// bounds runaway content (giant task prompts) before wrapping.
+// bounds runaway content (giant task prompts) before wrapping. hardWrap
+// first: unbroken runs (JSON blobs in tool results) overflow word-wrap
+// and shove the side panel off-screen (seen live).
 func toolBlock(prefix, text string, maxLen int, style lipgloss.Style, w int) string {
-	text = truncPlain(text, maxLen)
+	text = hardWrap(truncPlain(text, maxLen), w-8)
 	wrapped := lipgloss.NewStyle().Width(w - 6).Render(style.Render(text))
 	lines := strings.Split(wrapped, "\n")
 	var b strings.Builder
 	b.WriteString("  " + prefix + " " + lines[0] + "\n")
 	for _, ln := range lines[1:] {
 		b.WriteString("      " + ln + "\n")
+	}
+	return b.String()
+}
+
+// hardWrap chops any unbroken run longer than w into w-sized pieces so
+// the word-wrapper can always break lines (it never splits words itself).
+// Plain text only — apply before styling.
+func hardWrap(s string, w int) string {
+	if w < 8 {
+		return s
+	}
+	var b strings.Builder
+	for i, word := range strings.Split(s, " ") {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		runes := []rune(word)
+		for len(runes) > w {
+			b.WriteString(string(runes[:w]))
+			b.WriteByte(' ')
+			runes = runes[w:]
+		}
+		b.WriteString(string(runes))
+	}
+	return b.String()
+}
+
+// mdInline styles the markdown the supervisor actually writes — **bold**
+// and `code` — instead of showing asterisk soup. Line-scoped so styling
+// never spans a wrap boundary; unpaired markers pass through untouched.
+func mdInline(s string) string {
+	var out []string
+	for _, line := range strings.Split(s, "\n") {
+		line = mdStylePairs(line, "**", sBoldT)
+		line = mdStylePairs(line, "`", sTeal)
+		out = append(out, sText.Render(line))
+	}
+	return strings.Join(out, "\n")
+}
+
+// mdStylePairs replaces marker-delimited spans with styled text, only
+// when markers pair up.
+func mdStylePairs(line, marker string, style lipgloss.Style) string {
+	parts := strings.Split(line, marker)
+	if len(parts) < 3 {
+		return line
+	}
+	var b strings.Builder
+	for i, p := range parts {
+		if i%2 == 1 && i < len(parts) {
+			if i == len(parts)-1 { // trailing unpaired marker
+				b.WriteString(marker + p)
+				continue
+			}
+			b.WriteString(style.Render(p))
+			continue
+		}
+		b.WriteString(p)
 	}
 	return b.String()
 }

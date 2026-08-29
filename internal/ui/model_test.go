@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // apply pushes msgs through Update and returns the evolved model.
@@ -638,5 +639,43 @@ func TestLoudDenials(t *testing.T) {
 	// A non-Bash denial suggests the bare tool.
 	if got := AllowSuggestion("WebSearch", ""); got != "WebSearch" {
 		t.Errorf("suggestion = %q", got)
+	}
+}
+
+func TestChatRenderingTamed(t *testing.T) {
+	// Unbroken runs must never exceed the column: a JSON blob in a tool
+	// result once shoved the side panel off-screen.
+	long := strings.Repeat(`{"type":"assistant/chunk","seq":1,`, 30)
+	m := demoState(t)
+	m = apply(t, m,
+		SupToolMsg{ToolID: "tr", Name: "Read", Command: "Read /some/log.jsonl"},
+		SupToolResultMsg{ToolID: "tr", Content: long},
+		SupTextDoneMsg{Text: "All **four workers** finished; run `advisor.py report` next.", Time: time.Now()},
+	)
+	out := m.viewChat(120, 40)
+	for _, line := range strings.Split(out, "\n") {
+		if lipgloss.Width(line) > 120 {
+			t.Fatalf("line overflows column (%d cols): %.80q", lipgloss.Width(line), line)
+		}
+	}
+	// Non-delegation tool result collapsed hard (160 cap + ellipsis).
+	if strings.Count(out, `"seq":1`) > 8 {
+		t.Error("raw tool result not collapsed")
+	}
+	// Markdown styled, not asterisk soup.
+	if strings.Contains(out, "**four workers**") {
+		t.Error("bold markers rendered literally")
+	}
+	if !strings.Contains(out, "four workers") || !strings.Contains(out, "advisor.py report") {
+		t.Error("styled text lost content")
+	}
+}
+
+func TestMdInlineUnpaired(t *testing.T) {
+	if got := mdInline("a ** b"); !strings.Contains(got, "** b") {
+		t.Errorf("unpaired marker mangled: %q", got)
+	}
+	if got := mdInline("x **bold** y `code` z"); strings.Contains(got, "**") || strings.Contains(got, "`") {
+		t.Errorf("markers left in: %q", got)
 	}
 }

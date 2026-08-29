@@ -1,7 +1,7 @@
 // Package dshacp implements harness.WorkerHarness over the DeepSeek
 // Harness (dsh) ACP automation server: one `dsh-acp-demo` subprocess per
 // worker, driven by JSON-RPC over stdio (ndjson). The worker id is the ACP
-// session id. Verified behavior and setup requirements: docs/NOTES.md
+// session id. Behavior and setup requirements: docs/NOTES.md
 // ("DeepSeek Harness (dsh) 0.1.1-rc.2").
 package dshacp
 
@@ -167,10 +167,10 @@ func (h *Harness) Spawn(ctx context.Context, task string, mc config.ModelConfig)
 		return "", fmt.Errorf("spawning dsh worker: dsh-acp-demo bin not found at %s (docs/NOTES.md): %w", bin, err)
 	}
 	// Each worker gets its OWN persistence subtree: the acp app derives a
-	// session-query.db (SQLite) at the persistence root, and concurrent
-	// workers sharing one root fight over its lock — seen live, 3 of 4
-	// parallel workers died at boot with "ERR_SQLITE_ERROR: database is
-	// locked". FindSessionLog globs across the extra level.
+	// session-query.db (SQLite, single-writer) at the persistence root,
+	// and concurrent workers sharing one root die at boot with
+	// "ERR_SQLITE_ERROR: database is locked". FindSessionLog globs across
+	// the extra level.
 	sub := fmt.Sprintf("w-%d-%s", os.Getpid(), strconv.FormatInt(time.Now().UnixNano()%1e9, 36))
 	sessionsAbs, err := filepath.Abs(filepath.Join(h.SessionsRoot, sub))
 	if err != nil {
@@ -395,9 +395,8 @@ func (h *Harness) Result(ctx context.Context, workerID string) (harness.Result, 
 	}
 	if status == harness.StatusDone && summary == "" {
 		// No committed answer at all: on small local models this is the
-		// output-budget-exhausted signature (docs/NOTES.md, retry-loop
-		// incident) — fail with advice rather than let the supervisor
-		// retry the same task forever.
+		// output-budget-exhausted signature — fail with advice rather
+		// than let the supervisor retry the same task forever.
 		status = harness.StatusFailed
 		summary = "worker produced no answer (model finish: " + info.FinishReason +
 			") — likely output budget exhausted. Do NOT retry the same task: split it into smaller pieces or demand a much smaller deliverable."

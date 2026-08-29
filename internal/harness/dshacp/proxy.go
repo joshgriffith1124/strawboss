@@ -18,17 +18,17 @@ import (
 // carry EXPLICIT null id/name fields where DeepSeek omits the keys, and
 // the adapter's `!== undefined` merge lets those nulls overwrite the real
 // values from the first chunk — every tool call then fails as
-// `unknown tool ""` (verified live; docs/NOTES.md, and the same merge is
-// still on dsh master). Until that's fixed upstream, each worker's LLM
+// `unknown tool ""` (details in docs/NOTES.md). Until that's fixed
+// upstream, each worker's LLM
 // traffic runs through a local reverse proxy that deletes null id/type/
 // function.name fields from tool_calls entries in SSE data chunks;
 // everything else streams through unchanged.
 
 // Transport dials LLM endpoints IPv4-first, walking the whole address
-// list. LAN model hosts accumulate stale AAAA/hosts entries while the box
-// has no global v6 route (seen live: ten dead IPv6 addresses listed ahead
-// of the one working IPv4 — curl fell through, Go's default dial did
-// not). Shared with the TUI's endpoint reachability probe.
+// list: LAN model hosts accumulate stale AAAA/hosts entries on boxes with
+// no global v6 route, and Go's default dial surfaces the dead v6 instead
+// of falling through to the working v4. Shared with the TUI's endpoint
+// reachability probe.
 var Transport = &http.Transport{
 	Proxy:       http.ProxyFromEnvironment,
 	DialContext: v4FirstDialContext,

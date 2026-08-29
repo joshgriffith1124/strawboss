@@ -199,7 +199,7 @@ func (h *Harness) Result(ctx context.Context, workerID string) (harness.Result, 
 	// too-early idle is not "finished" — it's "not started yet". Finished
 	// means the transcript proves it: a completed (or errored) final
 	// assistant message. opencode can also die MID-message with no error
-	// recorded (seen live — docs/NOTES.md), so a session that goes idle
+	// recorded (see docs/NOTES.md), so a session that goes idle
 	// with an incomplete message, or whose record stops updating, is
 	// declared stalled rather than waited on forever. ctx bounds the wait.
 	started := false

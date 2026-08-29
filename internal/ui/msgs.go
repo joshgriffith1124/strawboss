@@ -8,7 +8,7 @@ import (
 
 // The feed vocabulary. Every external source (supervisor driver, harness
 // poller, replay) emits these; the UI knows nothing about where they come
-// from. M5 maps real supervisor/harness events onto them.
+// from.
 
 // SupInitMsg announces the supervisor subprocess/session.
 type SupInitMsg struct {
@@ -71,8 +71,7 @@ type SupUsageMsg struct {
 
 // SupTurnUsageMsg is one API call's usage WITHIN the running turn (from
 // each complete assistant message) — without it the supervisor counter
-// sits at zero through a whole long turn (seen live: 11 minutes of
-// visible work, "supervisor 0 · plan").
+// would sit at zero for the whole length of a long turn.
 type SupTurnUsageMsg struct {
 	Input, Output         int
 	CacheRead, CacheWrite int
@@ -186,8 +185,8 @@ func tick() tea.Cmd {
 
 // feedBatch carries every feed message already buffered when the
 // listener woke: startup replay floods hundreds of msgs, and rendering
-// them one per update cycle made totals visibly "climb" while history
-// loaded. A batch folds in one render.
+// them one per update cycle makes totals visibly "climb" while history
+// loads. A batch folds in one render.
 type feedBatch []tea.Msg
 
 // Listen adapts a feed channel into Bubble Tea's message loop; Update

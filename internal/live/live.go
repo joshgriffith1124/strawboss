@@ -196,9 +196,9 @@ func (o *Orchestrator) modelConfig(name string) (config.ModelConfig, bool) {
 	return config.ModelConfig{}, false
 }
 
-// Session and run persistence is scoped PER PROJECT DIRECTORY: one global
-// pointer meant `strawboss` launched in project B resumed project A's
-// supervisor, old context and all (seen live). Each cwd gets its own slot
+// Session and run persistence is scoped PER PROJECT DIRECTORY — a global
+// pointer would make strawboss launched in project B resume project A's
+// supervisor, old context and all. Each cwd gets its own slot
 // under <stateDir>/projects/<hash>/; a `dir` file inside names the path
 // for humans. Legacy global supervisor-session/run files are ignored.
 

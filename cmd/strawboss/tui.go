@@ -86,7 +86,7 @@ func buildLive(stateDir, modelsPath string, fresh bool) (ui.Model, func(), error
 		// Read/Edit/Write cover the "small glue work" the system prompt
 		// asks for — without them the supervisor gets denied mid-repair.
 		// Glob is the sanctioned way to look around a directory: in
-		// dontAsk mode a bare `ls` gets denied (seen live).
+		// dontAsk mode a bare `ls` is denied.
 		allowed = []string{fmt.Sprintf("Bash(%s delegate:*)", exe), "Read", "Edit", "Write", "Glob"}
 	}
 	system := cfg.Supervisor.SystemPrompt

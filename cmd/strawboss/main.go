@@ -3,9 +3,9 @@
 //
 // Subcommands:
 //
-//	strawboss           launch the TUI (demo replay until M5 wires live feeds)
-//	strawboss chat      console supervisor driver (M1 spike)
-//	strawboss delegate  the command the supervisor calls to spawn a worker (M3)
+//	strawboss           launch the TUI
+//	strawboss chat      console supervisor driver
+//	strawboss delegate  the command the supervisor calls to spawn a worker
 //	strawboss version   print version
 package main
 

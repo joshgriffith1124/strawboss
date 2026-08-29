@@ -106,7 +106,7 @@ func (m Model) viewChatColumn(w, h int) string {
 // behind an ellipsis: denial reasons and task text must stay readable. cap
 // bounds runaway content (giant task prompts) before wrapping. hardWrap
 // first: unbroken runs (JSON blobs in tool results) overflow word-wrap
-// and shove the side panel off-screen (seen live).
+// and would shove the side panel off-screen.
 func toolBlock(prefix, text string, maxLen int, style lipgloss.Style, w int) string {
 	text = hardWrap(truncPlain(text, maxLen), w-8)
 	wrapped := lipgloss.NewStyle().Width(w - 6).Render(style.Render(text))
@@ -203,9 +203,9 @@ func (m Model) viewTokensPanel(w int) string {
 	wrkTotal := wrkIn + wrkOut
 
 	// Headline numbers are FRESH tokens: supervisor cache reads are the
-	// conversation prefix re-read every turn — folding them into the
-	// headline made the paid side look enormous. They get their own dim
-	// line instead. Totals include the RUNNING turn's live estimate.
+	// conversation prefix re-read every turn, cheap and not spend — they
+	// get their own dim line rather than inflating the headline. Totals
+	// include the RUNNING turn's live estimate.
 	supIn, supCacheRead, supCacheWrite, supOut := m.supTokens()
 	freshSup := supIn + supCacheWrite + supOut
 	lines := []string{

@@ -1,8 +1,8 @@
 // Package harness defines the WorkerHarness boundary between the TUI and
 // whatever runs workers. UI code never talks to a worker backend directly —
-// only through this interface (CLAUDE.md invariant 4). The only v1
-// implementation is opencode (internal/harness/opencode, built in M2); no
-// second implementation until one is actually wanted.
+// only through this interface (CLAUDE.md invariant 4). Implementations:
+// opencode (internal/harness/opencode) and DeepSeek Harness
+// (internal/harness/dshacp).
 package harness
 
 import (

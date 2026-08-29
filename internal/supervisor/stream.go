@@ -18,7 +18,7 @@ import (
 // Stream is a persistent supervisor process: one `claude -p` with
 // --input-format stream-json, alive across turns. User messages are
 // injected over stdin at any time — INCLUDING mid-turn, which the CLI
-// delivers into the running turn (verified live; see docs/NOTES.md).
+// delivers into the running turn (see docs/NOTES.md).
 // The process loads its context once instead of once per turn.
 type Stream struct {
 	Events <-chan Event
@@ -156,7 +156,7 @@ func (s *Stream) Send(text string) error {
 }
 
 // Interrupt sends SIGINT. In stream mode this ends the whole process
-// (verified against the real CLI) — the caller respawns with --resume,
+// — the caller respawns with --resume,
 // which is exactly the recovery path a crash takes.
 func (s *Stream) Interrupt() {
 	s.stopping.Store(true)

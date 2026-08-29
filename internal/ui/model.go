@@ -145,7 +145,7 @@ func appendStream(evs []workerEvent, kind, delta string) []workerEvent {
 type Model struct {
 	feed <-chan tea.Msg
 
-	// OnPrompt/OnInterrupt connect user input to a live supervisor (M5).
+	// OnPrompt/OnInterrupt connect user input to a live supervisor.
 	// When nil, the UI notes that no supervisor is attached (demo mode).
 	OnPrompt    func(text string)
 	OnInterrupt func()
@@ -537,14 +537,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.OnPrompt(msg.Text)
 		} else {
 			m.chat = append(m.chat, chatItem{kind: "note", when: time.Now(),
-				text: "demo replay — input isn't wired to a live supervisor yet (M5)"})
+				text: "demo replay — input isn't wired to a live supervisor"})
 		}
 		return m, nil
 	case InterruptMsg:
 		if m.OnInterrupt != nil {
 			m.OnInterrupt()
 		} else {
-			m.chat = append(m.chat, chatItem{kind: "note", when: time.Now(), text: "esc-to-interrupt lands in M5"})
+			m.chat = append(m.chat, chatItem{kind: "note", when: time.Now(), text: "demo replay — interrupt isn't wired to a live supervisor"})
 		}
 		return m, nil
 	case KillWorkerMsg:

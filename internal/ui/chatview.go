@@ -195,7 +195,6 @@ func kv(w int, k, v string) string {
 }
 
 func (m Model) viewTokensPanel(w int) string {
-	supTotal := m.supIn + m.supCacheRead + m.supCacheWrite + m.supOut
 	wrkIn, wrkOut := 0, 0
 	for _, wk := range m.workers {
 		wrkIn += wk.In
@@ -203,16 +202,20 @@ func (m Model) viewTokensPanel(w int) string {
 	}
 	wrkTotal := wrkIn + wrkOut
 
-	lines := []string{
-		kv(w, "supervisor", sText.Render(formatTokens(supTotal)+" · ")+sAmberB.Render("plan")),
-		kv(w, "workers", sText.Render(formatTokens(wrkTotal)+" · ")+sTealB.Render("$0.00")),
-	}
-
-	// Flow bar over FRESH tokens only: supervisor cache reads are the
-	// conversation prefix re-read every turn — counting them made the paid
-	// side look like it did most of the work, the opposite of the story
-	// the delegation economy is telling.
+	// Headline numbers are FRESH tokens: supervisor cache reads are the
+	// conversation prefix re-read every turn — folding them into the
+	// headline made the paid side look enormous. They get their own dim
+	// line instead.
 	freshSup := m.supIn + m.supCacheWrite + m.supOut
+	lines := []string{
+		kv(w, "supervisor", sText.Render(formatTokens(freshSup)+" · ")+sAmberB.Render("plan")),
+	}
+	if m.supCacheRead > 0 {
+		lines = append(lines, kv(w, "  cache reads", sFaint.Render(formatTokens(m.supCacheRead)+" · free-ish")))
+	}
+	lines = append(lines,
+		kv(w, "workers", sText.Render(formatTokens(wrkTotal)+" · ")+sTealB.Render("$0.00")),
+	)
 	barW := w - 4
 	if barW > 4 && freshSup+wrkTotal > 0 {
 		supCells := barW * freshSup / (freshSup + wrkTotal)

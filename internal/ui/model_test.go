@@ -412,6 +412,14 @@ func TestSidePanelEconomyAndModels(t *testing.T) {
 	if !strings.Contains(tokens, "fresh") {
 		t.Errorf("tokens panel missing fresh legend:\n%s", tokens)
 	}
+	// The headline is fresh tokens (5k), never cache-inflated (305k),
+	// with cache reads on their own dim line.
+	if !strings.Contains(tokens, "5.0k") || !strings.Contains(tokens, "cache reads") {
+		t.Errorf("headline not fresh:\n%s", tokens)
+	}
+	if strings.Contains(tokens, "305.0k") {
+		t.Errorf("cache-inflated headline:\n%s", tokens)
+	}
 	// fresh sup = 5k vs workers 45k → plan share must be small (10%).
 	if !strings.Contains(tokens, "10%") {
 		t.Errorf("fresh split not computed over fresh tokens:\n%s", tokens)

@@ -154,6 +154,7 @@ func (o *Orchestrator) SwitchSession(session, run string) {
 	}
 
 	o.emitAsync(ui.SessionSwitchedMsg{ID: session})
+	o.seedSupUsage()
 	select {
 	case o.rewind <- struct{}{}:
 	default:

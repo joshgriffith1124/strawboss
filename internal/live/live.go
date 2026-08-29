@@ -73,6 +73,7 @@ type Orchestrator struct {
 	servers         []*exec.Cmd        // managed opencode serve children
 
 	// budget guard accumulation (see budget.go)
+	supTotals     supUsageTotals // per-run supervisor ledger (supusage.go)
 	supCostTotal  float64
 	fiveHourNow   float64
 	budgetWarned  bool
@@ -157,6 +158,7 @@ func (o *Orchestrator) emitAsync(m tea.Msg) {
 func (o *Orchestrator) Run(ctx context.Context) {
 	ctx, o.cancel = context.WithCancel(ctx)
 	o.runCtx = ctx
+	o.seedSupUsage()
 	go o.supervisorLoop(ctx)
 	go o.watchRegistry(ctx)
 	go o.pollWorkers(ctx)

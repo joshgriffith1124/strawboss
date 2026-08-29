@@ -71,6 +71,7 @@ func (o *Orchestrator) observeSup(msgs []tea.Msg) {
 				}
 			}
 		case ui.SupUsageMsg:
+			o.recordSupUsage(v)
 			o.noteBudgetUsage(v.CostUSD, 0)
 		case ui.SupRateLimitMsg:
 			o.noteBudgetUsage(0, v.FiveHour)

@@ -517,8 +517,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.log("app", "remote control armed via "+msg.Channel)
 		return m, Listen(m.feed)
 	case SessionSwitchedMsg:
-		// Old session's chat and workers no longer apply; the registry
-		// replay repopulates the new run's workers.
+		// Old session's chat, workers, and supervisor totals no longer
+		// apply; the registry replay and the run's persisted supervisor
+		// ledger repopulate the new run's numbers.
+		m.supIn, m.supOut, m.supCacheRead, m.supCacheWrite = 0, 0, 0, 0
+		m.turnIn, m.turnOut, m.turnCacheRead, m.turnCacheWrite = 0, 0, 0, 0
+		m.supCost, m.supTurns = 0, 0
 		m.chat = nil
 		m.streaming.Reset()
 		m.workers = nil

@@ -828,3 +828,46 @@ func TestSessionHistoryAndSwitch(t *testing.T) {
 		t.Error("no SessionSwitchedMsg")
 	}
 }
+
+// TestSupUsagePersistsAcrossRestart: the worker side of the token panel
+// replays the whole run; the supervisor side must too, or every TUI
+// restart makes the local offload look better than it is.
+func TestSupUsagePersistsAcrossRestart(t *testing.T) {
+	stateDir := t.TempDir()
+	proj := t.TempDir()
+
+	o1 := New(&supervisor.Driver{Dir: proj}, nil, stateDir)
+	o1.RunID = "run-x"
+	o1.observeSup([]tea.Msg{ui.SupUsageMsg{Input: 1000, Output: 400, CacheRead: 50000, CacheWrite: 200, CostUSD: 0.42, Turns: 3}})
+	o1.observeSup([]tea.Msg{ui.SupUsageMsg{Input: 500, Output: 100, CostUSD: 0.08, Turns: 1}})
+
+	// A fresh orchestrator (TUI restart) seeds the run's totals.
+	o2 := New(&supervisor.Driver{Dir: proj}, nil, stateDir)
+	o2.RunID = "run-x"
+	o2.seedSupUsage()
+	seed := drainUntil(t, o2.Feed(), 5*time.Second, func(m tea.Msg) bool {
+		_, ok := m.(ui.SupUsageMsg)
+		return ok
+	})
+	u := seed[len(seed)-1].(ui.SupUsageMsg)
+	if u.Input != 1500 || u.Output != 500 || u.CacheRead != 50000 || u.Turns != 4 || u.CostUSD != 0.5 {
+		t.Fatalf("seed = %+v", u)
+	}
+	// The budget guard resumes from the persisted cost.
+	o2.mu.Lock()
+	cost := o2.supCostTotal
+	o2.mu.Unlock()
+	if cost != 0.5 {
+		t.Errorf("budget cost seed = %v", cost)
+	}
+
+	// A different run starts from zero (no seed emission).
+	o3 := New(&supervisor.Driver{Dir: proj}, nil, stateDir)
+	o3.RunID = "run-y"
+	o3.seedSupUsage()
+	select {
+	case m := <-o3.Feed():
+		t.Fatalf("unexpected seed for a fresh run: %#v", m)
+	case <-time.After(300 * time.Millisecond):
+	}
+}

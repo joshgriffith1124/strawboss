@@ -67,6 +67,11 @@ type SupUsageMsg struct {
 	CacheRead, CacheWrite int
 	CostUSD               float64
 	Turns                 int // increment
+	// Ctx is the supervisor's last known context footprint (one API
+	// call's full prompt incl. cache reads) — carried by the seed msg so
+	// a resumed session shows its context BEFORE the first token burns.
+	// 0 = unknown, keeps existing.
+	Ctx int
 }
 
 // SupTurnUsageMsg is one API call's usage WITHIN the running turn (from
@@ -160,7 +165,13 @@ type SessionInfo struct {
 
 // SessionSwitchedMsg announces a completed session switch: the UI resets
 // chat and worker state; the conversation resumes on the next prompt.
+// ID "" means a fresh session — the next prompt starts a new conversation.
 type SessionSwitchedMsg struct{ ID string }
+
+// NewSessionMsg is emitted by the UI when the user asks for a fresh
+// supervisor session (`/new` in chat, `n` elsewhere) — the in-TUI
+// equivalent of restarting with --new, for shedding a bloated context.
+type NewSessionMsg struct{}
 
 // SendPromptMsg is emitted BY the UI when the user submits input; the
 // program driver (demo or live) subscribes and acts.

@@ -52,6 +52,42 @@ func (d *Driver) SetSessionID(id string) {
 	d.sessionID = id
 }
 
+// SetEnvVar sets key=val in Env, replacing any existing entry for key.
+// Spawns already in flight keep their env; the next spawn picks it up —
+// callers switching runs must do this while the stream is down, or the
+// live supervisor keeps stamping the old value.
+func (d *Driver) SetEnvVar(key, val string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	kv := key + "=" + val
+	for i, e := range d.Env {
+		if strings.HasPrefix(e, key+"=") {
+			d.Env[i] = kv
+			return
+		}
+	}
+	d.Env = append(d.Env, kv)
+}
+
+// EnvVar returns the value set for key in Env ("" if unset).
+func (d *Driver) EnvVar(key string) string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, e := range d.Env {
+		if strings.HasPrefix(e, key+"=") {
+			return strings.TrimPrefix(e, key+"=")
+		}
+	}
+	return ""
+}
+
+// env snapshots Env under the lock for a spawn.
+func (d *Driver) env() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]string(nil), d.Env...)
+}
+
 // Turn is one in-flight claude invocation. Read Events until it closes; the
 // final event is always a TurnDoneEvent.
 type Turn struct {
@@ -122,7 +158,7 @@ func (d *Driver) Start(prompt string) (*Turn, error) {
 
 	cmd := exec.Command(bin, args...)
 	cmd.Dir = d.Dir
-	cmd.Env = append(scrubEnv(os.Environ()), d.Env...)
+	cmd.Env = append(scrubEnv(os.Environ()), d.env()...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	stdout, err := cmd.StdoutPipe()

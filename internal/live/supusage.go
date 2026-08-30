@@ -23,6 +23,10 @@ type supUsageTotals struct {
 	CacheWrite int     `json:"cache_write"`
 	Turns      int     `json:"turns"`
 	CostUSD    float64 `json:"cost_usd"`
+	// Ctx is the last API call's full prompt size — the session's context
+	// footprint. Persisted so a resume can show what the next prompt will
+	// re-read BEFORE it burns.
+	Ctx int `json:"ctx"`
 }
 
 func (o *Orchestrator) supUsagePath(run string) string {
@@ -35,6 +39,17 @@ func (o *Orchestrator) loadSupUsage(run string) supUsageTotals {
 		_ = json.Unmarshal(b, &t)
 	}
 	return t
+}
+
+// noteSupCtx tracks the latest per-call context footprint in memory;
+// recordSupUsage persists it with the ledger at turn end.
+func (o *Orchestrator) noteSupCtx(ctx int) {
+	if ctx <= 0 {
+		return
+	}
+	o.mu.Lock()
+	o.supTotals.Ctx = ctx
+	o.mu.Unlock()
 }
 
 // recordSupUsage folds one completed turn's usage into the run ledger.
@@ -74,6 +89,7 @@ func (o *Orchestrator) seedSupUsage() {
 			Input: t.In, Output: t.Out,
 			CacheRead: t.CacheRead, CacheWrite: t.CacheWrite,
 			CostUSD: t.CostUSD, Turns: t.Turns,
+			Ctx: t.Ctx,
 		})
 	}
 }

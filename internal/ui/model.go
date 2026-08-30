@@ -76,6 +76,31 @@ func (m Model) supTokens() (in, cacheRead, cacheWrite, out int) {
 		m.supCacheWrite + m.turnCacheWrite, m.supOut + m.turnOut
 }
 
+// ctxWarnTokens is where supervisor context counts as bloated: every
+// future API call re-reads it all, so a resumed 100k+ session burns that
+// much cache per call for possibly stale history. supCtxWindow is the
+// standard Claude context window, shown as the footprint's denominator.
+const (
+	ctxWarnTokens = 100_000
+	supCtxWindow  = 200_000
+)
+
+// noteSupCtx records the supervisor's context footprint (0 = unknown,
+// keeps existing) and advises a fresh session ONCE when it crosses the
+// warning line — covers both a bloated resume and organic growth.
+func (m *Model) noteSupCtx(ctx int) {
+	if ctx <= 0 {
+		return
+	}
+	m.supCtx = ctx
+	if ctx >= ctxWarnTokens && !m.ctxWarned {
+		m.ctxWarned = true
+		m.chat = append(m.chat, chatItem{kind: "note", when: time.Now(),
+			text: fmt.Sprintf("supervisor context is ~%s tokens — every call re-reads it all; type /new to start a fresh session (s lists past ones)", formatTokens(ctx))})
+		m.showToast(fmt.Sprintf("supervisor context ~%s — /new starts fresh", formatTokens(ctx)))
+	}
+}
+
 // contextWindowFor is the model's reported context length, 0 if unknown.
 func (m Model) contextWindowFor(name string) int {
 	for _, ms := range m.models {
@@ -154,9 +179,11 @@ type Model struct {
 	// the live orchestrator; nil in demo mode.
 	OnKillWorker  func(id string)
 	OnRetryWorker func(id string)
-	// OnListSessions/OnSwitchSession drive the session picker.
+	// OnListSessions/OnSwitchSession drive the session picker;
+	// OnNewSession starts a fresh session (`/new`, `n`).
 	OnListSessions  func() []SessionInfo
 	OnSwitchSession func(id, run string)
+	OnNewSession    func()
 
 	width, height int
 	tab           int
@@ -181,9 +208,14 @@ type Model struct {
 	turnIn, turnOut, turnCacheRead, turnCacheWrite int
 	supCost                                        float64
 	supTurns                                       int
-	fiveHour, sevenDay                             float64
-	delegationResultTokens                         []int        // per-result estimate, for the avg
-	recentResults                                  []resultLine // last delegation results (capped)
+	// supCtx is the supervisor's context footprint: the last API call's
+	// full prompt size (fresh + cache reads + writes). Every call re-reads
+	// the whole prefix, so this is what each future call will cost again.
+	supCtx                 int
+	ctxWarned              bool // big-context advice shown once per session
+	fiveHour, sevenDay     float64
+	delegationResultTokens []int        // per-result estimate, for the avg
+	recentResults          []resultLine // last delegation results (capped)
 
 	// workers
 	workers      []workerRow
@@ -368,6 +400,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.turnOut += msg.Output
 		m.turnCacheRead += msg.CacheRead
 		m.turnCacheWrite += msg.CacheWrite
+		m.noteSupCtx(msg.Input + msg.CacheRead + msg.CacheWrite)
 		return m, Listen(m.feed)
 	case SupUsageMsg:
 		// Authoritative turn totals: commit them and drop the live
@@ -379,6 +412,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.supCost += msg.CostUSD
 		m.supTurns += msg.Turns
 		m.turnIn, m.turnOut, m.turnCacheRead, m.turnCacheWrite = 0, 0, 0, 0
+		m.noteSupCtx(msg.Ctx)
 		return m, Listen(m.feed)
 	case SupRateLimitMsg:
 		m.fiveHour, m.sevenDay = msg.FiveHour, msg.SevenDay
@@ -525,6 +559,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.supIn, m.supOut, m.supCacheRead, m.supCacheWrite = 0, 0, 0, 0
 		m.turnIn, m.turnOut, m.turnCacheRead, m.turnCacheWrite = 0, 0, 0, 0
 		m.supCost, m.supTurns = 0, 0
+		m.supCtx, m.ctxWarned = 0, false
 		m.chat = nil
 		m.streaming.Reset()
 		m.workers = nil
@@ -533,9 +568,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.recentResults = nil
 		m.selected = 0
 		m.sessionID = msg.ID
-		m.chat = append(m.chat, chatItem{kind: "note", when: time.Now(),
-			text: "switched to session " + msg.ID + " — the conversation resumes on your next message"})
-		m.showToast("switched to session " + truncPlain(msg.ID, 12))
+		if msg.ID == "" {
+			m.chat = append(m.chat, chatItem{kind: "note", when: time.Now(),
+				text: "fresh session — your next message starts a new conversation with an empty context"})
+			m.showToast("fresh session")
+		} else {
+			m.chat = append(m.chat, chatItem{kind: "note", when: time.Now(),
+				text: "switched to session " + msg.ID + " — the conversation resumes on your next message"})
+			m.showToast("switched to session " + truncPlain(msg.ID, 12))
+		}
 		return m, Listen(m.feed)
 
 	case SendPromptMsg:
@@ -544,6 +585,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.chat = append(m.chat, chatItem{kind: "note", when: time.Now(),
 				text: "demo replay — input isn't wired to a live supervisor"})
+		}
+		return m, nil
+	case NewSessionMsg:
+		if m.OnNewSession != nil {
+			m.OnNewSession()
+		} else {
+			m.showToast("demo replay — fresh sessions aren't wired to a live supervisor")
 		}
 		return m, nil
 	case InterruptMsg:
@@ -633,6 +681,9 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "esc", "q", "s":
 			m.picking = false
+		case "n":
+			m.picking = false
+			return m, func() tea.Msg { return NewSessionMsg{} }
 		case "up", "k":
 			if m.sessIdx > 0 {
 				m.sessIdx--
@@ -708,6 +759,9 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.input.SetValue("")
+			if text == "/new" {
+				return m, func() tea.Msg { return NewSessionMsg{} }
+			}
 			m.chat = append(m.chat, chatItem{kind: "user", when: time.Now(), text: text})
 			return m, func() tea.Msg { return SendPromptMsg{Text: text} }
 		}
@@ -749,6 +803,8 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.showToast("demo replay — no session history")
 		}
+	case "n":
+		return m, func() tea.Msg { return NewSessionMsg{} }
 	case "f":
 		if m.tab == tabLogs {
 			// Cycle the logs source filter: all → sup → wrk → app.

@@ -216,6 +216,15 @@ func (m Model) viewTokensPanel(w int) string {
 	if supCacheRead > 0 {
 		lines = append(lines, kv(w, "  cache reads", sFaint.Render(formatTokens(supCacheRead)+" · ~10% rate")))
 	}
+	// Context footprint: what EVERY future call re-reads — the number
+	// that makes a bloated resumed session visible (and worth /new).
+	if m.supCtx > 0 {
+		v := sText.Render(formatTokens(m.supCtx))
+		if m.supCtx >= ctxWarnTokens {
+			v = sErr.Render(formatTokens(m.supCtx) + " · /new?")
+		}
+		lines = append(lines, kv(w, "  context", v))
+	}
 	lines = append(lines,
 		kv(w, "workers", sText.Render(formatTokens(wrkFresh)+" · ")+sTealB.Render("$0.00")),
 	)

@@ -754,3 +754,117 @@ func TestTokensPanelLeverage(t *testing.T) {
 		t.Errorf("cost-weighted split wrong:\n%s", tokens)
 	}
 }
+
+// TestSupContextTracksAndWarns: the context footprint follows each API
+// call's full prompt size, the fresh-session advice fires exactly once
+// past the warning line, and both token panels surface the number.
+func TestSupContextTracksAndWarns(t *testing.T) {
+	m := demoState(t)
+	m = apply(t, m, SupTurnUsageMsg{Input: 400, CacheRead: 30_000, CacheWrite: 2_000})
+	if m.supCtx != 32_400 || m.ctxWarned {
+		t.Fatalf("supCtx=%d warned=%v", m.supCtx, m.ctxWarned)
+	}
+	chatLen := len(m.chat)
+
+	m = apply(t, m, SupTurnUsageMsg{Input: 500, CacheRead: 480_000})
+	if m.supCtx != 480_500 || !m.ctxWarned {
+		t.Fatalf("supCtx=%d warned=%v", m.supCtx, m.ctxWarned)
+	}
+	if len(m.chat) != chatLen+1 || !strings.Contains(m.chat[len(m.chat)-1].text, "/new") {
+		t.Fatalf("expected one /new advice note, chat tail = %+v", m.chat[len(m.chat)-1])
+	}
+	// Crossing again stays quiet — advice is once per session.
+	m = apply(t, m, SupTurnUsageMsg{Input: 500, CacheRead: 490_000})
+	if len(m.chat) != chatLen+1 {
+		t.Errorf("advice repeated: chat len %d", len(m.chat))
+	}
+
+	for name, out := range map[string]string{
+		"chat panel": m.viewTokensPanel(46),
+		"dashboard":  m.viewDashboard(120, 38),
+	} {
+		if !strings.Contains(out, "context") || !strings.Contains(out, "490.5k") {
+			t.Errorf("%s missing context footprint", name)
+		}
+	}
+
+	// A turn-total usage msg without ctx keeps the last known value.
+	m = apply(t, m, SupUsageMsg{Input: 9000, CacheRead: 900_000, Turns: 1})
+	if m.supCtx != 490_500 {
+		t.Errorf("turn totals clobbered ctx: %d", m.supCtx)
+	}
+}
+
+// TestSupContextSeededOnResume: the persisted ledger's ctx (SupUsageMsg
+// seed) surfaces a bloated resumed session BEFORE the first prompt burns.
+func TestSupContextSeededOnResume(t *testing.T) {
+	m := New(make(chan tea.Msg))
+	m = apply(t, m, tea.WindowSizeMsg{Width: 120, Height: 40},
+		SupUsageMsg{Input: 8000, CacheRead: 2_400_000, Turns: 12, Ctx: 512_000})
+	if m.supCtx != 512_000 || !m.ctxWarned {
+		t.Fatalf("supCtx=%d warned=%v", m.supCtx, m.ctxWarned)
+	}
+	if len(m.chat) == 0 || !strings.Contains(m.chat[len(m.chat)-1].text, "/new") {
+		t.Errorf("no resume advice in chat: %+v", m.chat)
+	}
+}
+
+// TestNewSessionCommandAndKeys: `/new` in chat, `n` on the dashboard and
+// in the picker all reach OnNewSession; the fresh-session announcement
+// resets the context footprint and re-arms the advice.
+func TestNewSessionCommandAndKeys(t *testing.T) {
+	m := demoState(t)
+	fresh := 0
+	m.OnNewSession = func() { fresh++ }
+	m = apply(t, m, SupTurnUsageMsg{CacheRead: 200_000}) // warned state
+
+	// /new typed in chat: emits NewSessionMsg, sends no prompt.
+	m.input.SetValue("/new")
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatal("/new produced no cmd")
+	}
+	nm, ok := cmd().(NewSessionMsg)
+	if !ok {
+		t.Fatalf("cmd msg = %#v", nm)
+	}
+	m = apply(t, m, nm)
+	if fresh != 1 {
+		t.Fatalf("OnNewSession calls = %d", fresh)
+	}
+
+	// n on the dashboard.
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatal("dashboard n produced no cmd")
+	}
+	m = apply(t, m, cmd())
+	if fresh != 2 {
+		t.Fatalf("OnNewSession calls = %d", fresh)
+	}
+
+	// n inside the session picker closes it and asks for a fresh session.
+	m.OnListSessions = func() []SessionInfo { return []SessionInfo{{ID: "ses-1"}} }
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	m = next.(Model)
+	if m.picking || cmd == nil {
+		t.Fatalf("picking=%v cmd=%v", m.picking, cmd)
+	}
+	m = apply(t, m, cmd())
+	if fresh != 3 {
+		t.Fatalf("OnNewSession calls = %d", fresh)
+	}
+
+	// The announcement (empty ID) resets ctx state and notes the fresh start.
+	m = apply(t, m, SessionSwitchedMsg{})
+	if m.supCtx != 0 || m.ctxWarned || m.sessionID != "" {
+		t.Errorf("supCtx=%d warned=%v session=%q", m.supCtx, m.ctxWarned, m.sessionID)
+	}
+	if len(m.chat) != 1 || !strings.Contains(m.chat[0].text, "fresh session") {
+		t.Errorf("chat = %+v", m.chat)
+	}
+}

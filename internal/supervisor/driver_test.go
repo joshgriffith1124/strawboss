@@ -189,3 +189,21 @@ exec sleep 30
 		t.Errorf("interrupt is not a failure: %v", last.ExitErr)
 	}
 }
+
+func TestSetEnvVarReplacesAndAppends(t *testing.T) {
+	d := &Driver{Env: []string{"STRAWBOSS_RUN=run-old", "OTHER=x"}}
+	d.SetEnvVar("STRAWBOSS_RUN", "run-new")
+	if got := d.EnvVar("STRAWBOSS_RUN"); got != "run-new" {
+		t.Errorf("STRAWBOSS_RUN = %q", got)
+	}
+	if got := d.EnvVar("OTHER"); got != "x" {
+		t.Errorf("OTHER = %q", got)
+	}
+	d.SetEnvVar("ADDED", "y")
+	if got := d.EnvVar("ADDED"); got != "y" {
+		t.Errorf("ADDED = %q", got)
+	}
+	if n := len(d.env()); n != 3 {
+		t.Errorf("env entries = %d, want 3 (replace must not append)", n)
+	}
+}

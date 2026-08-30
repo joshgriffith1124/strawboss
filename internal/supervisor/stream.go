@@ -60,7 +60,7 @@ func (d *Driver) StartStream() (*Stream, error) {
 
 	cmd := exec.Command(bin, args...)
 	cmd.Dir = d.Dir
-	cmd.Env = append(scrubEnv(os.Environ()), d.Env...)
+	cmd.Env = append(scrubEnv(os.Environ()), d.env()...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	stdin, err := cmd.StdinPipe()

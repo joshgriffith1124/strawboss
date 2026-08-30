@@ -287,6 +287,17 @@ func (m Model) viewDetailSplit(w, h int) string {
 		" " + sDim.Render(fmt.Sprintf("output   %8s", formatTokens(dOut))),
 		" " + sDim.Render(fmt.Sprintf("notional API value $%.2f · avg %d tok/delegation result", m.supCost, avgResult)),
 	}
+	if m.supCtx > 0 {
+		// MOCKUP.html shows "context    168k/200k" in this panel; the
+		// denominator is the standard Claude window.
+		ctx := " " + sDim.Render(fmt.Sprintf("context  %8s", formatTokens(m.supCtx)+"/"+formatTokens(supCtxWindow)))
+		if m.supCtx >= ctxWarnTokens {
+			ctx += " " + sErr.Render("— every call re-reads it all; /new starts fresh")
+		}
+		// Insert after the auth line so context sits with the identity of
+		// the session it belongs to.
+		supLines = append(supLines[:1], append([]string{ctx}, supLines[1:]...)...)
+	}
 	if m.fiveHour > 0 {
 		supLines = append(supLines, " "+sDim.Render(fmt.Sprintf("plan window: 5h %.0f%% · 7d %.0f%%", m.fiveHour*100, m.sevenDay*100)))
 	}

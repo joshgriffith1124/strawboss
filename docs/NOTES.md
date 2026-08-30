@@ -394,3 +394,63 @@ baseline (delegate + Read/Edit/Write/Glob) instead of replacing it, so
 users can grant e.g. `Bash(git status:*)` without being able to lose the
 delegate pattern. Recovery for an already-poisoned session: tell the
 supervisor in chat that only non-delegate Bash is denied.
+
+## Resume is a 500k-token ambush without a context gauge (2026-08-30, live incident)
+
+Starting the TUI resumes the project's last supervisor session by design
+— but nothing showed how big that session had grown. A fresh strawboss
+launch resumed an old conversation and the first prompt instantly
+re-read ~500k tokens of cache for possibly stale history; every later
+call re-reads it all again. The only reset was quitting and relaunching
+with `--new`.
+
+Now: the supervisor's context footprint (each API call's full prompt =
+input + cache read + cache write from the per-message usage) is tracked
+live, persisted in the per-run ledger (`ctx` in sup-usage-<run>.json),
+and seeded back at startup — so a resumed session shows its footprint
+BEFORE the first prompt burns. Crossing 100k advises a fresh session
+once (chat note + toast); the chat tokens panel and supervisor detail
+panel (mockup's `context 168k/200k` line) show it always. `/new` in
+chat — or `n` on the dashboard/logs tabs and in the session picker —
+starts a fresh session in-TUI: stream ends (old session stays in the
+picker), session pointer clears, fresh run id, budget stop lifts.
+
+Follow-up bug from the first live use: rotating the run has to repoint
+the driver's STRAWBOSS_RUN env too, not just the orchestrator/persisted
+ids. The delegate stamps registry events with the env value inherited
+through the supervisor — left stale after `/new`, every new worker
+landed in the OLD run and the watcher (scoped to the new one) silently
+dropped it: workers ran to completion while the table said "no workers
+yet". Session switch had the same latent bug. Both now update the env
+while the stream is down (`Driver.SetEnvVar`), so the next spawn stamps
+the current run.
+
+## "unreachable" dsh models: WSL2 DNS proxy + router EDNS quirk (2026-08-30, live incident)
+
+Both dsh entries showed "unreachable" while `curl` reached the same
+sglang endpoint fine (HTTP 200, model listed). Not an endpoint problem —
+a name-resolution split between Go and libc, surfaced after a WSL
+restart:
+
+- The models panel probe (`llmModels`) and the dsh worker proxy both
+  resolve through Go's resolver (`net.DefaultResolver` /
+  `dshacp.Transport`), which always sends EDNS0 queries.
+- The home gateway's DNS (authoritative for the router-assigned LAN
+  hostnames, reached via WSL2's 10.255.255.254 proxy) answers EDNS
+  queries with the records in the wrong order: the echoed OPT record
+  comes FIRST, before the answer, while the counts still say answer=1.
+  A section-ordered parser (Go's) reads the OPT as the whole answer
+  section, demotes the real A record to authority, finds no usable
+  answers → "no such host". Go then tries the search-suffixed name and
+  gets REFUSED.
+- Plain queries without EDNS come back well-formed — which is why libc
+  (curl, python, getent, and Node/opencode, hence qwen-coder staying
+  healthy on the same box) resolves the very same name fine.
+
+So the panel was truthful in the way that matters: dsh delegations
+would fail identically, since the worker proxy shares the dialer.
+
+Workarounds, most robust first: pin the LAN host in `/etc/hosts` (Go's
+resolver honors files before dns), or use the LAN IP in models.toml.
+A code-level fallback (retry the lookup with a plain no-EDNS query when
+LookupIPAddr fails) would make strawboss immune to this router class.

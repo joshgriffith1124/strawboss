@@ -70,6 +70,8 @@ func (o *Orchestrator) observeSup(msgs []tea.Msg) {
 						"supervisor was denied "+truncN(cmd, 120)+" — allow with "+sug+" in supervisor.allowed_tools")
 				}
 			}
+		case ui.SupTurnUsageMsg:
+			o.noteSupCtx(v.Input + v.CacheRead + v.CacheWrite)
 		case ui.SupUsageMsg:
 			o.recordSupUsage(v)
 			o.noteBudgetUsage(v.CostUSD, 0)

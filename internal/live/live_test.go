@@ -813,6 +813,9 @@ func TestSessionHistoryAndSwitch(t *testing.T) {
 	if run, _ := RunID(stateDir, proj, false); run != "run-1" {
 		t.Errorf("persisted run = %q", run)
 	}
+	if got := o.Driver.EnvVar("STRAWBOSS_RUN"); got != "run-1" {
+		t.Errorf("STRAWBOSS_RUN = %q, want run-1", got)
+	}
 	o.mu.Lock()
 	if len(o.unfinished) != 0 && o.unfinished[w2] {
 		t.Error("old run's worker state survived the switch")
@@ -873,4 +876,73 @@ func TestSupUsagePersistsAcrossRestart(t *testing.T) {
 		t.Fatalf("unexpected seed for a fresh run: %#v", m)
 	case <-time.After(300 * time.Millisecond):
 	}
+}
+
+// TestNewSessionAndCtxSeed: the context footprint persists in the run
+// ledger and seeds back on restart; NewSession clears the session
+// pointer, mints a fresh run, lifts any budget stop, and announces the
+// reset — the in-TUI equivalent of --new.
+func TestNewSessionAndCtxSeed(t *testing.T) {
+	stateDir := t.TempDir()
+	proj := t.TempDir()
+	o := New(&supervisor.Driver{Dir: proj}, nil, stateDir)
+	run1, err := RunID(stateDir, proj, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o.RunID = run1
+	o.Driver.SetSessionID("ses-old")
+	slot := ProjectDir(stateDir, proj)
+	_ = os.MkdirAll(slot, 0o755)
+	_ = os.WriteFile(filepath.Join(slot, "supervisor-session"), []byte("ses-old"), 0o644)
+	_ = os.WriteFile(BudgetStopFile(stateDir, proj), []byte("ceiling\n"), 0o644)
+
+	// Per-call context lands in the ledger when the turn commits…
+	o.noteSupCtx(480_500)
+	o.recordSupUsage(ui.SupUsageMsg{Input: 1000, CacheRead: 900_000, Turns: 1})
+
+	// …and a rebuilt orchestrator (TUI restart) seeds it back to the UI,
+	// before any prompt burns tokens.
+	o2 := New(&supervisor.Driver{Dir: proj}, nil, stateDir)
+	o2.RunID = run1
+	o2.seedSupUsage()
+	seeded := false
+	drainUntil(t, o2.Feed(), 5*time.Second, func(m tea.Msg) bool {
+		u, ok := m.(ui.SupUsageMsg)
+		seeded = ok && u.Ctx == 480_500
+		return ok
+	})
+	if !seeded {
+		t.Error("seed msg missing the persisted ctx")
+	}
+
+	o.NewSession()
+	if got := o.Driver.SessionID(); got != "" {
+		t.Errorf("driver session = %q", got)
+	}
+	if got := LoadSession(stateDir, proj); got != "" {
+		t.Errorf("persisted session = %q", got)
+	}
+	run2, _ := RunID(stateDir, proj, false)
+	if run2 == run1 {
+		t.Error("run id not rotated")
+	}
+	// The delegate inherits STRAWBOSS_RUN through the supervisor env; a
+	// stale value strands every new worker in the old run, invisible to
+	// the watcher.
+	if got := o.Driver.EnvVar("STRAWBOSS_RUN"); got != run2 {
+		t.Errorf("STRAWBOSS_RUN = %q, want %q", got, run2)
+	}
+	if _, err := os.Stat(BudgetStopFile(stateDir, proj)); err == nil {
+		t.Error("budget stop survived the fresh session")
+	}
+	o.mu.Lock()
+	if o.supTotals.Ctx != 0 || o.lastPrompt != "" {
+		t.Errorf("stale state: ctx=%d lastPrompt=%q", o.supTotals.Ctx, o.lastPrompt)
+	}
+	o.mu.Unlock()
+	drainUntil(t, o.Feed(), 5*time.Second, func(m tea.Msg) bool {
+		s, ok := m.(ui.SessionSwitchedMsg)
+		return ok && s.ID == ""
+	})
 }

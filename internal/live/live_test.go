@@ -191,7 +191,10 @@ func TestBuildSystemPrompt(t *testing.T) {
 		{Name: "qwen-small", Model: "spark-a/qwen3.8-flash-next"},
 	})
 	for _, want := range []string{"/usr/local/bin/strawboss delegate", "--model", "--task",
-		"qwen-coder (spark-a/qwen3.8-27b)", "qwen-small", "terse"} {
+		"qwen-coder (spark-a/qwen3.8-27b)", "qwen-small", "terse",
+		// One denied git command must not convince the supervisor that
+		// delegation is blocked — the prompt has to explain the allowlist.
+		"ONLY the delegate command", "delegation still works"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("prompt missing %q", want)
 		}

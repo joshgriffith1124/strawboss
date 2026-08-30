@@ -48,8 +48,10 @@ type Supervisor struct {
 	// PermissionMode passed as --permission-mode. Default "dontAsk" so the
 	// supervisor never blocks on an interactive prompt (CLAUDE.md invariant 6).
 	PermissionMode string `toml:"permission_mode"`
-	// AllowedTools passed as --allowedTools; must cover everything the
-	// supervisor is expected to do, the delegate command above all.
+	// AllowedTools are appended to the built-in --allowedTools baseline
+	// (delegate + Read/Edit/Write/Glob). Extras only — the baseline is
+	// never replaced, so the delegate pattern can't be lost to a config
+	// edit.
 	AllowedTools []string `toml:"allowed_tools"`
 	// SystemPrompt optionally appended via --append-system-prompt.
 	SystemPrompt string `toml:"system_prompt"`

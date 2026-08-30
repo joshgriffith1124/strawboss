@@ -52,6 +52,18 @@ func runTUI(args []string) error {
 	return nil
 }
 
+// supervisorAllowedTools builds the --allowedTools list: a fixed baseline
+// plus any config'd extras. The baseline is never replaced — losing the
+// delegate pattern to a config edit would silently break the whole
+// topology. Read/Edit/Write cover the "small glue work" the system prompt
+// asks for — without them the supervisor gets denied mid-repair. Glob is
+// the sanctioned way to look around a directory: in dontAsk mode a bare
+// `ls` is denied.
+func supervisorAllowedTools(exe string, extra []string) []string {
+	base := []string{fmt.Sprintf("Bash(%s delegate:*)", exe), "Read", "Edit", "Write", "Glob"}
+	return append(base, extra...)
+}
+
 func buildLive(stateDir, modelsPath string, fresh bool) (ui.Model, func(), error) {
 	var zero ui.Model
 	if stateDir == "" {
@@ -81,14 +93,7 @@ func buildLive(stateDir, modelsPath string, fresh bool) (ui.Model, func(), error
 		return zero, nil, fmt.Errorf("resolving cwd: %w", err)
 	}
 
-	allowed := cfg.Supervisor.AllowedTools
-	if len(allowed) == 0 {
-		// Read/Edit/Write cover the "small glue work" the system prompt
-		// asks for — without them the supervisor gets denied mid-repair.
-		// Glob is the sanctioned way to look around a directory: in
-		// dontAsk mode a bare `ls` is denied.
-		allowed = []string{fmt.Sprintf("Bash(%s delegate:*)", exe), "Read", "Edit", "Write", "Glob"}
-	}
+	allowed := supervisorAllowedTools(exe, cfg.Supervisor.AllowedTools)
 	system := cfg.Supervisor.SystemPrompt
 	if system == "" {
 		system = live.BuildSystemPrompt(exe, models)

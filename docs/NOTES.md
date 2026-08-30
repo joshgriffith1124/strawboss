@@ -375,3 +375,22 @@ small-model hardening list prompted this). Three independent layers now:
    that already FAILED twice this run (same model) is refused before
    spawning — "change the approach, split it, or ask the user" — the
    structural end of the supervisor retry loop.
+
+## dontAsk denials name the whole tool, not the pattern (2026-08-30, live incident)
+
+A supervisor (poe-upgrade-advisor project) ran one `git status && git log
+&& git diff` chain — correctly auto-denied, git isn't allowlisted — and
+the denial text was "Permission to use Bash has been denied because
+Claude Code is running in don't ask mode". It names the *tool*, never
+the unmatched pattern, so the model generalized to "Bash is off
+entirely" and stopped attempting delegation for the rest of the session
+even though `Bash(<exe> delegate:*)` was allowlisted and would have run.
+One denied git command silently defeated the whole topology.
+
+Fixes: the built-in system prompt now spells out that Bash covers only
+the delegate command and that a denial of anything else never means
+delegation is blocked; and config `allowed_tools` are appended to the
+baseline (delegate + Read/Edit/Write/Glob) instead of replacing it, so
+users can grant e.g. `Bash(git status:*)` without being able to lose the
+delegate pattern. Recovery for an already-poisoned session: tell the
+supervisor in chat that only non-delegate Bash is denied.

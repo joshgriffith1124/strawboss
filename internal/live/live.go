@@ -411,6 +411,8 @@ Run INDEPENDENT tasks in parallel by repeating --task in ONE delegate call — e
   %s delegate --model <m> --task "first task" --task "second task"
 Only chain separate delegate calls when one task needs another's output. Do small glue work yourself (you may Read, Edit, and Write files directly); delegate anything substantial.
 
+Your Bash access covers ONLY the delegate command above; any other shell command (git, ls, builds, tests) is auto-denied. Such a denial says "Permission to use Bash has been denied", but it applies to that one command only — delegation still works, so never conclude that Bash as a whole or delegation is blocked. Look around with Read and Glob instead, and delegate work that truly needs a shell.
+
 When parallel tasks might edit the SAME files, add --worktree: each worker then runs in an isolated git worktree and its work is committed on its own strawboss/* branch (named in the result) instead of the shared working directory. Nothing merges automatically — relay the branch names to the user for review.
 
 Workers are SMALL local models with a limited output budget (roughly 16k tokens, shared with their internal reasoning). Scope every task so the deliverable is modest — aim for one file of at most ~200 lines per task, never a whole app in one file. If a worker fails with "only internal reasoning" or an empty reply, the task was too big: split it into smaller pieces instead of retrying the same task.`,

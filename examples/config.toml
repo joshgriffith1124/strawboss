@@ -3,7 +3,9 @@
 [supervisor]
 # command = "claude"              # supervisor binary
 # permission_mode = "dontAsk"
-# allowed_tools = []              # default: delegate + Read/Edit/Write/Glob
+# allowed_tools = []              # extras appended to the baseline
+#                                 # (delegate + Read/Edit/Write/Glob),
+#                                 # e.g. ["Bash(git status:*)", "Bash(git log:*)"]
 # system_prompt = ""              # default: built-in delegation prompt
 
 [notify]

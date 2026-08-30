@@ -395,3 +395,47 @@ func TestSpawnPassesVariant(t *testing.T) {
 		t.Errorf("prompt body missing variant: %s", prompt)
 	}
 }
+
+// TestResultAbortsOnToolLoop: a transcript ending in a long run of
+// identical tool calls aborts as a loop instead of polling to timeout.
+func TestResultAbortsOnToolLoop(t *testing.T) {
+	part := `{"type":"tool","tool":"bash","state":{"status":"completed","title":"npm test"}}`
+	parts := part
+	for i := 0; i < 6; i++ {
+		parts += "," + part
+	}
+	var aborts atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /session/status", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"ses_loop":{"type":"busy"}}`))
+	})
+	mux.HandleFunc("GET /session/{sid}/message", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`[{"info":{"id":"m1","sessionID":"ses_loop","role":"assistant","time":{"created":1}},"parts":[` + parts + `]}]`))
+	})
+	mux.HandleFunc("POST /session/{sid}/abort", func(w http.ResponseWriter, r *http.Request) {
+		aborts.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	h := &Harness{
+		Client:       &Client{Base: srv.URL},
+		Dir:          "/w",
+		LogDir:       t.TempDir(),
+		PollInterval: 5 * time.Millisecond,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	res, err := h.Result(ctx, "ses_loop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != harness.StatusFailed || !strings.Contains(res.Summary, "looping") ||
+		!strings.Contains(res.Summary, "npm test") {
+		t.Fatalf("res = %+v", res)
+	}
+	if aborts.Load() != 1 {
+		t.Errorf("aborts = %d", aborts.Load())
+	}
+}

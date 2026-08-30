@@ -21,6 +21,7 @@ import (
 
 	"github.com/joshgriffith1124/strawboss/internal/config"
 	"github.com/joshgriffith1124/strawboss/internal/harness"
+	"github.com/joshgriffith1124/strawboss/internal/loopdetect"
 )
 
 //go:embed cordis.yml
@@ -46,6 +47,11 @@ type Harness struct {
 	SessionsRoot string
 	// BootTimeout bounds initialize + session/new. Default 60s.
 	BootTimeout time.Duration
+	// LoopThreshold aborts a worker after this many consecutive identical
+	// tool calls. Default 10 — past the worker composition's advisory
+	// reminders (3/5/8), so the model gets every chance to self-correct
+	// first. 0 uses the default; negative disables.
+	LoopThreshold int
 
 	mu      sync.Mutex
 	workers map[string]*worker
@@ -112,6 +118,23 @@ func (h *Harness) ensureConfig() (string, error) {
 		return "", fmt.Errorf("writing dsh worker config: %w", err)
 	}
 	return path, nil
+}
+
+func (h *Harness) loopThreshold() int {
+	switch {
+	case h.LoopThreshold < 0:
+		return 0 // disabled
+	case h.LoopThreshold == 0:
+		return 10
+	}
+	return h.LoopThreshold
+}
+
+func truncN(s string, n int) string {
+	if len(s) > n {
+		return s[:n] + "…"
+	}
+	return s
 }
 
 func (h *Harness) bin() string {
@@ -354,9 +377,40 @@ func (h *Harness) Result(ctx context.Context, workerID string) (harness.Result, 
 	if err != nil {
 		return harness.Result{}, err
 	}
+
+	// Loop watchdog: a worker stuck repeating the same tool call burns
+	// its whole timeout producing nothing. The advisory reminders in the
+	// worker composition fire first (3/5/8 identical calls); if the model
+	// still hasn't changed course by the hard threshold, abort with
+	// advice. Replayed events count too — this process owns the whole
+	// session, so its history IS this run.
+	wctx, wcancel := context.WithCancel(context.Background())
+	defer wcancel()
+	loopHit := make(chan string, 1)
+	if threshold := h.loopThreshold(); threshold > 0 {
+		go func() {
+			det := loopdetect.New(threshold)
+			for it := range TailSession(wctx, h.SessionsRoot, workerID, 0) {
+				if it.Event == nil || it.Event.Kind != "tool" {
+					continue
+				}
+				if n, hit := det.Observe(it.Event.Text); hit {
+					select {
+					case loopHit <- fmt.Sprintf("%d× %s", n, truncN(it.Event.Text, 120)):
+					default:
+					}
+					return
+				}
+			}
+		}()
+	}
+
 	aborted := false
+	loopReason := ""
 	select {
 	case <-w.settled:
+	case loopReason = <-loopHit:
+		_ = h.Abort(context.Background(), workerID)
 	case <-ctx.Done():
 		aborted = true
 		_ = h.Abort(context.Background(), workerID)
@@ -380,6 +434,9 @@ func (h *Harness) Result(ctx context.Context, workerID string) (harness.Result, 
 
 	status := harness.StatusDone
 	switch {
+	case loopReason != "":
+		status = harness.StatusFailed
+		summary = "worker was looping (" + loopReason + ") and was aborted. Do NOT retry the same task: it needs a different approach or a smaller scope."
 	case aborted:
 		status = harness.StatusFailed
 		summary = strings.TrimSpace(fmt.Sprintf("aborted: %v. %s", context.Cause(ctx), summary))

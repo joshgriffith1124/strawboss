@@ -82,3 +82,12 @@
 # ctx.codeRuntime for code/both mode; inert under native (verified).
 - id: code-runtime
   name: '@deepseek-ai/dsh-code-runtime-worker-thread'
+
+# Advisory loop-breaker: escalating in-context reminders when the model
+# repeats the same tool call with identical arguments. Never blocks a
+# call. The harness's hard loop abort sits above the last threshold, so
+# the model gets every reminder before strawboss pulls the plug.
+- id: repeat-tool-reminder
+  name: '@deepseek-ai/dsh-repeat-tool-reminder'
+  config:
+    thresholds: [3, 5, 8]

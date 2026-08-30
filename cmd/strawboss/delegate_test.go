@@ -446,3 +446,42 @@ func TestDelegateRefusesOnBudgetStop(t *testing.T) {
 		}
 	}
 }
+
+// TestDelegateRefusesRepeatedFailedTask: the classic supervisor loop —
+// resubmitting the exact task that already failed twice — is refused
+// before anything spawns.
+func TestDelegateRefusesRepeatedFailedTask(t *testing.T) {
+	f := &fakeOpencode{mode: "done"}
+	stateDir, args := setup(t, f)
+	t.Setenv("STRAWBOSS_RUN", "run-loop")
+
+	reg := &registry.Registry{Path: filepath.Join(stateDir, "workers.jsonl"), Run: "run-loop"}
+	for i := 0; i < 2; i++ {
+		wid, err := reg.Allocate(fmt.Sprintf("ses_prev_%d", i), "qwen-coder", "build the doomed thing", "/repo", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := reg.Finish(wid, "", "failed", "boom", "/l", 0, 0, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var out strings.Builder
+	err := runDelegate(append(args, "--task", "build the doomed thing"), &out)
+	if err == nil {
+		t.Fatal("refused task should count as failed")
+	}
+	got := out.String()
+	if !strings.Contains(got, "refused: this exact task has already failed 2 times") {
+		t.Errorf("output missing refusal:\n%s", got)
+	}
+	if f.created.Load() != 0 {
+		t.Errorf("worker spawned despite refusal: %d", f.created.Load())
+	}
+
+	// A different task on the same model still runs.
+	out.Reset()
+	if err := runDelegate(append(args, "--task", "a different task"), &out); err != nil {
+		t.Fatalf("different task refused: %v\n%s", err, out.String())
+	}
+}

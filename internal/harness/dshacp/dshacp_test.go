@@ -260,3 +260,46 @@ done
 		t.Errorf("workers shared a persistence root: %v", roots)
 	}
 }
+
+// TestLoopWatchdogAborts: a worker repeating the same tool call past the
+// threshold is aborted with loop advice instead of burning the timeout.
+func TestLoopWatchdogAborts(t *testing.T) {
+	h := testHarness(t, "hang")
+	h.LoopThreshold = 5
+	// The fake writes a session log full of one repeated tool call, then
+	// the prompt hangs; only the watchdog can end this.
+	toolLine := `{"type":"tool/call","seq":9,"time":1,"data":{"turn":1,"step":1,"callId":"c","name":"bash","arguments":"{\"command\":\"npm test\"}"}}`
+	logDir := filepath.Join(t.TempDir(), "seed")
+	_ = logDir
+	script := `#!/bin/sh
+mkdir -p "$STRAWBOSS_DSH_SESSIONS/proj/` + fixtureSession + `"
+for i in 1 2 3 4 5 6 7; do echo '` + toolLine + `' >> "$STRAWBOSS_DSH_SESSIONS/proj/` + fixtureSession + `/session.jsonl"; done
+while read line; do
+  case "$line" in
+    *'"initialize"'*) echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}';;
+    *'"session/new"'*) echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"` + fixtureSession + `"}}';;
+    *'"session/cancel"'*) echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"cancelled"}}';;
+  esac
+done
+`
+	if err := os.WriteFile(h.Bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wid, err := h.Spawn(context.Background(), "task", mc())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	res, err := h.Result(ctx, wid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != harness.StatusFailed || !strings.Contains(res.Summary, "looping") ||
+		!strings.Contains(res.Summary, "npm test") {
+		t.Fatalf("res = %+v", res)
+	}
+	if ctx.Err() != nil {
+		t.Fatal("watchdog did not fire before the deadline")
+	}
+}

@@ -353,3 +353,25 @@ Also from the same screenshot: in dontAsk mode a bare `ls` IS denied
 (contradicting the earlier M3-era observation that read-only commands
 slipped through) — the default allowedTools now include Glob so the
 supervisor has a sanctioned way to look around a directory.
+
+## Loop detection, three layers (2026-08-30)
+
+Small local models loop instead of concluding — the reasoning-exhaustion
+guard was one instance of a general problem (credit where due: rexyMCP's
+small-model hardening list prompted this). Three independent layers now:
+
+1. **Advisory, in the worker's own context (dsh)**: the composition
+   mounts `@deepseek-ai/dsh-repeat-tool-reminder` (thresholds 3/5/8) —
+   escalating in-context nudges when the model repeats the same tool
+   call with identical canonical arguments. Never blocks a call.
+2. **Hard abort at the harness**: both harnesses watch for consecutive
+   identical tool calls and abort past a threshold (dsh 10, above the
+   last advisory; opencode 6, no advisory layer there), returning a
+   failed terse result with "needs a different approach" advice —
+   minutes of timeout burn become a fast failure. dsh watches the
+   session-log tail live; opencode scans the transcript every ~10s of
+   polling (identity = tool name + title, the best the API exposes).
+3. **Delegation-loop guard in delegate**: a task byte-identical to one
+   that already FAILED twice this run (same model) is refused before
+   spawning — "change the approach, split it, or ask the user" — the
+   structural end of the supervisor retry loop.

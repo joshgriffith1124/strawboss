@@ -93,6 +93,11 @@ func runDelegate(args []string, stdout io.Writer) error {
 		return fmt.Errorf("delegate: no model %q in %s", *model, *modelsPath)
 	}
 
+	// Delegation-loop guard: a task identical to one that already failed
+	// twice this run gets refused, not retried — re-delegating the same
+	// task into the same wall is the classic supervisor loop.
+	refused := failedTaskCounts(filepath.Join(*stateDir, "workers.jsonl"), os.Getenv("STRAWBOSS_RUN"), *model)
+
 	// Worktree isolation: every task gets its own checkout + branch
 	// BEFORE anything spawns, so a failure here aborts the whole call.
 	type wtInfo struct{ path, branch string }
@@ -134,6 +139,19 @@ func runDelegate(args []string, stdout io.Writer) error {
 	outcomes := make([]runner.Outcome, len(tasks))
 	var wg sync.WaitGroup
 	for i, task := range tasks {
+		if refused[task] >= 2 {
+			outcomes[i] = runner.Outcome{Res: harness.Result{
+				Status: harness.StatusFailed,
+				Summary: "refused: this exact task has already failed " + strconv.Itoa(refused[task]) +
+					" times this run. Do NOT resubmit it — change the approach, split it, or ask the user.",
+			}}
+			if wts != nil {
+				if rmErr := worktree.Remove(*dir, wts[i].path, wts[i].branch); rmErr != nil {
+					warn(rmErr.Error())
+				}
+			}
+			continue
+		}
 		workerDir := *dir
 		var decorate func(*harness.Result)
 		if wts != nil {
@@ -214,4 +232,33 @@ func firstLineN(s string, n int) string {
 		s = s[:n] + "…"
 	}
 	return s
+}
+
+// failedTaskCounts maps task text to how many workers already FAILED it
+// in this run for this model — the input to the delegation-loop guard.
+func failedTaskCounts(registryPath, run, model string) map[string]int {
+	events, err := (&registry.Registry{Path: registryPath}).Load()
+	if err != nil {
+		return nil
+	}
+	taskOf := map[string]string{}
+	counts := map[string]int{}
+	for _, ev := range events {
+		if ev.Run != run {
+			continue
+		}
+		switch ev.Type {
+		case "spawned":
+			if ev.Model == model {
+				taskOf[ev.Worker] = ev.Task
+			}
+		case "finished":
+			if ev.Status == "failed" {
+				if task, ok := taskOf[ev.Worker]; ok {
+					counts[task]++
+				}
+			}
+		}
+	}
+	return counts
 }

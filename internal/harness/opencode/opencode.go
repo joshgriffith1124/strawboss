@@ -11,6 +11,7 @@ import (
 
 	"github.com/joshgriffith1124/strawboss/internal/config"
 	"github.com/joshgriffith1124/strawboss/internal/harness"
+	"github.com/joshgriffith1124/strawboss/internal/loopdetect"
 )
 
 // Harness implements harness.WorkerHarness against one `opencode serve`
@@ -24,6 +25,10 @@ type Harness struct {
 	LogDir string
 	// PollInterval for Result's completion polling. Default 500ms.
 	PollInterval time.Duration
+	// LoopThreshold aborts a worker after this many consecutive identical
+	// tool calls (opencode has no in-context advisory layer, so the bar
+	// is lower than dsh's). Default 6; negative disables.
+	LoopThreshold int
 	// StallAfter is how long an idle-looking session may go without a
 	// record update before it's declared dead. Default 45s.
 	StallAfter time.Duration
@@ -205,7 +210,30 @@ func (h *Harness) Result(ctx context.Context, workerID string) (harness.Result, 
 	started := false
 	stalled := false
 	idlePolls := 0
+	polls := 0
+	loopEvery := 20 // scan the transcript every ~10s at the default interval
 	for !stalled {
+		polls++
+		if threshold := h.loopThreshold(); threshold > 0 && polls%loopEvery == 0 {
+			if msgs, err := h.Client.Messages(ctx, workerID); err == nil {
+				if n, call := tailToolRun(msgs); n >= threshold {
+					abortCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					_ = h.Abort(abortCtx, workerID)
+					cancel()
+					logPath, lerr := h.writeLog(workerID, msgs)
+					if lerr != nil {
+						return harness.Result{}, lerr
+					}
+					return harness.Result{
+						WorkerID: workerID,
+						Status:   harness.StatusFailed,
+						Summary: fmt.Sprintf("worker was looping (%d× %s) and was aborted. Do NOT retry the same task: it needs a different approach or a smaller scope.",
+							n, call),
+						LogPath: logPath,
+					}, nil
+				}
+			}
+		}
 		statuses, err := h.Client.Status(ctx, h.Dir)
 		if err != nil {
 			return harness.Result{}, fmt.Errorf("worker %s result: %w", workerID, err)
@@ -276,6 +304,37 @@ func (h *Harness) Result(ctx context.Context, workerID string) (harness.Result, 
 		Summary:  summary,
 		LogPath:  logPath,
 	}, nil
+}
+
+func (h *Harness) loopThreshold() int {
+	switch {
+	case h.LoopThreshold < 0:
+		return 0 // disabled
+	case h.LoopThreshold == 0:
+		return 6
+	}
+	return h.LoopThreshold
+}
+
+// tailToolRun walks every tool part in transcript order and returns the
+// length and identity of the trailing run of consecutive identical calls
+// (tool name + title — the best identity the API exposes).
+func tailToolRun(msgs []Message) (int, string) {
+	det := loopdetect.New(2)
+	run, last := 0, ""
+	for _, m := range msgs {
+		for _, p := range m.Parts {
+			if p.Type != "tool" {
+				continue
+			}
+			last = strings.TrimSpace(p.Tool + " " + p.State.Title)
+			run, _ = det.Observe(last)
+		}
+	}
+	if len(last) > 120 {
+		last = last[:120] + "…"
+	}
+	return run, last
 }
 
 // summarize builds the few-line summary: the final assistant text, falling

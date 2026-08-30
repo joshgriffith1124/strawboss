@@ -205,8 +205,11 @@ func TestUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 	// session_info.json: input 480, output 198, reasoning 0, cache read 15744.
-	if u.InputTokens != 480+15744 {
-		t.Errorf("input = %d", u.InputTokens)
+	if u.InputTokens != 480 {
+		t.Errorf("fresh input = %d", u.InputTokens)
+	}
+	if u.CacheReadTokens != 15744 {
+		t.Errorf("cache reads = %d", u.CacheReadTokens)
 	}
 	if u.OutputTokens != 198 {
 		t.Errorf("output = %d", u.OutputTokens)

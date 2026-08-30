@@ -107,7 +107,7 @@ func TestRegistryWatcher(t *testing.T) {
 
 	// Pre-existing history: w1 done before startup.
 	w1, _ := reg.Allocate("ses_a", "qwen-coder", "old task", "/repo", 0)
-	if err := reg.Finish(w1, "ses_a", "done", "all good", "/logs/a.jsonl", time.Second, 100, 20); err != nil {
+	if err := reg.Finish(w1, "ses_a", "done", "all good", "/logs/a.jsonl", time.Second, 100, 0, 20); err != nil {
 		t.Fatal(err)
 	}
 
@@ -261,7 +261,7 @@ func TestRegistryWatcherScopesByRun(t *testing.T) {
 	stateDir := t.TempDir()
 	oldReg := &registry.Registry{Path: filepath.Join(stateDir, "workers.jsonl"), Run: "run-old"}
 	w1, _ := oldReg.Allocate("ses_old", "qwen-coder", "ancient history", "/repo", 0)
-	_ = oldReg.Finish(w1, "ses_old", "done", "old", "/l", time.Second, 1, 1)
+	_ = oldReg.Finish(w1, "ses_old", "done", "old", "/l", time.Second, 1, 0, 1)
 
 	newReg := &registry.Registry{Path: oldReg.Path, Run: "run-new"}
 	w2, _ := newReg.Allocate("ses_new", "qwen-coder", "current work", "/repo", 0)
@@ -361,7 +361,7 @@ func TestRetryWorkerSpawnsNewWorker(t *testing.T) {
 	stateDir := t.TempDir()
 	reg := &registry.Registry{Path: filepath.Join(stateDir, "workers.jsonl")}
 	w1, _ := reg.Allocate("ses_old", "m1", "the original task", "/repo", 0)
-	if err := reg.Finish(w1, "ses_old", "failed", "boom", "/l", time.Second, 1, 1); err != nil {
+	if err := reg.Finish(w1, "ses_old", "failed", "boom", "/l", time.Second, 1, 0, 1); err != nil {
 		t.Fatal(err)
 	}
 
@@ -508,7 +508,7 @@ func TestNtfyPushOnLiveFailure(t *testing.T) {
 	reg := &registry.Registry{Path: filepath.Join(stateDir, "workers.jsonl")}
 	// History from before this orchestrator existed: must not push.
 	w1, _ := reg.Allocate("ses_hist", "m", "old task", "/repo", 0)
-	if err := reg.Finish(w1, "ses_hist", "failed", "ancient failure", "/l", time.Second, 1, 1); err != nil {
+	if err := reg.Finish(w1, "ses_hist", "failed", "ancient failure", "/l", time.Second, 1, 0, 1); err != nil {
 		t.Fatal(err)
 	}
 
@@ -524,7 +524,7 @@ func TestNtfyPushOnLiveFailure(t *testing.T) {
 		return ok && u.ID == w1
 	})
 	w2, _ := reg.Allocate("ses_live", "m", "new task", "/repo", 0)
-	if err := reg.Finish(w2, "ses_live", "failed", "exploded\ndetails", "/l", time.Second, 1, 1); err != nil {
+	if err := reg.Finish(w2, "ses_live", "failed", "exploded\ndetails", "/l", time.Second, 1, 0, 1); err != nil {
 		t.Fatal(err)
 	}
 
@@ -769,10 +769,10 @@ func TestSessionHistoryAndSwitch(t *testing.T) {
 	proj := t.TempDir()
 	reg := &registry.Registry{Path: filepath.Join(stateDir, "workers.jsonl"), Run: "run-1"}
 	w1, _ := reg.Allocate("ses_w_old", "m", "old farkle task", "/repo", 0)
-	_ = reg.Finish(w1, "ses_w_old", "done", "ok", "/l", time.Second, 1, 1)
+	_ = reg.Finish(w1, "ses_w_old", "done", "ok", "/l", time.Second, 1, 0, 1)
 	reg2 := &registry.Registry{Path: reg.Path, Run: "run-2"}
 	w2, _ := reg2.Allocate("ses_w_new", "m", "new task", "/repo", 0)
-	_ = reg2.Finish(w2, "ses_w_new", "failed", "boom", "/l", time.Second, 1, 1)
+	_ = reg2.Finish(w2, "ses_w_new", "failed", "boom", "/l", time.Second, 1, 0, 1)
 
 	o := New(&supervisor.Driver{Dir: proj}, nil, stateDir)
 	o.RunID = "run-2"

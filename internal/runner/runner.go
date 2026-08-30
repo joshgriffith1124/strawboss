@@ -108,7 +108,7 @@ func Run(ctx context.Context, h harness.WorkerHarness, reg *registry.Registry, m
 		usage = u
 	}
 	if err := reg.Finish(oc.WorkerID, session, string(res.Status), res.Summary, res.LogPath,
-		oc.Duration, usage.InputTokens, usage.OutputTokens); err != nil {
+		oc.Duration, usage.InputTokens, usage.CacheReadTokens, usage.OutputTokens); err != nil {
 		warn(err.Error())
 	}
 	return oc

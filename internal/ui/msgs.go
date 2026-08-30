@@ -100,10 +100,11 @@ type WorkerUpsertMsg struct {
 	// done/failed transition (live events) vs. the recorded time (replay)
 }
 
-// WorkerUsageMsg updates a worker's token counts.
+// WorkerUsageMsg updates a worker's token counts. Input is fresh;
+// prefix re-reads ride separately in CacheRead.
 type WorkerUsageMsg struct {
-	ID            string
-	Input, Output int
+	ID                       string
+	Input, CacheRead, Output int
 	// Ctx is the worker's current context footprint (last request's
 	// prompt size incl. cache reads); 0 = unknown, keeps existing.
 	Ctx int

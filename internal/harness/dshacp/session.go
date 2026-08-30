@@ -126,9 +126,10 @@ func parseLine(line []byte, cum *harness.Usage, info *SessionInfo) []TailItem {
 		case "reasoning-delta", "reasoning":
 			return []TailItem{{Event: &harness.Event{Time: time.Now(), Kind: "reasoning", Text: d.Chunk.Text}}}
 		case "usage":
-			// Cache reads count as input — the same accounting opencode
-			// session totals use, so the TUI token economy compares.
-			cum.InputTokens += d.Chunk.Usage.InputTokens + d.Chunk.Usage.CacheReadTokens
+			// Fresh input and cache reads stay separate so the token
+			// economy compares fresh work to fresh work on both sides.
+			cum.InputTokens += d.Chunk.Usage.InputTokens
+			cum.CacheReadTokens += d.Chunk.Usage.CacheReadTokens
 			cum.OutputTokens += d.Chunk.Usage.OutputTokens
 			u := *cum
 			if info != nil {

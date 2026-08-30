@@ -40,6 +40,7 @@ type workerRow struct {
 	Started time.Time
 	Ended   time.Time
 	In, Out int
+	CacheRd int // worker-side prefix re-reads, separate from fresh In
 	Ctx     int // current context footprint (0 = unknown)
 	Steps   int // completed model steps (dsh; 0 = unknown)
 }
@@ -462,6 +463,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			r.out, r.at = msg.Output, now
 			m.workerRates[msg.ID] = r
 			w.In, w.Out = msg.Input, msg.Output
+			w.CacheRd = msg.CacheRead
 			if msg.Ctx > 0 {
 				w.Ctx = msg.Ctx
 				// dsh emits exactly one context-bearing usage per model

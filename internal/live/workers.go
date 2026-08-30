@@ -112,7 +112,7 @@ func (o *Orchestrator) applyRegistryEvent(ctx context.Context, ev registry.Event
 		}
 		o.emit(ctx,
 			ui.WorkerUpsertMsg{ID: ev.Worker, Status: ev.Status, Summary: ev.Summary, LogPath: ev.LogPath, Ended: ev.TS},
-			ui.WorkerUsageMsg{ID: ev.Worker, Input: ev.InputTokens, Output: ev.OutputTokens},
+			ui.WorkerUsageMsg{ID: ev.Worker, Input: ev.InputTokens, CacheRead: ev.CacheReadTokens, Output: ev.OutputTokens},
 		)
 	}
 }
@@ -139,7 +139,7 @@ func (o *Orchestrator) tailDshWorker(ctx context.Context, wid, session string) {
 			o.mu.Lock()
 			o.dshOut[wid] = it.Usage.OutputTokens
 			o.mu.Unlock()
-			o.emit(ctx, ui.WorkerUsageMsg{ID: wid, Input: it.Usage.InputTokens, Output: it.Usage.OutputTokens, Ctx: it.Ctx})
+			o.emit(ctx, ui.WorkerUsageMsg{ID: wid, Input: it.Usage.InputTokens, CacheRead: it.Usage.CacheReadTokens, Output: it.Usage.OutputTokens, Ctx: it.Ctx})
 		case it.TurnEnded:
 			endReason = it.EndReason
 		}
@@ -257,9 +257,9 @@ func (o *Orchestrator) pollWorkers(ctx context.Context) {
 			if err != nil {
 				continue
 			}
-			in := info.Tokens.Input + info.Tokens.Cache.Read + info.Tokens.Cache.Write
+			in := info.Tokens.Input + info.Tokens.Cache.Write
 			out := info.Tokens.Output + info.Tokens.Reasoning
-			o.emit(ctx, ui.WorkerUsageMsg{ID: s.worker, Input: in, Output: out})
+			o.emit(ctx, ui.WorkerUsageMsg{ID: s.worker, Input: in, CacheRead: info.Tokens.Cache.Read, Output: out})
 			outDeltaPerModel[s.model] += out - lastOut[s.worker]
 			lastOut[s.worker] = out
 

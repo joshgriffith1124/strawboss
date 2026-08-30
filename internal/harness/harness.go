@@ -31,11 +31,14 @@ type Event struct {
 	Text string
 }
 
-// Usage is a worker's token consumption so far.
+// Usage is a worker's token consumption so far. InputTokens is FRESH
+// input (cache writes included); prefix re-reads live in CacheReadTokens
+// so the token economy can compare fresh work to fresh work.
 type Usage struct {
-	InputTokens  int
-	OutputTokens int
-	TokensPerSec float64 // 0 if the backend doesn't report it
+	InputTokens     int
+	CacheReadTokens int
+	OutputTokens    int
+	TokensPerSec    float64 // 0 if the backend doesn't report it
 }
 
 // Result is what the delegate command hands back to the supervisor: the

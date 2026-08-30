@@ -180,8 +180,9 @@ func (h *Harness) Usage(ctx context.Context, workerID string) (harness.Usage, er
 		return harness.Usage{}, fmt.Errorf("worker %s usage: %w", workerID, err)
 	}
 	return harness.Usage{
-		InputTokens:  info.Tokens.Input + info.Tokens.Cache.Read + info.Tokens.Cache.Write,
-		OutputTokens: info.Tokens.Output + info.Tokens.Reasoning,
+		InputTokens:     info.Tokens.Input + info.Tokens.Cache.Write,
+		CacheReadTokens: info.Tokens.Cache.Read,
+		OutputTokens:    info.Tokens.Output + info.Tokens.Reasoning,
 	}, nil
 }
 

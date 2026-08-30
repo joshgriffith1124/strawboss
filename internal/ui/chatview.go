@@ -195,44 +195,54 @@ func kv(w int, k, v string) string {
 }
 
 func (m Model) viewTokensPanel(w int) string {
-	wrkIn, wrkOut := 0, 0
+	wrkFresh, wrkCache := 0, 0
 	for _, wk := range m.workers {
-		wrkIn += wk.In
-		wrkOut += wk.Out
+		wrkFresh += wk.In + wk.Out
+		wrkCache += wk.CacheRd
 	}
-	wrkTotal := wrkIn + wrkOut
 
-	// Headline numbers are FRESH tokens: supervisor cache reads are the
-	// conversation prefix re-read every turn, cheap and not spend — they
-	// get their own dim line rather than inflating the headline. Totals
-	// include the RUNNING turn's live estimate.
+	// Headline numbers are FRESH tokens on both sides; prefix re-reads
+	// get their own dim lines. The split bar is COST-WEIGHTED: a cached
+	// input token is ~10% of a fresh one on API pricing, the best proxy
+	// for what the plan actually meters — zero-weighting cache made the
+	// leverage look ~4× better than it is. Supervisor totals include the
+	// RUNNING turn's live estimate.
 	supIn, supCacheRead, supCacheWrite, supOut := m.supTokens()
 	freshSup := supIn + supCacheWrite + supOut
+	supEquiv := freshSup + supCacheRead/10
 	lines := []string{
 		kv(w, "supervisor", sText.Render(formatTokens(freshSup)+" · ")+sAmberB.Render("plan")),
 	}
 	if supCacheRead > 0 {
-		lines = append(lines, kv(w, "  cache reads", sFaint.Render(formatTokens(supCacheRead)+" · free-ish")))
+		lines = append(lines, kv(w, "  cache reads", sFaint.Render(formatTokens(supCacheRead)+" · ~10% rate")))
 	}
 	lines = append(lines,
-		kv(w, "workers", sText.Render(formatTokens(wrkTotal)+" · ")+sTealB.Render("$0.00")),
+		kv(w, "workers", sText.Render(formatTokens(wrkFresh)+" · ")+sTealB.Render("$0.00")),
 	)
+	if wrkCache > 0 {
+		lines = append(lines, kv(w, "  cache reads", sFaint.Render(formatTokens(wrkCache)+" · free")))
+	}
 	barW := w - 4
-	if barW > 4 && freshSup+wrkTotal > 0 {
-		supCells := barW * freshSup / (freshSup + wrkTotal)
-		if supCells < 1 && freshSup > 0 {
+	if barW > 4 && supEquiv+wrkFresh > 0 {
+		supCells := barW * supEquiv / (supEquiv + wrkFresh)
+		if supCells < 1 && supEquiv > 0 {
 			supCells = 1
 		}
 		bar := sAmber.Render(strings.Repeat("▰", supCells)) + sTeal.Render(strings.Repeat("▰", barW-supCells))
 		lines = append(lines, " "+bar+" ")
-		supPct := 100 * freshSup / (freshSup + wrkTotal)
-		legend := sDim.Render("fresh ") + sAmberB.Render(fmt.Sprintf("%d%%", supPct)) + sDim.Render(" plan")
+		supPct := 100 * supEquiv / (supEquiv + wrkFresh)
+		legend := sDim.Render("≈plan-equiv ") + sAmberB.Render(fmt.Sprintf("%d%%", supPct))
 		right := sTealB.Render(fmt.Sprintf("%d%%", 100-supPct)) + sDim.Render(" local")
 		gap := w - 2 - lipgloss.Width(legend) - lipgloss.Width(right) - 2
 		if gap < 1 {
 			gap = 1
 		}
 		lines = append(lines, " "+legend+strings.Repeat(" ", gap)+right+" ")
+		if supEquiv > 0 && wrkFresh > 0 {
+			lines = append(lines, kv(w, "leverage",
+				sTealB.Render(fmt.Sprintf("≈%.1fx", float64(wrkFresh)/float64(supEquiv)))+
+					sFaint.Render(" · 1:1 assumption")))
+		}
 	}
 	if m.fiveHour > 0 {
 		lines = append(lines, kv(w, "plan window",

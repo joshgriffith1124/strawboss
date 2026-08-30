@@ -409,20 +409,16 @@ func TestSidePanelEconomyAndModels(t *testing.T) {
 		ModelStatMsg{Name: "qwen-dsh", Note: "dsh"},
 	)
 	tokens := m.viewTokensPanel(38)
-	if !strings.Contains(tokens, "fresh") {
-		t.Errorf("tokens panel missing fresh legend:\n%s", tokens)
-	}
 	// The headline is fresh tokens (5k), never cache-inflated (305k),
-	// with cache reads on their own dim line.
+	// with cache reads on their own dim line and a cost-weighted split.
 	if !strings.Contains(tokens, "5.0k") || !strings.Contains(tokens, "cache reads") {
 		t.Errorf("headline not fresh:\n%s", tokens)
 	}
 	if strings.Contains(tokens, "305.0k") {
 		t.Errorf("cache-inflated headline:\n%s", tokens)
 	}
-	// fresh sup = 5k vs workers 45k → plan share must be small (10%).
-	if !strings.Contains(tokens, "10%") {
-		t.Errorf("fresh split not computed over fresh tokens:\n%s", tokens)
+	if !strings.Contains(tokens, "plan-equiv") || !strings.Contains(tokens, "leverage") {
+		t.Errorf("cost-weighted split missing:\n%s", tokens)
 	}
 
 	models := m.viewModelsPanel(38)
@@ -734,5 +730,27 @@ func TestLiveTurnUsageShowsMidTurn(t *testing.T) {
 	in, _, _, out = m.supTokens()
 	if in != 150 || out != 80 {
 		t.Fatalf("interrupted-turn estimate lost: %d/%d", in, out)
+	}
+}
+
+func TestTokensPanelLeverage(t *testing.T) {
+	m := New(make(chan tea.Msg))
+	m = apply(t, m,
+		tea.WindowSizeMsg{Width: 120, Height: 40},
+		// Supervisor: 1.0M fresh + 30M cache reads → plan-equiv 4.0M.
+		SupUsageMsg{Input: 600000, Output: 400000, CacheRead: 30000000, Turns: 1},
+		// Workers: 16M fresh + 3M cache reads.
+		WorkerUpsertMsg{ID: "w1", Model: "qwen-dsh", Task: "t", Status: "done"},
+		WorkerUsageMsg{ID: "w1", Input: 6000000, CacheRead: 3000000, Output: 10000000},
+	)
+	tokens := m.viewTokensPanel(40)
+	for _, want := range []string{"plan-equiv", "leverage", "≈4.0x", "1:1 assumption", "~10% rate", "free"} {
+		if !strings.Contains(tokens, want) {
+			t.Errorf("panel missing %q:\n%s", want, tokens)
+		}
+	}
+	// plan-equiv share: 4M / 20M = 20%.
+	if !strings.Contains(tokens, "20%") || !strings.Contains(tokens, "80%") {
+		t.Errorf("cost-weighted split wrong:\n%s", tokens)
 	}
 }

@@ -35,12 +35,13 @@ type Event struct {
 	// there is no server to ask.
 	PID int `json:"pid,omitempty"`
 	// finished fields
-	Status       string `json:"status,omitempty"`
-	Summary      string `json:"summary,omitempty"`
-	LogPath      string `json:"log_path,omitempty"`
-	DurationMS   int64  `json:"duration_ms,omitempty"`
-	InputTokens  int    `json:"input_tokens,omitempty"`
-	OutputTokens int    `json:"output_tokens,omitempty"`
+	Status          string `json:"status,omitempty"`
+	Summary         string `json:"summary,omitempty"`
+	LogPath         string `json:"log_path,omitempty"`
+	DurationMS      int64  `json:"duration_ms,omitempty"`
+	InputTokens     int    `json:"input_tokens,omitempty"`
+	CacheReadTokens int    `json:"cache_read_tokens,omitempty"`
+	OutputTokens    int    `json:"output_tokens,omitempty"`
 }
 
 // Registry appends to and replays one workers.jsonl file.
@@ -110,13 +111,13 @@ func (r *Registry) Allocate(session, model, task, dir string, pid int) (string, 
 }
 
 // Finish records a worker's terminal state.
-func (r *Registry) Finish(workerID, session, status, summary, logPath string, duration time.Duration, inputTokens, outputTokens int) error {
+func (r *Registry) Finish(workerID, session, status, summary, logPath string, duration time.Duration, inputTokens, cacheReadTokens, outputTokens int) error {
 	return r.withLock(func() error {
 		return r.append(Event{
 			TS: time.Now(), Type: "finished", Worker: workerID, Session: session, Run: r.Run,
 			Status: status, Summary: summary, LogPath: logPath,
 			DurationMS:  duration.Milliseconds(),
-			InputTokens: inputTokens, OutputTokens: outputTokens,
+			InputTokens: inputTokens, CacheReadTokens: cacheReadTokens, OutputTokens: outputTokens,
 		})
 	})
 }
@@ -161,8 +162,9 @@ type Worker struct {
 	Started  time.Time
 	Finished time.Time
 	// tokens from the finished event; live counts come from the harness
-	InputTokens  int
-	OutputTokens int
+	InputTokens     int
+	CacheReadTokens int
+	OutputTokens    int
 }
 
 // Reduce folds the event log into per-worker state, in spawn order. A
@@ -189,6 +191,7 @@ func Reduce(events []Event) []Worker {
 			w.LogPath = ev.LogPath
 			w.Finished = ev.TS
 			w.InputTokens = ev.InputTokens
+			w.CacheReadTokens = ev.CacheReadTokens
 			w.OutputTokens = ev.OutputTokens
 		}
 	}

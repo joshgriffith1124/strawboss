@@ -60,7 +60,7 @@ func TestFinishLoadReduce(t *testing.T) {
 	r := &Registry{Path: filepath.Join(t.TempDir(), "workers.jsonl"), Run: "run-77"}
 	w1, _ := r.Allocate("ses_1", "qwen-coder", "build the thing", "/repo", 0)
 	w2, _ := r.Allocate("ses_2", "qwen-small", "docstrings", "/repo", 0)
-	if err := r.Finish(w1, "ses_1", "done", "built; tests pass", "/logs/ses_1.jsonl", 95*time.Second, 12000, 800); err != nil {
+	if err := r.Finish(w1, "ses_1", "done", "built; tests pass", "/logs/ses_1.jsonl", 95*time.Second, 12000, 0, 800); err != nil {
 		t.Fatal(err)
 	}
 

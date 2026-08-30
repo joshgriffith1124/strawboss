@@ -127,8 +127,10 @@ func TestDelegateDone(t *testing.T) {
 	if w.Task != "build the thing" || w.Model != "qwen-coder" {
 		t.Errorf("worker = %+v", w)
 	}
-	if w.InputTokens != 2000 || w.OutputTokens != 90 {
-		t.Errorf("tokens = %d/%d", w.InputTokens, w.OutputTokens)
+	// fake session: input 500, cache read 1500, output 90 — fresh and
+	// cache recorded separately.
+	if w.InputTokens != 500 || w.CacheReadTokens != 1500 || w.OutputTokens != 90 {
+		t.Errorf("tokens = %d/%d/%d", w.InputTokens, w.CacheReadTokens, w.OutputTokens)
 	}
 }
 
@@ -461,7 +463,7 @@ func TestDelegateRefusesRepeatedFailedTask(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := reg.Finish(wid, "", "failed", "boom", "/l", 0, 0, 0); err != nil {
+		if err := reg.Finish(wid, "", "failed", "boom", "/l", 0, 0, 0, 0); err != nil {
 			t.Fatal(err)
 		}
 	}

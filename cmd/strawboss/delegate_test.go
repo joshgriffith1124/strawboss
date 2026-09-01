@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,9 +19,10 @@ import (
 // fakeOpencode serves the minimal API surface delegate exercises. mode
 // selects the worker outcome: "done", "failed", or "hang" (never finishes).
 type fakeOpencode struct {
-	mode    string
-	aborts  atomic.Int32
-	created atomic.Int32
+	mode       string
+	aborts     atomic.Int32
+	created    atomic.Int32
+	lastPrompt atomic.Value // raw prompt_async request body
 }
 
 const testSID = "ses_delegate_test_1"
@@ -38,6 +40,8 @@ func (f *fakeOpencode) handler() http.Handler {
 		fmt.Fprintf(w, `{"data":{"id":"ses_delegate_test_%d"}}`, n)
 	})
 	mux.HandleFunc("POST /session/{sid}/prompt_async", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		f.lastPrompt.Store(string(body))
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("POST /session/{sid}/abort", func(w http.ResponseWriter, r *http.Request) {
@@ -485,5 +489,142 @@ func TestDelegateRefusesRepeatedFailedTask(t *testing.T) {
 	out.Reset()
 	if err := runDelegate(append(args, "--task", "a different task"), &out); err != nil {
 		t.Fatalf("different task refused: %v\n%s", err, out.String())
+	}
+}
+
+// gitRepoDir makes a --dir that is a git repo with one tracked file, so
+// the repo map has something to say.
+func gitRepoDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "lock.go"), []byte("package p\n\nfunc SlotLock() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	add := exec.Command("git", "add", "-A")
+	add.Dir = dir
+	if out, err := add.CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v %s", err, out)
+	}
+	return dir
+}
+
+// TestDelegateEscalation: a failure on the requested model re-dispatches
+// once to the NEXT config in models.toml, inside the same call — one
+// terse result telling the whole story, both attempts in the registry.
+func TestDelegateEscalation(t *testing.T) {
+	cheap := &fakeOpencode{mode: "failed"}
+	strong := &fakeOpencode{mode: "done"}
+	srvCheap := httptest.NewServer(cheap.handler())
+	srvStrong := httptest.NewServer(strong.handler())
+	t.Cleanup(srvCheap.Close)
+	t.Cleanup(srvStrong.Close)
+	stateDir := t.TempDir()
+	toml := "[models.cheap]\nendpoint = \"" + srvCheap.URL + "\"\nmodel = \"p/cheap\"\n" +
+		"[models.strong]\nendpoint = \"" + srvStrong.URL + "\"\nmodel = \"p/strong\"\n"
+	if err := os.WriteFile(filepath.Join(stateDir, "models.toml"), []byte(toml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"--state-dir", stateDir, "--dir", t.TempDir(), "--model", "cheap", "--task", "fix the thing"}
+
+	var out strings.Builder
+	if err := runDelegate(args, &out); err != nil {
+		t.Fatalf("err = %v, out = %s", err, out.String())
+	}
+	got := out.String()
+	if !strings.Contains(got, "w2 done ") {
+		t.Errorf("output = %q", got)
+	}
+	if !strings.Contains(got, "[escalated from cheap, which failed:") || !strings.Contains(got, "it broke") {
+		t.Errorf("escalation note missing: %q", got)
+	}
+	// Exactly one terse result — the supervisor never sees two.
+	if strings.Contains(got, "w1 failed") {
+		t.Errorf("first attempt leaked into supervisor output: %q", got)
+	}
+	events, _ := (&registry.Registry{Path: filepath.Join(stateDir, "workers.jsonl")}).Load()
+	workers := registry.Reduce(events)
+	if len(workers) != 2 {
+		t.Fatalf("workers = %+v", workers)
+	}
+	byID := map[string]registry.Worker{}
+	for _, w := range workers {
+		byID[w.ID] = w
+	}
+	if byID["w1"].Status != "failed" || byID["w1"].Model != "cheap" {
+		t.Errorf("w1 = %+v", byID["w1"])
+	}
+	if byID["w2"].Status != "done" || byID["w2"].Model != "strong" {
+		t.Errorf("w2 = %+v", byID["w2"])
+	}
+
+	// --escalate=false keeps the old single-attempt behavior.
+	cheap2 := &fakeOpencode{mode: "failed"}
+	srv2 := httptest.NewServer(cheap2.handler())
+	t.Cleanup(srv2.Close)
+	state2 := t.TempDir()
+	toml2 := "[models.cheap]\nendpoint = \"" + srv2.URL + "\"\nmodel = \"p/cheap\"\n" +
+		"[models.strong]\nendpoint = \"" + srv2.URL + "\"\nmodel = \"p/strong\"\n"
+	if err := os.WriteFile(filepath.Join(state2, "models.toml"), []byte(toml2), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out2 strings.Builder
+	err := runDelegate([]string{"--state-dir", state2, "--dir", t.TempDir(),
+		"--model", "cheap", "--escalate=false", "--task", "fix the thing"}, &out2)
+	if err == nil || !strings.Contains(out2.String(), "w1 failed") {
+		t.Errorf("escalate=false: err=%v out=%q", err, out2.String())
+	}
+}
+
+// TestDelegatePromptGetsRepoMap: workers receive map + task; the
+// registry records the bare task (loop-guard identity, TUI display).
+func TestDelegatePromptGetsRepoMap(t *testing.T) {
+	f := &fakeOpencode{mode: "done"}
+	stateDir, args := setup(t, f)
+	repo := gitRepoDir(t)
+	// setup's --dir is args[3]; override with the git repo.
+	for i, a := range args {
+		if a == "--dir" {
+			args[i+1] = repo
+		}
+	}
+	var out strings.Builder
+	if err := runDelegate(append(args, "--task", "add tests"), &out); err != nil {
+		t.Fatalf("err = %v, out = %s", err, out.String())
+	}
+	body, _ := f.lastPrompt.Load().(string)
+	if !strings.Contains(body, "Repository map") || !strings.Contains(body, "lock.go: SlotLock") {
+		t.Errorf("worker prompt missing repo map: %q", body)
+	}
+	if !strings.Contains(body, "Your task:") || !strings.Contains(body, "add tests") {
+		t.Errorf("worker prompt missing task: %q", body)
+	}
+	events, _ := (&registry.Registry{Path: filepath.Join(stateDir, "workers.jsonl")}).Load()
+	for _, ev := range events {
+		if ev.Type == "spawned" && ev.Task != "add tests" {
+			t.Errorf("registry task = %q, want bare task", ev.Task)
+		}
+	}
+
+	// --repomap=false sends the bare task.
+	f2 := &fakeOpencode{mode: "done"}
+	_, args2 := setup(t, f2)
+	for i, a := range args2 {
+		if a == "--dir" {
+			args2[i+1] = repo
+		}
+	}
+	var out2 strings.Builder
+	if err := runDelegate(append(args2, "--repomap=false", "--task", "add tests"), &out2); err != nil {
+		t.Fatal(err)
+	}
+	if body, _ := f2.lastPrompt.Load().(string); strings.Contains(body, "Repository map") {
+		t.Errorf("--repomap=false still injected the map: %q", body)
 	}
 }

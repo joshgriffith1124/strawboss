@@ -8,6 +8,7 @@ import (
 
 	"github.com/joshgriffith1124/strawboss/internal/config"
 	"github.com/joshgriffith1124/strawboss/internal/registry"
+	"github.com/joshgriffith1124/strawboss/internal/repomap"
 	"github.com/joshgriffith1124/strawboss/internal/runner"
 	"github.com/joshgriffith1124/strawboss/internal/ui"
 )
@@ -117,7 +118,8 @@ func (o *Orchestrator) OnRetryWorker(id string) {
 		defer cancel()
 		reg := &registry.Registry{Path: filepath.Join(o.StateDir, "workers.jsonl"), Run: run}
 		warn := func(s string) { o.emitAsync(ui.RawLogMsg{Source: "wrk", Line: s}) }
-		if oc := runner.Run(ctx, h, reg, mc, task, dir, warn, nil); oc.Err != nil {
+		prompt := repomap.Prompt(repomap.Build(dir, 0), task)
+		if oc := runner.Run(ctx, h, reg, mc, prompt, task, dir, warn, nil); oc.Err != nil {
 			o.emitAsync(ui.ToastMsg{Text: "retry of " + id + " failed: " + oc.Err.Error()})
 		}
 	}()

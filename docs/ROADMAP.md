@@ -21,6 +21,14 @@ tested at the end (same rule as milestones). Struck items are done.
 11. ~~Permission prompts (lite)~~ — denials are loud (chat note with a
     paste-ready allowed_tools fix, toast, remote push). Full interactive
     prompts deferred until the denial log shows they'd pay.
+12. **Escalation skips dead models** — the cheap-first ladder walks
+    models.toml file order blindly, so a failure on entry 1 escalates
+    into an unloaded/unreachable entry 2 and burns a guaranteed second
+    failure. Escalate to the next config that *probes healthy* instead.
+13. **EDNS-proof name resolution** — retry `LookupIPAddr` with a plain
+    (no-EDNS) query when it fails, so LAN hostnames survive routers that
+    misorder EDNS answers (see the WSL2/router note in NOTES.md); then
+    revert models.toml endpoints from IPs back to hostnames.
 
 Explicitly not planned: web UI, remote/mobile control beyond OpenClaw,
 MCP management — agent-deck does these; strawboss stays a local TUI with

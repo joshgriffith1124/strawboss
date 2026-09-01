@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -866,5 +867,50 @@ func TestNewSessionCommandAndKeys(t *testing.T) {
 	}
 	if len(m.chat) != 1 || !strings.Contains(m.chat[0].text, "fresh session") {
 		t.Errorf("chat = %+v", m.chat)
+	}
+}
+
+// TestChatScroll: PgUp walks back into a long reply, an indicator says
+// how to get back, PgDn/send re-join the live tail.
+func TestChatScroll(t *testing.T) {
+	m := New(make(chan tea.Msg))
+	m = apply(t, m, tea.WindowSizeMsg{Width: 120, Height: 20})
+	for i := 0; i < 60; i++ {
+		m = apply(t, m, RawLogMsg{Source: "app", Line: "x"}) // unrelated
+		m.chat = append(m.chat, chatItem{kind: "note", when: time.Now(), text: fmt.Sprintf("line-%02d", i)})
+	}
+
+	bottom := m.viewChatColumn(80, 18)
+	if !strings.Contains(bottom, "line-59") || strings.Contains(bottom, "line-05") {
+		t.Fatalf("unscrolled view wrong:\n%s", bottom)
+	}
+
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyPgUp}, tea.KeyMsg{Type: tea.KeyPgUp},
+		tea.KeyMsg{Type: tea.KeyPgUp}, tea.KeyMsg{Type: tea.KeyPgUp})
+	if m.chatScroll == 0 {
+		t.Fatal("pgup did not scroll")
+	}
+	scrolled := m.viewChatColumn(80, 18)
+	if !strings.Contains(scrolled, "line-05") || strings.Contains(scrolled, "line-59") {
+		t.Errorf("scrolled view wrong:\n%s", scrolled)
+	}
+	if !strings.Contains(scrolled, "lines below") {
+		t.Errorf("scrolled view missing the follow indicator:\n%s", scrolled)
+	}
+
+	// Excess PgUp clamps at the top instead of showing nothing.
+	for i := 0; i < 30; i++ {
+		m = apply(t, m, tea.KeyMsg{Type: tea.KeyPgUp})
+	}
+	top := m.viewChatColumn(80, 18)
+	if !strings.Contains(top, "line-00") {
+		t.Errorf("top view wrong:\n%s", top)
+	}
+
+	// Sending a message snaps back to the live tail.
+	m.input.SetValue("hello")
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.chatScroll != 0 {
+		t.Errorf("chatScroll = %d after send", m.chatScroll)
 	}
 }

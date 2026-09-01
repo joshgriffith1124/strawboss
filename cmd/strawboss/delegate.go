@@ -19,6 +19,7 @@ import (
 	"github.com/joshgriffith1124/strawboss/internal/harness"
 	"github.com/joshgriffith1124/strawboss/internal/live"
 	"github.com/joshgriffith1124/strawboss/internal/registry"
+	"github.com/joshgriffith1124/strawboss/internal/repomap"
 	"github.com/joshgriffith1124/strawboss/internal/runner"
 	"github.com/joshgriffith1124/strawboss/internal/worktree"
 )
@@ -42,6 +43,8 @@ func runDelegate(args []string, stdout io.Writer) error {
 	})
 	dir := fs.String("dir", "", "worker working directory (default: current directory)")
 	useWorktree := fs.Bool("worktree", false, "run each worker in an isolated git worktree on its own strawboss/* branch")
+	escalate := fs.Bool("escalate", true, "on worker failure, retry the task once on the next model config in models.toml (skipped with --worktree)")
+	useRepoMap := fs.Bool("repomap", true, "prepend a compact repo map (files + top-level symbols) to worker prompts")
 	timeout := fs.Duration("timeout", 20*time.Minute, "abort workers after this long")
 	stateDir := fs.String("state-dir", "", "state directory (default ~/.strawboss)")
 	modelsPath := fs.String("models", "", "models.toml path (default <state-dir>/models.toml)")
@@ -98,6 +101,8 @@ func runDelegate(args []string, stdout io.Writer) error {
 	// task into the same wall is the classic supervisor loop.
 	refused := failedTaskCounts(filepath.Join(*stateDir, "workers.jsonl"), os.Getenv("STRAWBOSS_RUN"), *model)
 
+	warn := func(s string) { fmt.Fprintf(os.Stderr, "strawboss: %s\n", s) }
+
 	// Worktree isolation: every task gets its own checkout + branch
 	// BEFORE anything spawns, so a failure here aborts the whole call.
 	type wtInfo struct{ path, branch string }
@@ -120,6 +125,13 @@ func runDelegate(args []string, stdout io.Writer) error {
 				return fmt.Errorf("delegate: %w", err)
 			}
 			wts[i] = wtInfo{path, branch}
+			// Gitignored-but-needed files (.env, local certs) named in
+			// .worktreeinclude; without them a task "works in the main
+			// checkout, fails in the worktree". Non-fatal: the worker may
+			// not need them.
+			if _, err := worktree.CopyIncludes(*dir, path); err != nil {
+				warn(err.Error())
+			}
 		}
 	}
 
@@ -135,7 +147,13 @@ func runDelegate(args []string, stdout io.Writer) error {
 	ctx, cancelSignals := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancelSignals()
 
-	warn := func(s string) { fmt.Fprintf(os.Stderr, "strawboss: %s\n", s) }
+	// One map for the whole call: worktrees are branches of the same
+	// HEAD, so the main checkout's map serves every worker.
+	repoMap := ""
+	if *useRepoMap {
+		repoMap = repomap.Build(*dir, 0)
+	}
+
 	outcomes := make([]runner.Outcome, len(tasks))
 	var wg sync.WaitGroup
 	for i, task := range tasks {
@@ -162,6 +180,7 @@ func runDelegate(args []string, stdout io.Writer) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			prompt := repomap.Prompt(repoMap, task)
 			// Per-worker harness: with worktrees every worker has its own
 			// working directory, which the harness carries.
 			h, err := runner.NewHarness(mc, workerDir, *stateDir)
@@ -169,7 +188,20 @@ func runDelegate(args []string, stdout io.Writer) error {
 				outcomes[i] = runner.Outcome{Err: err}
 				return
 			}
-			outcomes[i] = runner.Run(ctx, h, reg, mc, task, workerDir, warn, decorate)
+			outcomes[i] = runner.Run(ctx, h, reg, mc, prompt, task, workerDir, warn, decorate)
+			// Cheap-first escalation: a failure on the requested (cheap)
+			// model re-dispatches ONCE to the next config in models.toml,
+			// inside this call — the supervisor still reads a single terse
+			// result instead of hand-retrying. Worktree runs are excluded:
+			// the second attempt would share the first's partial state and
+			// worktree finalization runs per attempt.
+			if *escalate && wts == nil && ctx.Err() == nil && !succeeded(outcomes[i]) {
+				if next, ok := nextModel(models, mc.Name); ok {
+					warn("escalating failed task to " + next.Name)
+					outcomes[i] = runEscalated(ctx, outcomes[i], next, mc.Name,
+						prompt, task, workerDir, *stateDir, reg, warn, decorate)
+				}
+			}
 			if outcomes[i].Err != nil && wts != nil {
 				// The worker never ran or couldn't be tracked: nothing of
 				// value in the worktree; drop it.
@@ -200,6 +232,56 @@ func runDelegate(args []string, stdout io.Writer) error {
 		return fmt.Errorf("%d of %d workers failed", failed, len(tasks))
 	}
 	return nil
+}
+
+// succeeded reports whether an outcome is a completed, non-failed worker.
+func succeeded(oc runner.Outcome) bool {
+	return oc.Err == nil && oc.Res.Status == harness.StatusDone
+}
+
+// nextModel returns the config after cur in models.toml file order — the
+// escalation ladder IS the preference order: entries below the requested
+// one are the fallbacks.
+func nextModel(models []config.ModelConfig, cur string) (config.ModelConfig, bool) {
+	for i, m := range models {
+		if m.Name == cur && i+1 < len(models) {
+			return models[i+1], true
+		}
+	}
+	return config.ModelConfig{}, false
+}
+
+// runEscalated re-dispatches a failed task once on the next model config.
+// The final terse result must tell the whole story in one place: what the
+// cheap model did, and how the escalation went. A second attempt that
+// never ran keeps the first, richer outcome rather than replacing it.
+func runEscalated(ctx context.Context, first runner.Outcome, next config.ModelConfig, firstModel,
+	prompt, task, workerDir, stateDir string, reg *registry.Registry,
+	warn func(string), decorate func(*harness.Result)) runner.Outcome {
+	firstDesc := ""
+	if first.Err != nil {
+		firstDesc = "error: " + first.Err.Error()
+	} else {
+		firstDesc = firstLineN(first.Res.Summary, 120)
+	}
+
+	h, err := runner.NewHarness(next, workerDir, stateDir)
+	if err == nil {
+		oc := runner.Run(ctx, h, reg, next, prompt, task, workerDir, warn, decorate)
+		if oc.Err == nil {
+			oc.Res.Summary = "[escalated from " + firstModel + ", which failed: " + firstDesc + "]\n" + oc.Res.Summary
+			return oc
+		}
+		err = oc.Err
+	}
+	// Escalation never produced a result: report the first attempt, noting
+	// the dead end so the supervisor doesn't re-dispatch to that model.
+	if first.Err != nil {
+		first.Err = fmt.Errorf("%s failed (%s); escalation to %s errored: %v", firstModel, firstDesc, next.Name, err)
+		return first
+	}
+	first.Res.Summary += "\n[escalation to " + next.Name + " errored: " + err.Error() + "]"
+	return first
 }
 
 // finalizeWorktree commits whatever the worker left in its worktree onto

@@ -194,7 +194,10 @@ func TestBuildSystemPrompt(t *testing.T) {
 		"qwen-coder (spark-a/qwen3.8-27b)", "qwen-small", "terse",
 		// One denied git command must not convince the supervisor that
 		// delegation is blocked — the prompt has to explain the allowlist.
-		"ONLY the delegate command", "delegation still works"} {
+		"ONLY the delegate command", "delegation still works",
+		// Workers get a repo map and failures auto-escalate; the
+		// supervisor must not spend tokens duplicating either.
+		"repository map", "retries the task ONCE"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("prompt missing %q", want)
 		}

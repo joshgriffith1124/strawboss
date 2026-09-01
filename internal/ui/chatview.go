@@ -85,7 +85,30 @@ func (m Model) viewChatColumn(w, h int) string {
 		b.WriteString("  " + star + " " + sDim.Italic(true).Render(m.supStatus) + "\n")
 	}
 
-	lines := tail(strings.TrimRight(b.String(), "\n"), logH)
+	// Scroll window: chatScroll lines up from the bottom (0 = following).
+	// Long replies overflow the pane; PgUp is the way back to their start.
+	// While scrolled, the bottom row becomes a "N lines below" indicator,
+	// so the visible window is one row shorter.
+	all := strings.Split(strings.TrimRight(b.String(), "\n"), "\n")
+	scroll, window := m.chatScroll, logH
+	if scroll > 0 && logH > 1 {
+		window = logH - 1
+	}
+	if max := len(all) - window; scroll > max {
+		scroll = max
+	}
+	if scroll < 0 {
+		scroll = 0
+	}
+	end := len(all) - scroll
+	start := end - window
+	if start < 0 {
+		start = 0
+	}
+	lines := append([]string(nil), all[start:end]...)
+	if scroll > 0 {
+		lines = append(lines, sFaint.Render(fmt.Sprintf("▼ %d lines below · PgDn to follow", scroll)))
+	}
 	// Bottom-anchor: the conversation grows up from the input box, so the
 	// newest exchange sits beside where you type instead of stranded at
 	// the top of an empty column.

@@ -52,17 +52,24 @@ type Outcome struct {
 }
 
 // Run runs one task to completion. Cancelling ctx aborts the worker and
-// records it failed rather than leaving it running unobserved. warn (may be
+// records it failed rather than leaving it running unobserved. prompt is
+// what the worker is actually sent (task plus harness-injected context
+// like the repo map); task is the bare task text the registry records —
+// keeping the two apart keeps the delegation-loop guard's identity and
+// the TUI's task display free of injected boilerplate. warn (may be
 // nil) receives non-fatal problems — an abort that failed, a registry write
 // that failed — for the caller's log. decorate (may be nil) can amend the
 // result before it is recorded and returned — worktree finalization uses
 // it so the branch note reaches the supervisor, registry, and TUI alike.
-func Run(ctx context.Context, h harness.WorkerHarness, reg *registry.Registry, mc config.ModelConfig, task, dir string, warn func(string), decorate func(*harness.Result)) (oc Outcome) {
+func Run(ctx context.Context, h harness.WorkerHarness, reg *registry.Registry, mc config.ModelConfig, prompt, task, dir string, warn func(string), decorate func(*harness.Result)) (oc Outcome) {
 	if warn == nil {
 		warn = func(string) {}
 	}
+	if prompt == "" {
+		prompt = task
+	}
 	start := time.Now()
-	session, err := h.Spawn(ctx, task, mc)
+	session, err := h.Spawn(ctx, prompt, mc)
 	if err != nil {
 		oc.Err = err
 		return oc

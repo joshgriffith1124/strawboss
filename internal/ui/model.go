@@ -101,6 +101,16 @@ func (m *Model) noteSupCtx(ctx int) {
 	}
 }
 
+// chatPageStep is one PgUp/PgDn stride: most of a screen of chat, with
+// overlap for continuity.
+func (m Model) chatPageStep() int {
+	step := m.height - 8
+	if step < 5 {
+		step = 5
+	}
+	return step
+}
+
 // contextWindowFor is the model's reported context length, 0 if unknown.
 func (m Model) contextWindowFor(name string) int {
 	for _, ms := range m.models {
@@ -199,7 +209,11 @@ type Model struct {
 	supStatus string // "✻ …" line
 	streaming strings.Builder
 	chat      []chatItem
-	input     textinput.Model
+	// chatScroll is how many lines above the bottom the chat view sits
+	// (0 = following the newest content). PgUp/PgDn drive it; sending a
+	// message snaps back to the bottom.
+	chatScroll int
+	input      textinput.Model
 
 	// token economy: committed totals (from turn results) plus a live
 	// bucket for the running turn (per-call estimates, replaced by the
@@ -759,11 +773,21 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.input.SetValue("")
+			m.chatScroll = 0 // sending re-joins the live tail
 			if text == "/new" {
 				return m, func() tea.Msg { return NewSessionMsg{} }
 			}
 			m.chat = append(m.chat, chatItem{kind: "user", when: time.Now(), text: text})
 			return m, func() tea.Msg { return SendPromptMsg{Text: text} }
+		case "pgup":
+			m.chatScroll += m.chatPageStep()
+			return m, nil
+		case "pgdown":
+			m.chatScroll -= m.chatPageStep()
+			if m.chatScroll < 0 {
+				m.chatScroll = 0
+			}
+			return m, nil
 		}
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)

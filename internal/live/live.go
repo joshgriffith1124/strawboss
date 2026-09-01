@@ -415,6 +415,8 @@ Your Bash access covers ONLY the delegate command above; any other shell command
 
 When parallel tasks might edit the SAME files, add --worktree: each worker then runs in an isolated git worktree and its work is committed on its own strawboss/* branch (named in the result) instead of the shared working directory. Nothing merges automatically — relay the branch names to the user for review.
 
-Workers are SMALL local models with a limited output budget (roughly 16k tokens, shared with their internal reasoning). Scope every task so the deliverable is modest — aim for one file of at most ~200 lines per task, never a whole app in one file. If a worker fails with "only internal reasoning" or an empty reply, the task was too big: split it into smaller pieces instead of retrying the same task.`,
+Workers are SMALL local models with a limited output budget (roughly 16k tokens, shared with their internal reasoning). Scope every task so the deliverable is modest — aim for one file of at most ~200 lines per task, never a whole app in one file. If a worker fails with "only internal reasoning" or an empty reply, the task was too big: split it into smaller pieces instead of retrying the same task.
+
+Every worker automatically receives a compact repository map (file paths with top-level symbols), so don't spend task tokens describing the file layout — just name the files to touch. When a worker fails, delegate automatically retries the task ONCE on the next model config (the result says so) — never hand-retry a failed task on a different model yourself.`,
 		exe, strings.Join(names, ", "), exe)
 }

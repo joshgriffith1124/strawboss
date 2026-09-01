@@ -454,3 +454,31 @@ Workarounds, most robust first: pin the LAN host in `/etc/hosts` (Go's
 resolver honors files before dns), or use the LAN IP in models.toml.
 A code-level fallback (retry the lookup with a plain no-EDNS query when
 LookupIPAddr fails) would make strawboss immune to this router class.
+
+## Steal-list wave 1: worktreeinclude, escalation, repo map, chat scroll (2026-08-30)
+
+Three adoptions from the ecosystem survey, picked for fit with the
+invariants, plus a UX fix:
+
+- **`.worktreeinclude`** (ccmanager convention): gitignored paths listed
+  there (env files, local certs) are copied into each worker worktree at
+  creation — kills "works in the main checkout, fails in the worktree".
+  Escaping patterns refuse; tracked files are never overwritten;
+  symlinks are skipped.
+- **Cheap-first escalation** (RA.Aid): a failed worker re-dispatches its
+  task ONCE to the next config in models.toml file order — the ladder IS
+  the preference order — inside the same delegate call, so the
+  supervisor reads a single terse result telling the whole story (both
+  attempts appear in the registry/TUI). Skipped with --worktree (the
+  second attempt would share the first's partial state); --escalate=false
+  opts out. The system prompt tells the supervisor not to hand-retry.
+- **Repo map for workers** (Aider): `git ls-files` + regex-extracted
+  top-level symbols (Go/Python/JS/TS/Rust/Ruby), capped at ~6KB,
+  prepended to every worker prompt (map first, task last). Regex over
+  tree-sitter on purpose — measure first-pass success before buying real
+  parsing. The registry records the BARE task: loop-guard identity and
+  TUI display stay clean. --repomap=false opts out; retry from the TUI
+  gets the same map.
+- **Chat scrolling**: PgUp/PgDn walk into history (long supervisor
+  replies used to overflow with no way back); a "N lines below"
+  indicator row shows while scrolled; sending a message snaps back.

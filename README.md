@@ -119,6 +119,12 @@ ssh -t remote-box 'cd /path/to/repo && tmux new -A -s strawboss strawboss'
 tmux (or mosh) matters: a dropped ssh session would otherwise take the TUI
 and the run with it. Detach with `C-b d`, reattach with the same command.
 
+Cross-compiling the binary for that box is enough — it needs no Go
+toolchain of its own. On a network doing TLS inspection, Node is the part
+that breaks (npm, opencode, dsh, and the `claude` CLI all ship their own
+CA bundle); `docs/NOTES.md` has the verified fix, along with the macOS
+and prerelease-pinning specifics.
+
 The inference endpoint does not have to live on that box — `models.toml`
 endpoints may point anywhere the box can reach, and strawboss only manages
 `opencode serve` for localhost endpoints.

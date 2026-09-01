@@ -482,3 +482,47 @@ invariants, plus a UX fix:
 - **Chat scrolling**: PgUp/PgDn walk into history (long supervisor
   replies used to overflow with no way back); a "N lines below"
   indicator row shows while scrolled; sending a message snaps back.
+
+## A second host: Apple Silicon + a TLS-inspecting network (2026-09-01, live setup)
+
+Standing up strawboss on a work MacBook (M3) over ssh, per the README's
+"Working on a remote machine". Everything below was hit for real.
+
+- **Cross-compiling the binary is enough** — no Go on the target.
+  `GOOS=darwin GOARCH=arm64 go build` from Linux emits a Mach-O arm64
+  binary that the Go linker **ad-hoc code-signs itself**
+  (`LC_CODE_SIGNATURE` is present in the cross-built output), so Apple
+  Silicon runs it without `codesign -s -`. `scp` sets no quarantine
+  xattr, so Gatekeeper stays quiet. Check the artifact with `file`
+  before shipping: `zsh: exec format error` on the far side just means
+  an ELF got copied to a Mac.
+- **Node is the only thing that breaks under TLS inspection.** macOS
+  `curl` and Go's darwin `crypto/x509` both use the system keychain, so
+  the `curl | bash` installers and strawboss itself are fine; Node ships
+  its own CA bundle, so npm/pnpm, opencode, dsh, and the `claude` CLI
+  all fail until the corporate root is added.
+  - `security find-certificate -c <name>` matches the common name
+    **exactly**, not as a substring — it finds nothing for a partial
+    name even when the cert is right there. Dump the keychain with
+    `-a -p`, split on `BEGIN CERTIFICATE`, and filter on
+    `openssl x509 -noout -subject`.
+  - `NODE_EXTRA_CA_CERTS` **appends** to Node's bundled roots (right
+    thing); `npm config set cafile` **replaces** them. pnpm keeps its own
+    `cafile` config separate from npm's.
+  - The var must be exported from the shell rc *before* strawboss
+    launches: the supervisor `claude` subprocess inherits the
+    environment, so an interactive-only export leaves the supervisor
+    failing TLS while the setup commands all looked fine.
+- **Pin dsh to one prerelease across both layers.** The global `dsh`
+  package and every profile package must be the same version (here
+  `0.1.1-rc.2`); the leaf plugins and the `dsh-base` bundle resolve out
+  of the *global* install's own node_modules, while the acp profile
+  holds only the eight `dsh-acp*`/leaf packages. `dsh plugin --profile
+  acp add <pkg>` forwards verbatim to `pnpm add` in the profile dir, so
+  an unversioned spec resolves the `latest` dist-tag — wrong or absent
+  for a prerelease-only package. Pass explicit `@<version>` specs.
+- **Laptops sleep.** Idle sleep and lid close both suspend the
+  supervisor and any live workers. `caffeinate -i` covers idle only;
+  lid-close needs `caffeinate -d` or a power-settings change. macOS also
+  has no preinstalled tmux, so the README's detach story needs Homebrew
+  on a clean machine.

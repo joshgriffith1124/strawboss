@@ -30,6 +30,13 @@ tested at the end (same rule as milestones). Struck items are done.
     misorder EDNS answers (see the WSL2/router note in NOTES.md); then
     revert models.toml endpoints from IPs back to hostnames.
 
-Explicitly not planned: web UI, remote/mobile control beyond OpenClaw,
-MCP management — agent-deck does these; strawboss stays a local TUI with
-a token-free supervisor (see the agent-deck research note).
+Explicitly not planned: a local-TUI/remote-execution split (`--remote
+host:/path`). Everything that touches code is one co-located unit —
+supervisor, delegate, workers, state — so remote code means remote
+agents, and once the remote box is a full strawboss host anyway, `ssh
+-t` + tmux gets the same result for free (README: "Working on a remote
+machine"). The only shape ssh can't cover is one TUI watching several
+boxes at once; revisit if that need is real. Also not planned: web UI,
+remote/mobile control beyond OpenClaw, MCP management — agent-deck does
+these; strawboss stays a local TUI with a token-free supervisor (see the
+agent-deck research note).

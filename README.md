@@ -99,6 +99,30 @@ Type what you want built. The supervisor delegates; the dashboard (tab 2)
 shows workers live. `models.toml` order is preference order — the
 supervisor favors the first entry.
 
+### Working on a remote machine
+
+Run strawboss *on* the box that holds the code — not locally against it.
+Everything that touches files is one co-located unit: the supervisor
+(`claude -p`) runs with the repo as its cwd, calls `strawboss delegate`
+through its own Bash tool, and delegate spawns workers in that same
+filesystem. There is no useful split where the agents run here and the
+code lives there.
+
+So set the remote box up as a normal strawboss host — binary, `claude`
+logged in on subscription auth, a worker harness, `~/.strawboss/models.toml`
+— and attach to it:
+
+```sh
+ssh -t remote-box 'cd /path/to/repo && tmux new -A -s strawboss strawboss'
+```
+
+tmux (or mosh) matters: a dropped ssh session would otherwise take the TUI
+and the run with it. Detach with `C-b d`, reattach with the same command.
+
+The inference endpoint does not have to live on that box — `models.toml`
+endpoints may point anywhere the box can reach, and strawboss only manages
+`opencode serve` for localhost endpoints.
+
 ### Worker harness setup (at least one required)
 
 Workers don't run themselves: each `models.toml` entry names a harness,

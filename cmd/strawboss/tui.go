@@ -78,7 +78,22 @@ func runTUI(args []string) error {
 // the sanctioned way to look around a directory: in dontAsk mode a bare
 // `ls` is denied.
 func supervisorAllowedTools(exe string, extra []string) []string {
-	base := []string{fmt.Sprintf("Bash(%s delegate:*)", exe), "Read", "Edit", "Write", "Glob"}
+	base := []string{
+		fmt.Sprintf("Bash(%s delegate:*)", exe),
+		// Small glue work the system prompt asks for.
+		"Read", "Edit", "Write", "Glob",
+		// Grep was missing and was the single most-denied tool (19% of
+		// its calls, in every project) — it belongs with Read and Glob,
+		// which were always allowed. See docs/NOTES.md.
+		"Grep",
+		// Research the supervisor would otherwise be denied outright.
+		"WebFetch", "WebSearch",
+		// Read-only shell. Every one of these appeared in a real denial;
+		// nothing here writes, so the supervisor can look around without
+		// gaining the ability to act outside the delegate contract.
+		"Bash(ls:*)", "Bash(cat:*)", "Bash(head:*)", "Bash(wc:*)", "Bash(find:*)",
+		"Bash(git status:*)", "Bash(git log:*)", "Bash(git diff:*)", "Bash(git show:*)",
+	}
 	return append(base, extra...)
 }
 

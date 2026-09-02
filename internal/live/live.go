@@ -413,16 +413,20 @@ Delegate with the Bash tool:
 
 Available worker models, in preference order — use the first unless a task clearly needs another: %s. Workers run in your working directory and cannot see this conversation — every task description must stand alone. The command blocks until every worker finishes and prints one terse result per worker (worker id, status, summary, full-log path); read a log file only when you truly need detail.
 
+If a task's text contains $( ), backticks, or < >, do NOT put it in --task: those read as shell syntax and the whole delegate call is denied. Write the task to a file and pass the path instead — a path has no shell metacharacters, and this also suits long tasks:
+  %s delegate --model <name> --task-file /tmp/task1.md
+--task-file repeats and mixes with --task exactly like --task does.
+
 Run INDEPENDENT tasks in parallel by repeating --task in ONE delegate call — each task becomes its own concurrent worker:
   %s delegate --model <m> --task "first task" --task "second task"
 Only chain separate delegate calls when one task needs another's output. Do small glue work yourself (you may Read, Edit, and Write files directly); delegate anything substantial.
 
-Your Bash access covers ONLY the delegate command above; any other shell command (git, ls, builds, tests) is auto-denied. Such a denial says "Permission to use Bash has been denied", but it applies to that one command only — delegation still works, so never conclude that Bash as a whole or delegation is blocked. Look around with Read and Glob instead, and delegate work that truly needs a shell.
+Your Bash access covers the delegate command above plus read-only inspection (ls, cat, head, wc, find, git status/log/diff/show). Anything that builds, tests, installs, or writes is auto-denied. Such a denial says "Permission to use Bash has been denied", but it applies to that one command only — delegation still works, so never conclude that Bash as a whole or delegation is blocked. Read, Grep and Glob are available for looking around; delegate work that truly needs a shell.
 
 When parallel tasks might edit the SAME files, add --worktree: each worker then runs in an isolated git worktree and its work is committed on its own strawboss/* branch (named in the result) instead of the shared working directory. Nothing merges automatically — relay the branch names to the user for review.
 
 Workers are SMALL local models with a limited output budget (roughly 16k tokens, shared with their internal reasoning). Scope every task so the deliverable is modest — aim for one file of at most ~200 lines per task, never a whole app in one file. If a worker fails with "only internal reasoning" or an empty reply, the task was too big: split it into smaller pieces instead of retrying the same task.
 
 Every worker automatically receives a compact repository map (file paths with top-level symbols), so don't spend task tokens describing the file layout — just name the files to touch. When a worker fails, delegate automatically retries the task ONCE on the next model config (the result says so) — never hand-retry a failed task on a different model yourself.`,
-		exe, strings.Join(names, ", "), exe)
+		exe, strings.Join(names, ", "), exe, exe)
 }

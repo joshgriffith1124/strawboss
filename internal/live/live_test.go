@@ -193,9 +193,13 @@ func TestBuildSystemPrompt(t *testing.T) {
 	})
 	for _, want := range []string{"/usr/local/bin/strawboss delegate", "--model", "--task",
 		"qwen-coder (spark-a/qwen3.8-27b)", "qwen-small", "terse",
-		// One denied git command must not convince the supervisor that
-		// delegation is blocked — the prompt has to explain the allowlist.
-		"ONLY the delegate command", "delegation still works",
+		// One denied command must not convince the supervisor that
+		// delegation is blocked — the prompt has to explain the allowlist,
+		// which now covers read-only inspection alongside delegate.
+		"read-only inspection", "delegation still works",
+		// Task prose with shell metacharacters gets the whole delegate
+		// call denied; the prompt must offer the file route instead.
+		"--task-file", "$( )",
 		// Workers get a repo map and failures auto-escalate; the
 		// supervisor must not spend tokens duplicating either.
 		"repository map", "retries the task ONCE"} {

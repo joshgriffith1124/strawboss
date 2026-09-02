@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -626,5 +627,57 @@ func TestDelegatePromptGetsRepoMap(t *testing.T) {
 	}
 	if body, _ := f2.lastPrompt.Load().(string); strings.Contains(body, "Repository map") {
 		t.Errorf("--repomap=false still injected the map: %q", body)
+	}
+}
+
+// TestTaskFileFlag: task prose containing $( ), backticks, or < > reads to
+// Claude Code's Bash allowlist as a compound command and gets the whole
+// delegate call denied — three real denials in the transcripts. A file
+// path carries none of that, so --task-file must accept exactly what
+// --task would have.
+func TestTaskFileFlag(t *testing.T) {
+	dir := t.TempDir()
+	hostile := "REPLACE index.html with <style> blocks and a <script src=x> tag; run $(date) first"
+	path := filepath.Join(dir, "task.md")
+	if err := os.WriteFile(path, []byte("  "+hostile+"\n\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var tasks []string
+	fs := flag.NewFlagSet("t", flag.ContinueOnError)
+	registerTaskFlags(fs, &tasks)
+	if err := fs.Parse([]string{"--task", "inline one", "--task-file", path}); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("got %d tasks, want 2", len(tasks))
+	}
+	if tasks[0] != "inline one" {
+		t.Errorf("inline task = %q", tasks[0])
+	}
+	if tasks[1] != hostile {
+		t.Errorf("file task = %q, want the trimmed file body", tasks[1])
+	}
+}
+
+func TestTaskFileErrors(t *testing.T) {
+	dir := t.TempDir()
+	empty := filepath.Join(dir, "empty.md")
+	if err := os.WriteFile(empty, []byte("   \n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name, path, want string
+	}{
+		{"missing file", filepath.Join(dir, "nope.md"), "reading task file"},
+		{"empty file", empty, "is empty"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := readTaskFile(tt.path)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("err = %v, want one containing %q", err, tt.want)
+			}
+		})
 	}
 }

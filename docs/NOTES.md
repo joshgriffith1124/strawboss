@@ -684,3 +684,55 @@ that starts the full `Run` loop, so it is the only one where
 spawned a REAL `opencode serve` against the port — which Shutdown then
 had to tear down inside its budget. It failed intermittently on any box
 with opencode installed. The mux now answers the health probe.
+
+## What the supervisor and workers were actually blocked on (2026-09-02, transcript audit)
+
+Audited every project: 8 supervisor transcripts (382 tool calls, from the
+`claude` CLI's own session files — strawboss does not persist the
+supervisor stream) and 175 worker transcripts (1468 tool calls).
+
+**Workers are not blocked at all.** The composition runs
+`sandbox-policy: danger-full-access` with `user-approval: never`, and the
+logs agree: 879 bash calls including docker, curl, rm, kill, setsid, and
+ZERO permission blocks. The only failures were 4 missing binaries
+(docker, luajit, openspec) and 4 OS-level filesystem errors inside the
+workload. Every "sandbox/forbidden/denied" hit on a first pass was a
+false positive — those words appearing in file content the workers read.
+Grepping log text for those words is worthless here; pair `tool/call`
+with `tool/result` by callId instead.
+
+**The supervisor took 23 denials in 382 calls (6%).**
+
+| tool | denied | share of its calls |
+|---|---|---|
+| Grep | 10 | 19% |
+| Bash, non-delegate | 7 | — |
+| Bash, the delegate command itself | 3 | 3% of 93 |
+| WebFetch / WebSearch | 3 | 100% |
+
+Grep was never in the baseline — an oversight, since Read and Glob (the
+same read-only class) always were. It was denied in all four projects.
+
+**The delegate denials are not a prefix problem.** Multi-line `\`
+continuations are fine: 90 of those passed. What failed was task prose
+containing shell metacharacters — `$(cat …)` and `<style>` / `<script
+src=…>`. Claude Code's Bash matcher splits the command on shell
+operators, and the extra segments are not allowlisted, so the whole call
+dies however correct the prefix is. Hence `--task-file`: a path has no
+metacharacters, and the system prompt now routes hostile or long task
+text through a file.
+
+**The allowlist now also covers read-only shell** (ls, cat, head, wc,
+find, git status/log/diff/show) and the web tools, per invariant 6 —
+every entry was denied in a real run. Nothing that writes, builds,
+installs, or executes arbitrary code was added.
+
+**Invariant 3 is leaking, and it is expensive.** The supervisor reads
+worker transcripts directly: 16 reads under `~/.strawboss/logs` pulled
+~35,300 tokens into supervisor context, one of them 12,575 tokens in a
+single Read. For contrast, the 93 delegate results averaged 181 tokens
+each — the terse contract holding well under its ~250 target. So 16 log
+reads cost about what 195 delegations cost. All 16 were in one project,
+whose ledger shows a 92k footprint. Read is allowlisted, so this needs a
+deny rule to actually stop, and the system prompt still says "read a log
+file only when you truly need detail". Decision pending.

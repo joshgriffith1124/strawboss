@@ -30,17 +30,53 @@ import (
 // tokens each. Everything else (live transcripts, registry events) flows
 // to the TUI locally.
 //
-// --task may repeat: each task becomes its own worker and they all run in
-// parallel inside this one invocation (a single Bash call on the
-// supervisor side — compound shell commands don't pass the allowlist).
+// --task (or --task-file) may repeat: each task becomes its own worker and
+// they all run in parallel inside this one invocation (a single Bash call
+// on the supervisor side — compound shell commands don't pass the
+// allowlist).
+// registerTaskFlags wires --task and --task-file onto fs, appending to
+// tasks in the order the flags appear so the two forms interleave freely.
+//
+// --task-file exists to keep task prose out of the shell. A task
+// containing $( ), backticks, or < > reads to Claude Code's Bash
+// allowlist as a compound command, and the whole delegate call is denied
+// however correct the prefix is — three real denials in the transcripts
+// (docs/NOTES.md). A file path carries no metacharacters.
+func registerTaskFlags(fs *flag.FlagSet, tasks *[]string) {
+	fs.Func("task", "task prompt for a worker (repeat for parallel workers)", func(s string) error {
+		*tasks = append(*tasks, s)
+		return nil
+	})
+	fs.Func("task-file", "read a task prompt from a file (repeat for parallel workers)", func(path string) error {
+		task, err := readTaskFile(path)
+		if err != nil {
+			return err
+		}
+		*tasks = append(*tasks, task)
+		return nil
+	})
+}
+
+// readTaskFile loads one task prompt from disk. Surrounding whitespace is
+// trimmed (a heredoc or editor leaves a trailing newline); an empty file
+// is an error rather than a worker spawned with nothing to do.
+func readTaskFile(path string) (string, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("reading task file: %w", err)
+	}
+	task := strings.TrimSpace(string(b))
+	if task == "" {
+		return "", fmt.Errorf("task file %s is empty", path)
+	}
+	return task, nil
+}
+
 func runDelegate(args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("delegate", flag.ContinueOnError)
 	model := fs.String("model", "", "model config name from models.toml (required)")
 	var tasks []string
-	fs.Func("task", "task prompt for a worker (repeat for parallel workers)", func(s string) error {
-		tasks = append(tasks, s)
-		return nil
-	})
+	registerTaskFlags(fs, &tasks)
 	dir := fs.String("dir", "", "worker working directory (default: current directory)")
 	useWorktree := fs.Bool("worktree", false, "run each worker in an isolated git worktree on its own strawboss/* branch")
 	escalate := fs.Bool("escalate", true, "on worker failure, retry the task once on the next model config in models.toml (skipped with --worktree)")
@@ -52,7 +88,7 @@ func runDelegate(args []string, stdout io.Writer) error {
 		return err
 	}
 	if *model == "" || len(tasks) == 0 {
-		return errors.New("delegate: --model and at least one --task are required")
+		return errors.New("delegate: --model and at least one --task or --task-file are required")
 	}
 
 	if *stateDir == "" {

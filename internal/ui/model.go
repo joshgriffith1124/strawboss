@@ -504,7 +504,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					w.Ended = time.Now()
 				}
 			}
-			if msg.Status == "failed" {
+			// Replayed failures stay silent. Restarting after a crash
+			// reads back every worker the crash killed, and announcing
+			// them claims they are failing now — the same rule the
+			// remote push already follows.
+			if msg.Status == "failed" && !msg.Replay {
 				m.ringBell(msg.ID + " failed — " + truncPlain(firstLine(msg.Summary), 40))
 			}
 			m.log("wrk", msg.ID+" "+msg.Status)
@@ -582,8 +586,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.log(msg.Source, msg.Line)
 		return m, Listen(m.feed)
 	case ToastMsg:
-		m.showToast(msg.Text)
-		m.log("app", msg.Text)
+		m.showToast(msg.Text) // showToast logs it
 		return m, Listen(m.feed)
 	case RemoteMsg:
 		m.remoteChannel = msg.Channel
@@ -670,10 +673,14 @@ func (m *Model) ringBell(text string) {
 	os.Stdout.WriteString("\a")
 }
 
-// showToast shows a transient status line without the bell.
+// showToast shows a transient status line without the bell. Every toast is
+// also written to the logs tab: a message that shows for five seconds and
+// then vanishes is unreportable otherwise — the same reason crashes go to
+// a file rather than a screen the TUI is about to restore.
 func (m *Model) showToast(text string) {
 	m.toast = text
 	m.toastUntil = time.Now().Add(5 * time.Second)
+	m.log("app", text)
 }
 
 // selectedWorker resolves the dashboard selection against display order.

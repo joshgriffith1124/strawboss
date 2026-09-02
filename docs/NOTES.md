@@ -773,3 +773,66 @@ File content comes through Read, which honours the rules; `ls`, `wc` and
 longer says "read a log file only when you truly need detail" — it says
 the log path belongs to the human, and to delegate a follow-up task when
 a result is too thin.
+
+## The crash, identified: heap corruption in the render path (2026-09-02)
+
+The fd-level crash log paid off on its first crash. The cause:
+
+    fatal error: found bad pointer in Go heap (incorrect use of unsafe or cgo?)
+
+thrown by `runtime.badPointer` from `scanstack` → `scanframeworker` →
+`scanblock`. The corrupted object's address matches the frame pointer of
+`ui.Model.viewChat` exactly, so the bad pointer sits in a stack frame of
+the render path: `View` → `viewChat` (chatview.go:20) → `viewChatColumn`
+(chatview.go:123). The frame is ~11KB and pointer-dense because Model is
+passed by value.
+
+This is NOT a data race — `make race` is clean, including a 167-worker
+stress test. It is memory corruption, and nothing in strawboss uses
+`unsafe` or cgo. Among dependencies only `charmbracelet/x/ansi` uses
+`unsafe`, and only to reinterpret int slices as its Param type — no
+fabricated pointers, and `checkptr` (via -race) finds nothing.
+
+Not reproduced locally: `TestRenderUnderGCStress` (internal/ui, gated
+behind `STRAWBOSS_STRESS=1`) renders 4000 frames against a 160-worker
+model with four allocator goroutines, under `GOGC=1
+GODEBUG=gccheckmark=1` and again under -race/checkptr. Clean both ways.
+Keep it as the reproducer to bisect against.
+
+Remaining suspects, in order: the toolchain (go1.27.0 is new, and the
+traceback runs through a generated allocator, `runtime/malloc_generated.go`);
+then a render-path dependency. Mitigations taken rather than a fix:
+`x/ansi` 0.11.6→0.11.8, `displaywidth` 0.9.0→0.11.0 (plus uax29,
+go-colorful, go-runewidth), and CGO_ENABLED=0 pinned in the Makefile.
+That pin matters beyond cgo: the default flips with whether a C compiler
+is installed, so the build silently changed the day gcc was added. Note
+the first crash predates gcc, so cgo was never the cause — pinning
+removes a variable and makes the binary static.
+
+## Startup announced failures that were already over (2026-09-02)
+
+On launch the TUI showed "w192 failed — aborted: terminated signal
+received". Those workers died with the PREVIOUS process — the crash
+killed them — and the registry watcher replays that history at startup.
+The remote push already guarded this (`ev.TS.After(o.started)`, "replayed
+history must not re-ring anyone's phone") but the local bell and toast
+did not, so a restart announced every worker the crash had killed as if
+it were failing right then.
+
+`WorkerUpsertMsg` now carries `Replay`, set from that same timestamp
+comparison, and the bell is skipped for replayed failures. The row and
+the logs tab still record them — only the announcement is suppressed.
+
+Related: every toast now writes to the logs tab. A toast shows for five
+seconds and vanishes, which made this one nearly unreportable; only
+`ToastMsg` was logged before, not the toasts raised directly in the UI.
+
+## Context gauge on a resumed session (2026-09-02)
+
+The real window arrives with the first `result` event, so a session
+resumed on a build that never recorded one shows the conservative 200k
+until its first turn completes — then the ledger's `win` field carries it
+across restarts. Verified the lookup against the live CLI: `system/init`
+reports model `claude-opus-5[1m]` and `modelUsage` keys the entry
+`claude-opus-5[1m]` with `contextWindow: 1000000`, an exact match, so no
+name normalisation is needed for the [1m] variants.

@@ -107,6 +107,11 @@ type WorkerUpsertMsg struct {
 	Started time.Time // zero keeps existing
 	Ended   time.Time // when the worker finished; zero means "now" on a
 	// done/failed transition (live events) vs. the recorded time (replay)
+	// Replay marks an event read back from history rather than one
+	// happening now. Replayed failures must not ring the bell or raise a
+	// toast: restarting after a crash otherwise announces every worker the
+	// crash killed, as if it were failing again right then.
+	Replay bool
 }
 
 // WorkerUsageMsg updates a worker's token counts. Input is fresh;

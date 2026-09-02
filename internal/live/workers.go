@@ -101,9 +101,12 @@ func (o *Orchestrator) applyRegistryEvent(ctx context.Context, ev registry.Event
 		o.mu.Lock()
 		delete(o.unfinished, ev.Worker)
 		o.mu.Unlock()
-		// Push only live failures — replayed history must not re-ring
-		// anyone's phone.
-		if ev.Status == "failed" && ev.TS.After(o.started) {
+		// One notion of "replayed" for both consumers: history read back
+		// at startup must neither push to a phone nor ring the local
+		// bell. Restarting after a crash otherwise announces every worker
+		// the crash killed as if it were failing right then.
+		replay := !ev.TS.After(o.started)
+		if ev.Status == "failed" && !replay {
 			summary := ev.Summary
 			if i := strings.IndexByte(summary, '\n'); i >= 0 {
 				summary = summary[:i]
@@ -111,7 +114,8 @@ func (o *Orchestrator) applyRegistryEvent(ctx context.Context, ev registry.Event
 			o.pushFailure(ev.Worker, summary)
 		}
 		o.emit(ctx,
-			ui.WorkerUpsertMsg{ID: ev.Worker, Status: ev.Status, Summary: ev.Summary, LogPath: ev.LogPath, Ended: ev.TS},
+			ui.WorkerUpsertMsg{ID: ev.Worker, Status: ev.Status, Summary: ev.Summary,
+				LogPath: ev.LogPath, Ended: ev.TS, Replay: replay},
 			ui.WorkerUsageMsg{ID: ev.Worker, Input: ev.InputTokens, CacheRead: ev.CacheReadTokens, Output: ev.OutputTokens},
 		)
 	}

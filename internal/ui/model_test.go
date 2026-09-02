@@ -999,3 +999,41 @@ func TestSupUsageLearnsWindow(t *testing.T) {
 		t.Errorf("window after unreported update = %d, want 1000000", got)
 	}
 }
+
+// TestReplayedFailureStaysSilent: restarting after a crash reads back
+// every worker the crash killed. Announcing those claims they are failing
+// now — the bug was a startup toast reading "w192 failed — aborted:
+// terminated signal received" for a worker that died with the previous
+// process.
+func TestReplayedFailureStaysSilent(t *testing.T) {
+	tests := []struct {
+		name      string
+		replay    bool
+		wantToast bool
+	}{
+		{"live failure rings", false, true},
+		{"replayed failure is silent", true, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := New(make(chan tea.Msg))
+			next, _ := m.Update(WorkerUpsertMsg{ID: "w192", Model: "qwen-dsh", Status: "running"})
+			next, _ = next.(Model).Update(WorkerUpsertMsg{
+				ID: "w192", Status: "failed",
+				Summary: "aborted: terminated signal received",
+				Replay:  tt.replay,
+			})
+			got := next.(Model)
+			if (got.toast != "") != tt.wantToast {
+				t.Errorf("toast = %q, want any=%v", got.toast, tt.wantToast)
+			}
+			// Either way the row records the failure and the logs tab keeps it.
+			if w := got.worker("w192"); w == nil || w.Status != "failed" {
+				t.Error("failure not recorded on the worker row")
+			}
+			if len(got.logs) == 0 {
+				t.Error("failure missing from the logs tab")
+			}
+		})
+	}
+}

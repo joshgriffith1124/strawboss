@@ -553,3 +553,26 @@ Unrelated flake found while verifying: `TestSessionHistoryAndSwitch`
 stopped draining at the replayed worker event, so if the switch message
 from the other producer hadn't landed yet the assertion failed. It waits
 for both now.
+
+## Box-drawing borders render as `?` in some remote terminals (2026-09-01)
+
+Running the TUI inside zellij over ssh, the panel borders came back as
+runs of `?` while everything else drew fine. Ruled out on our side:
+`panel()` (internal/ui/styles.go) is the ONLY runtime source of `─`, it
+builds rules with `strings.Repeat` on a whole rune, and `clipTo` trims by
+`[]rune` — nothing byte-slices a multi-byte sequence.
+
+It is the terminal, and the tell is *which* glyphs survive: `·`, `▰`,
+`✻` and the block elements rendered correctly while only the
+box-drawing characters were substituted. That rules out a non-UTF-8
+locale (which would break everything non-ASCII) and points at the DEC
+line-drawing set specifically. `?` rather than `▯`/`�` also means
+substitution, not a missing font glyph.
+
+Reproduce without strawboss in the same pane:
+
+    printf 'horiz:───── vert:│ corners:┌┐└┘ dot:· block:▰\n'
+
+An ASCII fallback border set was considered and declined — the borders
+come from one function, so it stays cheap to add if a terminal that
+can't be fixed turns up.

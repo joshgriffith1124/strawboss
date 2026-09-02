@@ -914,3 +914,36 @@ func TestChatScroll(t *testing.T) {
 		t.Errorf("chatScroll = %d after send", m.chatScroll)
 	}
 }
+
+// TestBarCellsNeverPanics: strings.Repeat panics on a negative count, and
+// the token bar renders outside any recover — so a bad ratio would take
+// the whole TUI down rather than drawing a wrong bar.
+func TestBarCellsNeverPanics(t *testing.T) {
+	tests := []struct {
+		name                     string
+		barW, supEquiv, wrkFresh int
+		want                     int
+	}{
+		{"even split", 40, 100, 100, 20},
+		{"all supervisor", 40, 100, 0, 40},
+		{"all workers", 40, 0, 100, 0},
+		{"tiny supervisor share still shows", 40, 1, 100000, 1},
+		{"negative worker count", 40, 100, -50, 40},
+		{"negative supervisor count", 40, -100, 500, 0},
+		{"both negative", 40, -100, -50, 0},
+		{"negative width", -5, 100, 100, 0},
+		{"zero total", 40, 0, 0, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := barCells(tt.barW, tt.supEquiv, tt.wrkFresh)
+			if got != tt.want {
+				t.Errorf("barCells(%d,%d,%d) = %d, want %d",
+					tt.barW, tt.supEquiv, tt.wrkFresh, got, tt.want)
+			}
+			if got < 0 || got > max(tt.barW, 0) {
+				t.Fatalf("%d is outside [0,%d] — strings.Repeat would panic", got, tt.barW)
+			}
+		})
+	}
+}

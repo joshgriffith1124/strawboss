@@ -576,3 +576,45 @@ Reproduce without strawboss in the same pane:
 An ASCII fallback border set was considered and declined — the borders
 come from one function, so it stays cheap to add if a terminal that
 can't be fixed turns up.
+
+## The lost crash: fatal errors bypass recover, and stderr was ephemeral (2026-09-02, live incident)
+
+A full crash in the lineforge run. The traceback existed only in the
+terminal's scrollback and came back mangled by the multiplexer, so the
+`fatal error:`/`panic:` line — the one that names the cause — was gone.
+
+What the surviving fragment still proves: the goroutine headers carried
+`gp=… m=nil` and every frame carried `fp=/sp=/pc=`. That detail is
+GOTRACEBACK=system output, which the runtime forces for a **fatal error**
+(`runtime.throw`) and not for an ordinary panic. So the cause is in the
+class of concurrent map writes / out of memory / deadlock — and
+**`recover()` would not have caught it**. A recover-based crash handler,
+the obvious fix, would have changed nothing.
+
+Capture therefore has to be at the file descriptor: the runtime writes
+tracebacks straight to fd 2, so reassigning `os.Stderr` misses them.
+`captureStderr` now dup2/dup3s a `<state-dir>/crash-<pid>.log` onto fd 2
+before the alt screen goes up, and removes the file on a clean exit.
+Losing stderr costs nothing — anything written there during an alt-screen
+TUI corrupts the display rather than being read. `syscall.Dup2` is absent
+on linux/arm64, so linux uses `Dup3(…, 0)` and darwin `Dup2`.
+
+Timeline reconstructed from state files alone (all that survived):
+`projects/<hash>/dir` named the run, the registry's last event was
+`w165 failed — aborted: terminated signal received` at 13:14:33 (cleanup
+killing live workers on the way down), and w165's session log showed a
+runaway: 11 minutes, 45 steps, 6509 events, 1.4MB, the only worker still
+running for the final 8 minutes of a 167-worker run.
+
+Audited and cleared while hunting it: chat scroll bounds (`logH` clamps
+to ≥3, so the window cannot invert), every space-padding
+`strings.Repeat` (all clamped), the sparkline (clamped both ends,
+NaN-safe), per-worker event buffers (capped at 200), the `Listen` re-arm
+(a feedBatch re-arms exactly once), and lock coverage on all eleven
+Orchestrator maps. One real hole did turn up and is fixed: the token
+bar's `strings.Repeat("▰", …)` counts were unclamped, so a negative
+share would panic — now `barCells` clamps into the bar.
+
+The race detector could not be run: it needs cgo and this box has no C
+compiler at all (no gcc, cc, or clang). Worth installing one before the
+next hunt.

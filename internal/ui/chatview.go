@@ -209,6 +209,29 @@ func (m Model) viewSidePanel(w int) string {
 	return lipgloss.JoinVertical(lipgloss.Left, panels...)
 }
 
+// barCells splits the token bar, and is the only clamp between a token
+// count and strings.Repeat — which panics on a negative count and would
+// take the whole TUI down, since a render happens outside any recover.
+// The ratio is trusted nowhere: a negative or overlarge share (a counter
+// that went backwards, a replayed total) clamps into the bar instead.
+func barCells(barW, supEquiv, wrkFresh int) int {
+	total := supEquiv + wrkFresh
+	if barW < 0 {
+		return 0
+	}
+	if total <= 0 || supEquiv <= 0 {
+		return 0
+	}
+	cells := barW * supEquiv / total
+	if cells < 1 {
+		cells = 1 // a nonzero supervisor share always shows
+	}
+	if cells > barW {
+		cells = barW
+	}
+	return cells
+}
+
 func kv(w int, k, v string) string {
 	gap := w - 2 - lipgloss.Width(k) - lipgloss.Width(v) - 2
 	if gap < 1 {
@@ -256,10 +279,7 @@ func (m Model) viewTokensPanel(w int) string {
 	}
 	barW := w - 4
 	if barW > 4 && supEquiv+wrkFresh > 0 {
-		supCells := barW * supEquiv / (supEquiv + wrkFresh)
-		if supCells < 1 && supEquiv > 0 {
-			supCells = 1
-		}
+		supCells := barCells(barW, supEquiv, wrkFresh)
 		bar := sAmber.Render(strings.Repeat("▰", supCells)) + sTeal.Render(strings.Repeat("▰", barW-supCells))
 		lines = append(lines, " "+bar+" ")
 		supPct := 100 * supEquiv / (supEquiv + wrkFresh)

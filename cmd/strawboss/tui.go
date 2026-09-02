@@ -30,6 +30,24 @@ func runTUI(args []string) error {
 		return err
 	}
 
+	// Capture stderr before the alt screen goes up: a crash's traceback is
+	// otherwise written over a screen the TUI is about to restore, and is
+	// lost with the scrollback. Non-fatal if it fails — running without a
+	// crash log beats not running.
+	sd := *stateDir
+	if sd == "" {
+		if d, err := config.DefaultStateDir(); err == nil {
+			sd = d
+		}
+	}
+	if sd != "" {
+		if err := os.MkdirAll(sd, 0o755); err == nil {
+			if closeCrashLog, err := captureStderr(sd); err == nil {
+				defer closeCrashLog()
+			}
+		}
+	}
+
 	var m ui.Model
 	cleanup := func() {}
 	if *demo {

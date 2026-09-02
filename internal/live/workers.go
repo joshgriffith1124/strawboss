@@ -182,11 +182,48 @@ func (o *Orchestrator) clientFor(model string) *opencode.Client {
 }
 
 // pollWorkers refreshes worker usage, per-model endpoint stats (active
+// rateTracker turns cumulative per-worker output counts into the
+// per-interval deltas the models panel reports as tok/s. A worker's FIRST
+// sample only seeds its baseline: crediting it would report the worker's
+// entire history as one interval's output — a dsh tailer attaching to a
+// session already in flight reported ~1700 tok/s that way, which no local
+// endpoint can do.
+type rateTracker struct{ last map[string]int }
+
+func newRateTracker() *rateTracker { return &rateTracker{last: map[string]int{}} }
+
+// observe records a worker's cumulative output and returns the delta to
+// credit its model: zero on first sight, and zero if the count went
+// backwards (a restarted worker or a reset session).
+func (t *rateTracker) observe(worker string, out int) int {
+	prev, seen := t.last[worker]
+	t.last[worker] = out
+	if !seen || out <= prev {
+		return 0
+	}
+	return out - prev
+}
+
+// retain drops baselines for workers that are no longer open, so the map
+// stays bounded over a long run and a reused id re-seeds rather than
+// spiking.
+func (t *rateTracker) retain(open map[string]bool) {
+	for w := range t.last {
+		if !open[w] {
+			delete(t.last, w)
+		}
+	}
+}
+
 // count, tok/s from output deltas), and reconciles workers orphaned by a
 // dead delegate process. All local HTTP — zero supervisor tokens.
 func (o *Orchestrator) pollWorkers(ctx context.Context) {
 	const interval = 2 * time.Second
-	lastOut := map[string]int{} // worker → last output tokens seen
+	rates := newRateTracker()
+	// Real elapsed time, not the nominal interval: a slow polling pass
+	// (many workers, a stalling endpoint) would otherwise divide a longer
+	// window's tokens by 2s and overstate the rate.
+	lastTick := time.Now()
 	// Per-endpoint LLM probe cache (dsh): reachability plus the served
 	// model list, refreshed at most every 15s — a configured model the
 	// server does not serve must show as "not loaded", not healthy idle.
@@ -202,6 +239,9 @@ func (o *Orchestrator) pollWorkers(ctx context.Context) {
 			return
 		case <-time.After(interval):
 		}
+		now := time.Now()
+		elapsed := now.Sub(lastTick)
+		lastTick = now
 
 		type snapshot struct{ worker, session, model, dir string }
 		o.mu.Lock()
@@ -260,8 +300,7 @@ func (o *Orchestrator) pollWorkers(ctx context.Context) {
 			in := info.Tokens.Input + info.Tokens.Cache.Write
 			out := info.Tokens.Output + info.Tokens.Reasoning
 			o.emit(ctx, ui.WorkerUsageMsg{ID: s.worker, Input: in, CacheRead: info.Tokens.Cache.Read, Output: out})
-			outDeltaPerModel[s.model] += out - lastOut[s.worker]
-			lastOut[s.worker] = out
+			outDeltaPerModel[s.model] += rates.observe(s.worker, out)
 
 			busy := busyByEndpoint[c.Base]
 			if st, ok := busy[s.session]; ok && st.Type != "idle" {
@@ -286,9 +325,18 @@ func (o *Orchestrator) pollWorkers(ctx context.Context) {
 		// output deltas.
 		for _, s := range openDsh {
 			activePerModel[s.model]++
-			outDeltaPerModel[s.model] += dshOut[s.worker] - lastOut[s.worker]
-			lastOut[s.worker] = dshOut[s.worker]
+			outDeltaPerModel[s.model] += rates.observe(s.worker, dshOut[s.worker])
 		}
+		// Baselines only for workers still open; a finished one must not
+		// leave a stale count behind for an id that comes back.
+		stillOpen := make(map[string]bool, len(open)+len(openDsh))
+		for _, s := range open {
+			stillOpen[s.worker] = true
+		}
+		for _, s := range openDsh {
+			stillOpen[s.worker] = true
+		}
+		rates.retain(stillOpen)
 
 		// Probe every distinct dsh endpoint, idle or not (throttled by
 		// the cache above).
@@ -328,13 +376,23 @@ func (o *Orchestrator) pollWorkers(ctx context.Context) {
 			}
 			o.emit(ctx, ui.ModelStatMsg{
 				Name:          mc.Name,
-				TokSec:        float64(outDeltaPerModel[mc.Name]) / interval.Seconds(),
+				TokSec:        tokSec(outDeltaPerModel[mc.Name], elapsed),
 				Active:        activePerModel[mc.Name],
 				Note:          note,
 				ContextWindow: ctxWin,
 			})
 		}
 	}
+}
+
+// tokSec is output tokens over the window they were observed in. A
+// non-positive window yields 0 rather than an infinity the UI would
+// format as garbage.
+func tokSec(delta int, window time.Duration) float64 {
+	if delta <= 0 || window <= 0 {
+		return 0
+	}
+	return float64(delta) / window.Seconds()
 }
 
 // llmModels lists an OpenAI-compatible endpoint's served models with

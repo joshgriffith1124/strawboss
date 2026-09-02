@@ -526,3 +526,30 @@ Standing up strawboss on a work MacBook (M3) over ssh, per the README's
   lid-close needs `caffeinate -d` or a power-settings change. macOS also
   has no preinstalled tmux, so the README's detach story needs Homebrew
   on a clean machine.
+
+## Impossible worker tok/s: a first sample counted as a delta (2026-09-01)
+
+The models panel showed ~1700 tok/s for a local worker — an order of
+magnitude past what the endpoint can do. Not a display bug: the poll loop
+accumulated `out - lastOut[worker]` into the per-model delta, and a
+worker seen for the FIRST time has no `lastOut` entry, so its whole
+cumulative output counted as one 2s interval's work. A dsh tailer
+attaching to a session already in flight (TUI restart into a resumed run,
+a recovered worker) lands exactly there: ~3.4k accumulated tokens ÷ 2s ≈
+1700.
+
+Now a `rateTracker` seeds a worker's baseline on first sight and credits
+nothing, returns zero when the count goes backwards (restarted worker /
+reset session), and drops baselines for workers that are no longer open
+so a returning id re-seeds instead of spiking. The divisor is also real
+elapsed time now, not the nominal 2s constant — a slow polling pass was
+dividing a longer window's tokens by 2s and overstating the rate.
+
+The per-worker rate in the UI model was already correct: it skips its
+first sample via a zero-time guard. Only the panel's per-model
+aggregation had the hole.
+
+Unrelated flake found while verifying: `TestSessionHistoryAndSwitch`
+stopped draining at the replayed worker event, so if the switch message
+from the other producer hadn't landed yet the assertion failed. It waits
+for both now.

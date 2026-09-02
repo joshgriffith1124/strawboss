@@ -825,17 +825,22 @@ func TestSessionHistoryAndSwitch(t *testing.T) {
 	}
 	o.mu.Unlock()
 
-	sawSwitch := false
+	// Two independent producers: SwitchSession emits the switch while the
+	// registry watcher replays run-1. Their order is not guaranteed, so
+	// wait for BOTH — stopping at whichever lands first made this test
+	// flake under parallel load.
+	var sawSwitch, sawReplay bool
 	drainUntil(t, o.Feed(), 10*time.Second, func(m tea.Msg) bool {
-		if _, ok := m.(ui.SessionSwitchedMsg); ok {
+		switch v := m.(type) {
+		case ui.SessionSwitchedMsg:
 			sawSwitch = true
+		case ui.WorkerUpsertMsg:
+			if v.ID == w1 && v.Status == "done" { // run-1 replayed
+				sawReplay = true
+			}
 		}
-		u, ok := m.(ui.WorkerUpsertMsg)
-		return ok && u.ID == w1 && u.Status == "done" // run-1 replayed
+		return sawSwitch && sawReplay
 	})
-	if !sawSwitch {
-		t.Error("no SessionSwitchedMsg")
-	}
 }
 
 // TestSupUsagePersistsAcrossRestart: the worker side of the token panel
@@ -948,4 +953,79 @@ func TestNewSessionAndCtxSeed(t *testing.T) {
 		s, ok := m.(ui.SessionSwitchedMsg)
 		return ok && s.ID == ""
 	})
+}
+
+func TestRateTrackerFirstSampleSeedsOnly(t *testing.T) {
+	// A worker whose tailer attaches mid-flight arrives with its whole
+	// history already counted; crediting that as one interval's output is
+	// what produced impossible rates (~1700 tok/s on a local endpoint).
+	r := newRateTracker()
+	if got := r.observe("w1", 3400); got != 0 {
+		t.Fatalf("first sample credited %d tokens, want 0", got)
+	}
+	if got := r.observe("w1", 3480); got != 80 {
+		t.Fatalf("second sample = %d, want 80", got)
+	}
+}
+
+func TestRateTrackerDeltas(t *testing.T) {
+	tests := []struct {
+		name    string
+		samples []int
+		want    []int
+	}{
+		{"steady", []int{100, 200, 300}, []int{0, 100, 100}},
+		{"no progress", []int{100, 100, 100}, []int{0, 0, 0}},
+		{"count goes backwards", []int{500, 20, 60}, []int{0, 0, 40}},
+		{"starts at zero", []int{0, 0, 45}, []int{0, 0, 45}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newRateTracker()
+			for i, out := range tt.samples {
+				if got := r.observe("w1", out); got != tt.want[i] {
+					t.Errorf("sample %d (out=%d) = %d, want %d", i, out, got, tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestRateTrackerRetainResetsClosedWorkers(t *testing.T) {
+	r := newRateTracker()
+	r.observe("w1", 100)
+	r.observe("w2", 50)
+	r.retain(map[string]bool{"w1": true})
+	if _, ok := r.last["w2"]; ok {
+		t.Error("closed worker kept its baseline")
+	}
+	// w2 coming back re-seeds instead of crediting its whole count.
+	if got := r.observe("w2", 900); got != 0 {
+		t.Errorf("returning worker credited %d, want 0", got)
+	}
+	if got := r.observe("w1", 130); got != 30 {
+		t.Errorf("retained worker delta = %d, want 30", got)
+	}
+}
+
+func TestTokSec(t *testing.T) {
+	tests := []struct {
+		name   string
+		delta  int
+		window time.Duration
+		want   float64
+	}{
+		{"two second window", 150, 2 * time.Second, 75},
+		{"slow poll divides by real elapsed", 150, 3 * time.Second, 50},
+		{"no output", 0, 2 * time.Second, 0},
+		{"zero window", 150, 0, 0},
+		{"negative window", 150, -time.Second, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tokSec(tt.delta, tt.window); got != tt.want {
+				t.Errorf("tokSec(%d, %v) = %v, want %v", tt.delta, tt.window, got, tt.want)
+			}
+		})
+	}
 }

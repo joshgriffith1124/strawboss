@@ -76,32 +76,29 @@ func (m Model) supTokens() (in, cacheRead, cacheWrite, out int) {
 		m.supCacheWrite + m.turnCacheWrite, m.supOut + m.turnOut
 }
 
-// The context gauge is a FRACTION of the session model's real window, not
-// an absolute token count. A fixed 100k line was written when 200k was the
-// only window there was; against a 1M-context model it painted the gauge
-// red at 11% full, which is just wrong. The window arrives from the result
-// event's modelUsage (see supervisor.ResultEvent.ModelWindows) and is
-// persisted per run, so a resume is honest before its first turn.
+// The context gauge is a FRACTION of the session model's real window, and
+// an UNKNOWN window paints nothing red. A fixed 100k line was written
+// when 200k was the only window there was; against a 1M-context model it
+// painted the gauge red at 11% full. A guessed 200k denominator was no
+// better — it accused a resumed 1M session before its first turn could
+// report. The window comes from the result event's modelUsage
+// (supervisor.ResultEvent.ModelWindows), is remembered per model across
+// runs, and is applied at system/init when known.
 const (
-	// defaultCtxWindow stands in until the first result reports the real
-	// one — the long-standing Claude window, and a conservative guess.
-	defaultCtxWindow = 200_000
 	// ctxWarnFrac is where "every call re-reads all of this" stops being
 	// background cost and starts being worth a fresh session.
 	ctxWarnFrac = 0.5
 )
 
-// ctxWindow is the denominator for the supervisor context gauge.
-func (m Model) ctxWindow() int {
-	if m.supCtxWindow > 0 {
-		return m.supCtxWindow
-	}
-	return defaultCtxWindow
-}
+// ctxWindow is the session model's context window; 0 means not known.
+func (m Model) ctxWindow() int { return m.supCtxWindow }
 
-// ctxWarnAt is the footprint that earns a warning for this model.
-func (m Model) ctxWarnAt() int {
-	return int(float64(m.ctxWindow()) * ctxWarnFrac)
+// ctxBloated is the gauge's red condition: the footprint has crossed
+// ctxWarnFrac of a KNOWN window. Unknown never warns — red is an
+// accusation, and it needs a denominator.
+func (m Model) ctxBloated() bool {
+	w := m.ctxWindow()
+	return w > 0 && m.supCtx >= int(float64(w)*ctxWarnFrac)
 }
 
 // noteSupCtx records the supervisor's context footprint (0 = unknown,
@@ -112,7 +109,7 @@ func (m *Model) noteSupCtx(ctx int) {
 		return
 	}
 	m.supCtx = ctx
-	if ctx >= m.ctxWarnAt() && !m.ctxWarned {
+	if m.ctxBloated() && !m.ctxWarned {
 		m.ctxWarned = true
 		m.chat = append(m.chat, chatItem{kind: "note", when: time.Now(),
 			text: fmt.Sprintf("supervisor context is ~%s tokens — every call re-reads it all; type /new to start a fresh session (s lists past ones)", formatTokens(ctx))})
@@ -455,6 +452,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.supCtxWindow = msg.CtxWindow // learned before the gauge is judged
 		}
 		m.noteSupCtx(msg.Ctx)
+		return m, Listen(m.feed)
+	case SupCtxWindowMsg:
+		if msg.Window > 0 {
+			m.supCtxWindow = msg.Window
+		}
 		return m, Listen(m.feed)
 	case SupRateLimitMsg:
 		m.fiveHour, m.sevenDay = msg.FiveHour, msg.SevenDay

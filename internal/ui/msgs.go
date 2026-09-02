@@ -78,6 +78,15 @@ type SupUsageMsg struct {
 	CtxWindow int
 }
 
+// SupCtxWindowMsg names the session model's context window, resolved at
+// system/init from windows remembered in earlier runs. It carries no
+// usage, so it must not disturb the turn counters the way SupUsageMsg
+// does.
+type SupCtxWindowMsg struct {
+	Model  string
+	Window int
+}
+
 // SupTurnUsageMsg is one API call's usage WITHIN the running turn (from
 // each complete assistant message) — without it the supervisor counter
 // would sit at zero for the whole length of a long turn.

@@ -761,6 +761,8 @@ func TestTokensPanelLeverage(t *testing.T) {
 // past the warning line, and both token panels surface the number.
 func TestSupContextTracksAndWarns(t *testing.T) {
 	m := demoState(t)
+	// The warning needs a KNOWN window; this test's numbers assume 200k.
+	m = apply(t, m, SupCtxWindowMsg{Model: "claude-sonnet-5", Window: 200_000})
 	m = apply(t, m, SupTurnUsageMsg{Input: 400, CacheRead: 30_000, CacheWrite: 2_000})
 	if m.supCtx != 32_400 || m.ctxWarned {
 		t.Fatalf("supCtx=%d warned=%v", m.supCtx, m.ctxWarned)
@@ -801,7 +803,7 @@ func TestSupContextTracksAndWarns(t *testing.T) {
 func TestSupContextSeededOnResume(t *testing.T) {
 	m := New(make(chan tea.Msg))
 	m = apply(t, m, tea.WindowSizeMsg{Width: 120, Height: 40},
-		SupUsageMsg{Input: 8000, CacheRead: 2_400_000, Turns: 12, Ctx: 512_000})
+		SupUsageMsg{Input: 8000, CacheRead: 2_400_000, Turns: 12, Ctx: 512_000, CtxWindow: 200_000})
 	if m.supCtx != 512_000 || !m.ctxWarned {
 		t.Fatalf("supCtx=%d warned=%v", m.supCtx, m.ctxWarned)
 	}
@@ -948,35 +950,54 @@ func TestBarCellsNeverPanics(t *testing.T) {
 	}
 }
 
-// TestCtxGaugeUsesModelWindow: the gauge went red at 115k on a
-// 1M-context model, because the threshold was a fixed 100k written when
-// 200k was the only window there was.
+// TestCtxGaugeUsesModelWindow: the gauge went red at 115k on a 1M model
+// because the threshold was a fixed 100k, and then at 216k because an
+// unknown window was guessed as 200k. Red needs a known denominator.
 func TestCtxGaugeUsesModelWindow(t *testing.T) {
 	tests := []struct {
 		name     string
-		window   int // 0 = never reported
+		window   int // 0 = not known
 		ctx      int
-		wantWin  int
 		wantWarn bool
 	}{
-		{"unknown window falls back to 200k", 0, 50_000, 200_000, false},
-		{"unknown window warns at half", 0, 120_000, 200_000, true},
-		{"1M model at 115k is fine", 1_000_000, 115_000, 1_000_000, false},
-		{"1M model at 400k is fine", 1_000_000, 400_000, 1_000_000, false},
-		{"1M model warns past half", 1_000_000, 600_000, 1_000_000, true},
-		{"200k model warns past half", 200_000, 115_000, 200_000, true},
+		{"unknown window never warns, even high", 0, 216_000, false},
+		{"unknown window, low", 0, 50_000, false},
+		{"1M model at 115k is fine", 1_000_000, 115_000, false},
+		{"1M model at 216k is fine", 1_000_000, 216_200, false},
+		{"1M model warns past half", 1_000_000, 600_000, true},
+		{"200k model warns past half", 200_000, 115_000, true},
+		{"200k model under half is fine", 200_000, 90_000, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := Model{supCtxWindow: tt.window}
-			if got := m.ctxWindow(); got != tt.wantWin {
-				t.Errorf("ctxWindow() = %d, want %d", got, tt.wantWin)
+			m := Model{supCtxWindow: tt.window, supCtx: tt.ctx}
+			if got := m.ctxWindow(); got != tt.window {
+				t.Errorf("ctxWindow() = %d, want %d", got, tt.window)
 			}
-			if got := tt.ctx >= m.ctxWarnAt(); got != tt.wantWarn {
-				t.Errorf("ctx %d warn = %v, want %v (threshold %d)",
-					tt.ctx, got, tt.wantWarn, m.ctxWarnAt())
+			if got := m.ctxBloated(); got != tt.wantWarn {
+				t.Errorf("ctx %d of window %d: bloated = %v, want %v", tt.ctx, tt.window, got, tt.wantWarn)
 			}
 		})
+	}
+}
+
+// TestCtxWindowMsgAppliesWithoutTouchingUsage: the init-time window comes
+// as its own message so it cannot reset the live-turn counters the way a
+// SupUsageMsg does.
+func TestCtxWindowMsgAppliesWithoutTouchingUsage(t *testing.T) {
+	m := New(make(chan tea.Msg))
+	next, _ := m.Update(SupTurnUsageMsg{Input: 10, CacheRead: 5000})
+	next, _ = next.(Model).Update(SupCtxWindowMsg{Model: "claude-opus-5[1m]", Window: 1_000_000})
+	got := next.(Model)
+	if got.ctxWindow() != 1_000_000 {
+		t.Errorf("window = %d, want 1000000", got.ctxWindow())
+	}
+	if got.turnCacheRead != 5000 {
+		t.Errorf("live-turn counters disturbed: turnCacheRead = %d", got.turnCacheRead)
+	}
+	next, _ = got.Update(SupCtxWindowMsg{Window: 0})
+	if next.(Model).ctxWindow() != 1_000_000 {
+		t.Error("a zero window erased a known one")
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -331,6 +332,34 @@ func (o *Orchestrator) startStream(ctx context.Context) (*supervisor.Stream, err
 			supModel := o.supModel
 			o.mu.Unlock()
 			msgs := mapSupEvent(ev, pid, supModel)
+			switch e := ev.(type) {
+			case supervisor.InitEvent:
+				// A model seen in any earlier run is known now, before a
+				// single token burns — the gauge must not wait for a
+				// result that an interrupted first turn may never send.
+				if w := loadModelWindows(o.StateDir)[e.Model]; w > 0 {
+					msgs = append(msgs, ui.SupCtxWindowMsg{Model: e.Model, Window: w})
+				}
+			case supervisor.ResultEvent:
+				if len(e.ModelWindows) == 0 {
+					break
+				}
+				if w := e.ModelWindows[supModel]; w > 0 {
+					if err := saveModelWindow(o.StateDir, supModel, w); err != nil {
+						msgs = append(msgs, ui.RawLogMsg{Source: "app", Line: err.Error()})
+					}
+				} else {
+					// Say why the gauge stays unknown, in the logs tab,
+					// instead of silently guessing.
+					names := make([]string, 0, len(e.ModelWindows))
+					for n := range e.ModelWindows {
+						names = append(names, n)
+					}
+					sort.Strings(names)
+					msgs = append(msgs, ui.RawLogMsg{Source: "sup",
+						Line: fmt.Sprintf("context window unknown: result reports %v, session model is %q", names, supModel)})
+				}
+			}
 			o.observeSup(msgs)
 			if _, final := ev.(supervisor.TurnDoneEvent); final {
 				// The turn's terminal state must reach the UI even when

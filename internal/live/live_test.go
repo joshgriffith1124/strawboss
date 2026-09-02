@@ -1119,3 +1119,27 @@ func TestConcurrentWorkersAtScale(t *testing.T) {
 		t.Error("no workers registered — the watcher never saw the backlog")
 	}
 }
+
+// TestModelWindowsRemembered: the window arrives only with a completed
+// result, so a resumed session — or one whose first turns are
+// interrupted — would otherwise sit on a guess. A model seen once in any
+// run is known at system/init from then on.
+func TestModelWindowsRemembered(t *testing.T) {
+	stateDir := t.TempDir()
+	if got := loadModelWindows(stateDir); len(got) != 0 {
+		t.Fatalf("fresh state dir has windows: %v", got)
+	}
+	if err := saveModelWindow(stateDir, "claude-opus-5[1m]", 1_000_000); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveModelWindow(stateDir, "claude-haiku-4-5-20251001", 200_000); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveModelWindow(stateDir, "", 5); err != nil {
+		t.Fatal("empty model must be ignored, not an error")
+	}
+	got := loadModelWindows(stateDir)
+	if got["claude-opus-5[1m]"] != 1_000_000 || got["claude-haiku-4-5-20251001"] != 200_000 || len(got) != 2 {
+		t.Errorf("windows = %v", got)
+	}
+}

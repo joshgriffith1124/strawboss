@@ -900,3 +900,31 @@ the "turn interrupted" message is dropped. The terminal event is now
 delivered under a one-second timeout of its own rather than the run
 context — it reaches any listener and never wedges a teardown with none.
 Six for six under -race afterwards.
+
+## Context gauge, round three: remember windows per model, never guess (2026-09-02)
+
+Still red at 216k on a 1M model after the modelUsage fix. The ledger
+showed why the fix could not help a live session: `"turns":15,"win":0`.
+The window arrives only with a completed turn's result, and the lineforge
+session's recent turns were ending in crashes and interrupts — a result
+whose `modelUsage` lacks the session model yields 0, and the gauge fell
+back to a guessed 200k, which reads as "bloated" at 216k. Both CLI modes
+key `modelUsage` exactly as `system/init` names the model (verified
+again: `claude-fable-5-1` ↔ `claude-fable-5-1`), so the lookup is right;
+depending on the current run's first result was the fragile part.
+
+Two changes:
+
+- **Windows are remembered per model** in `<state-dir>/model-windows.json`,
+  written whenever any result reports one, and applied at `system/init`
+  via `SupCtxWindowMsg` — a message of its own so it cannot reset the
+  live-turn counters the way `SupUsageMsg` does. A model seen once, in
+  any run or project, is known from t=0 in every later session.
+- **An unknown window never paints red.** The 200k default is gone; the
+  dashboard shows `216.2k/?` until a window is known, and the `/new?`
+  advice needs a real denominator. Red is an accusation.
+
+When a result lists windows but not the session model, the logs tab now
+says so (`context window unknown: result reports [...], session model is
+"..."`) instead of silently guessing — the next report of this should be
+diagnosable from the logs tab alone.

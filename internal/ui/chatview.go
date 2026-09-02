@@ -71,9 +71,9 @@ func (m Model) viewChatColumn(w, h int) string {
 			b.WriteString("  " + style.Render(truncPlain(it.text, w-4)) + "\n")
 		}
 	}
-	if m.streaming.Len() > 0 {
+	if m.streaming != "" {
 		b.WriteString(sAmber.Render("SUPERVISOR") + "\n")
-		b.WriteString(wrap.Render(mdInline(hardWrap(m.streaming.String(), w-4))) + "\n")
+		b.WriteString(wrap.Render(mdInline(hardWrap(m.streaming, w-4))) + "\n")
 	}
 	if m.supStatus != "" {
 		star := glyphStream

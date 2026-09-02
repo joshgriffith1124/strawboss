@@ -226,7 +226,12 @@ type Model struct {
 	auth      string
 	pid       int
 	supStatus string // "✻ …" line
-	streaming strings.Builder
+	// streaming is the in-progress supervisor reply. A plain string on
+	// purpose: Model is passed by value and boxed into tea.Model between
+	// updates, and a strings.Builder here panics on the next write after
+	// a copy — and leaves a dangling self-pointer in the heap copy that
+	// the GC reports as a bad pointer. Both were live crashes (NOTES).
+	streaming string
 	chat      []chatItem
 	// chatScroll is how many lines above the bottom the chat view sits
 	// (0 = following the newest content). PgUp/PgDn drive it; sending a
@@ -330,9 +335,9 @@ func (m *Model) log(source, line string) {
 }
 
 func (m *Model) flushStreaming() {
-	if m.streaming.Len() > 0 {
-		m.chat = append(m.chat, chatItem{kind: "sup", when: time.Now(), text: m.streaming.String()})
-		m.streaming.Reset()
+	if m.streaming != "" {
+		m.chat = append(m.chat, chatItem{kind: "sup", when: time.Now(), text: m.streaming})
+		m.streaming = ""
 	}
 }
 
@@ -372,10 +377,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.log("sup", "you: "+truncPlain(msg.Text, 120))
 		return m, Listen(m.feed)
 	case SupTextDeltaMsg:
-		m.streaming.WriteString(msg.Text)
+		m.streaming += msg.Text
 		return m, Listen(m.feed)
 	case SupTextDoneMsg:
-		m.streaming.Reset()
+		m.streaming = ""
 		if strings.TrimSpace(msg.Text) != "" {
 			m.chat = append(m.chat, chatItem{kind: "sup", when: msg.Time, text: msg.Text})
 			m.log("sup", "supervisor: "+truncPlain(msg.Text, 120))
@@ -601,7 +606,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.supCost, m.supTurns = 0, 0
 		m.supCtx, m.ctxWarned = 0, false
 		m.chat = nil
-		m.streaming.Reset()
+		m.streaming = ""
 		m.workers = nil
 		m.workerEvents = map[string][]workerEvent{}
 		m.workerRates = map[string]workerRate{}

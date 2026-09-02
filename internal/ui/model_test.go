@@ -73,12 +73,12 @@ func TestWorkerLifecycleAndBell(t *testing.T) {
 func TestStreamingFlushAndFinalize(t *testing.T) {
 	m := New(make(chan tea.Msg))
 	m = apply(t, m, SupTextDeltaMsg{Text: "partial "}, SupTextDeltaMsg{Text: "text"})
-	if m.streaming.String() != "partial text" {
-		t.Errorf("streaming = %q", m.streaming.String())
+	if m.streaming != "partial text" {
+		t.Errorf("streaming = %q", m.streaming)
 	}
 	// The final message replaces the accumulated deltas — no duplicate.
 	m = apply(t, m, SupTextDoneMsg{Text: "partial text plus tail", Time: time.Now()})
-	if m.streaming.Len() != 0 {
+	if m.streaming != "" {
 		t.Error("streaming not reset")
 	}
 	if len(m.chat) != 1 || m.chat[0].text != "partial text plus tail" {
@@ -1035,5 +1035,39 @@ func TestReplayedFailureStaysSilent(t *testing.T) {
 				t.Error("failure missing from the logs tab")
 			}
 		})
+	}
+}
+
+// TestStreamingSurvivesModelCopies: Bubble Tea passes Model by value and
+// boxes it in a tea.Model interface between updates, so every field is
+// copied constantly. A strings.Builder records its own address on first
+// use and panics — "illegal use of non-zero Builder copied by value" — the
+// next time a COPY writes to it. It also stores that address in a heap
+// object as a live pointer, which the GC then finds dangling once the
+// stack frame it named is gone: "found bad pointer in Go heap". Both
+// crashes were seen live. Writing from two different stack depths makes
+// the copy detectable deterministically.
+func TestStreamingSurvivesModelCopies(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("streaming accumulator is not copy-safe: %v", r)
+		}
+	}()
+	var m tea.Model = New(make(chan tea.Msg))
+	m, _ = m.Update(SupTextDeltaMsg{Text: "one "})
+	var deeper func(n int)
+	deeper = func(n int) {
+		if n > 0 {
+			deeper(n - 1)
+			return
+		}
+		m, _ = m.Update(SupTextDeltaMsg{Text: "two "})
+	}
+	deeper(8)
+	m, _ = m.Update(SupTextDeltaMsg{Text: "three"})
+	m, _ = m.Update(SupTextDoneMsg{Text: "one two three"})
+	got := m.(Model)
+	if len(got.chat) == 0 || got.chat[len(got.chat)-1].text != "one two three" {
+		t.Errorf("chat did not receive the finished message: %+v", got.chat)
 	}
 }

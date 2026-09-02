@@ -776,6 +776,11 @@ a result is too thin.
 
 ## The crash, identified: heap corruption in the render path (2026-09-02)
 
+> **Superseded the same afternoon** — see "The crash, actually
+> identified" below. The attribution to the toolchain or a dependency
+> here was wrong; the mechanism is a `strings.Builder` inside the
+> by-value Model. The evidence and the stress test remain valid.
+
 The fd-level crash log paid off on its first crash. The cause:
 
     fatal error: found bad pointer in Go heap (incorrect use of unsafe or cgo?)
@@ -836,3 +841,62 @@ across restarts. Verified the lookup against the live CLI: `system/init`
 reports model `claude-opus-5[1m]` and `modelUsage` keys the entry
 `claude-opus-5[1m]` with `contextWindow: 1000000`, an exact match, so no
 name normalisation is needed for the [1m] variants.
+
+## The crash, actually identified: a strings.Builder in a by-value Model (2026-09-02)
+
+The third crash was a clean panic rather than a runtime throw, and it
+named the mechanism:
+
+    strings.(*Builder).copyCheck → panic("strings: illegal use of non-zero Builder copied by value")
+    ui.Model.Update  model.go:375   m.streaming.WriteString(msg.Text)
+    ui.Model.Update  model.go:346   the feedBatch loop, calling Update through a tea.Model interface
+
+`Model.streaming` was a `strings.Builder`, present since M4 (07e64b3).
+Bubble Tea passes Model **by value** and boxes it into a `tea.Model`
+interface between updates, so every field is copied constantly. A
+Builder records its own address on first write (`addr`, stored via
+`abi.NoEscape` precisely so the compiler will not make it escape) and
+panics when a copy writes next. That is crash 3.
+
+It is also crashes 1 and 2. The boxed heap copy of Model carries that
+`addr` field — a live pointer, as far as the GC is concerned — naming a
+stack slot in a frame that no longer exists. When the GC scans a Model
+copy (both traces were mid-scan of a render-path frame: `viewChat`,
+called with Model by value) it finds a pointer into a dead stack region:
+`found bad pointer in Go heap … pointer to unallocated span`, with the
+span reported as `mSpanManual` — a stack span. One bug, two faces,
+depending on whether the copy writes first (panic) or gets scanned first
+(throw).
+
+Why it stayed latent for days: `copyCheck` compares addresses, and a
+receiver copy made from the same call site at the same stack depth lands
+at the same address every time, so the check passed by coincidence.
+Anything that shifts stack layout — a new Model field (`supCtxWindow`
+was added that day), dependency bumps changing inlining, a different mix
+of batched and direct Updates — breaks the coincidence. That is the
+honest account of "things went downhill after the recent commits": the
+bug predates them, and they changed the timing that had been hiding it.
+
+Fix: `streaming` is a plain `string`. No other copy-hostile type lives
+in Model (audited for Builder/Buffer/sync.*). `TestStreamingSurvivesModelCopies`
+writes from two different stack depths through the interface, which
+reproduced the live panic deterministically before the fix.
+
+Rule for this codebase: **nothing with self-referential or
+address-sensitive state goes in a Bubble Tea model.** `go vet`'s
+copylocks check does not cover `strings.Builder`; the test is the guard.
+
+The mitigations taken under the wrong theory — dependency bumps and the
+CGO_ENABLED=0 pin — are kept: harmless, and the pin is right on its own
+merits.
+
+## A terminal turn message must outlive the shutdown that caused it (2026-09-02)
+
+`TestShutdownKillsEverything` still flaked under -race after the health
+route (one in four). Shutdown waits for the supervisor process to exit,
+then cancels the run context; the stream goroutine emits the final
+`TurnDoneEvent` through `emit(ctx, …)`, and when cancel wins that race
+the "turn interrupted" message is dropped. The terminal event is now
+delivered under a one-second timeout of its own rather than the run
+context — it reaches any listener and never wedges a teardown with none.
+Six for six under -race afterwards.

@@ -332,6 +332,19 @@ func (o *Orchestrator) startStream(ctx context.Context) (*supervisor.Stream, err
 			o.mu.Unlock()
 			msgs := mapSupEvent(ev, pid, supModel)
 			o.observeSup(msgs)
+			if _, final := ev.(supervisor.TurnDoneEvent); final {
+				// The turn's terminal state must reach the UI even when
+				// Shutdown is what ended it: Shutdown waits for the process
+				// to exit and then cancels ctx, and that cancel can win the
+				// race against this goroutine's last send — the "turn
+				// interrupted" message would then be dropped on the floor.
+				// Bound it by time instead, so it delivers to any listener
+				// and never wedges a teardown with none.
+				fctx, done := context.WithTimeout(context.Background(), time.Second)
+				o.emit(fctx, msgs...)
+				done()
+				continue
+			}
 			o.emit(ctx, msgs...)
 		}
 	}()

@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -70,7 +69,7 @@ type Orchestrator struct {
 	tailing         map[string]bool    // wN with a session-log tailer running (dsh)
 	dshOut          map[string]int     // wN → latest output tokens seen by its tailer
 	stream          *supervisor.Stream // the persistent supervisor process, if running
-	servers         []*exec.Cmd        // managed opencode serve children
+	servers         []*managedServer   // managed opencode serve children
 
 	// budget guard accumulation (see budget.go)
 	supTotals     supUsageTotals // per-run supervisor ledger (supusage.go)
@@ -348,7 +347,7 @@ func (o *Orchestrator) Shutdown() {
 		workers = append(workers, target{o.workerSession[wid], o.workerModel[wid], o.workerPID[wid]})
 	}
 	stream := o.stream
-	servers := append([]*exec.Cmd(nil), o.servers...)
+	servers := append([]*managedServer(nil), o.servers...)
 	o.mu.Unlock()
 
 	// Abort workers first, while any managed server is still up. dsh
@@ -371,24 +370,22 @@ func (o *Orchestrator) Shutdown() {
 	if o.cancel != nil {
 		o.cancel()
 	}
-	for _, cmd := range servers {
-		if cmd.Process == nil || cmd.ProcessState != nil {
+	for _, srv := range servers {
+		if srv.cmd.Process == nil || srv.dead() {
 			continue
 		}
-		_ = cmd.Process.Signal(syscall.SIGTERM)
+		_ = srv.cmd.Process.Signal(syscall.SIGTERM)
 	}
 	deadline := time.After(2 * time.Second)
-	for _, cmd := range servers {
-		if cmd.Process == nil {
+	for _, srv := range servers {
+		if srv.cmd.Process == nil {
 			continue
 		}
-		for cmd.ProcessState == nil {
-			select {
-			case <-deadline:
-				_ = cmd.Process.Kill()
-				return
-			case <-time.After(50 * time.Millisecond):
-			}
+		select {
+		case <-srv.exited:
+		case <-deadline:
+			_ = srv.cmd.Process.Kill()
+			return
 		}
 	}
 }

@@ -12,12 +12,32 @@ import (
 	"github.com/joshgriffith1124/strawboss/internal/ui"
 )
 
+// managedServer is one `opencode serve` child plus the signal that it has
+// been reaped. Death is published by closing exited, never by reading
+// cmd.ProcessState: Wait() writes that field, so polling it from another
+// goroutine is a data race (found by -race, 2026-09-02).
+type managedServer struct {
+	cmd    *exec.Cmd
+	exited chan struct{}
+}
+
+// dead reports whether the child has been reaped, without touching any
+// field Wait() writes.
+func (s *managedServer) dead() bool {
+	select {
+	case <-s.exited:
+		return true
+	default:
+		return false
+	}
+}
+
 // ensureServers keeps `opencode serve` alive for every localhost endpoint
 // in the model configs. A down local endpoint is spawned as a child
 // process (logs under the state dir) and respawned if it dies; remote
 // endpoints are only ever reported, never managed.
 func (o *Orchestrator) ensureServers(ctx context.Context) {
-	children := map[string]*exec.Cmd{} // endpoint base → running child
+	children := map[string]*managedServer{} // endpoint base → running child
 	check := func() {
 		for _, base := range o.endpoints() {
 			u, err := url.Parse(base)
@@ -31,7 +51,7 @@ func (o *Orchestrator) ensureServers(ctx context.Context) {
 			if healthy(ctx, base) {
 				continue
 			}
-			if c := children[base]; c != nil && c.ProcessState == nil {
+			if c := children[base]; c != nil && !c.dead() {
 				continue // starting up or wedged; give it time
 			}
 			logPath := filepath.Join(o.StateDir, "opencode-serve.log")
@@ -50,11 +70,15 @@ func (o *Orchestrator) ensureServers(ctx context.Context) {
 				continue
 			}
 			logf.Close()
-			children[base] = cmd
+			srv := &managedServer{cmd: cmd, exited: make(chan struct{})}
+			children[base] = srv
 			o.mu.Lock()
-			o.servers = append(o.servers, cmd)
+			o.servers = append(o.servers, srv)
 			o.mu.Unlock()
-			go func() { _ = cmd.Wait() }() // reap; ProcessState marks death
+			go func() { // reap, then publish death by closing the channel
+				_ = cmd.Wait()
+				close(srv.exited)
+			}()
 			o.emitAsync(ui.RawLogMsg{Source: "app",
 				Line: "started opencode serve on " + base + " (log " + logPath + ")"})
 		}

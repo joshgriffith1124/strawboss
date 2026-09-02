@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1027,5 +1028,78 @@ func TestTokSec(t *testing.T) {
 				t.Errorf("tokSec(%d, %v) = %v, want %v", tt.delta, tt.window, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestConcurrentWorkersAtScale drives the orchestrator the way a real run
+// does — the registry watcher spawning dsh tailers, pollWorkers sampling,
+// and Shutdown racing all of them — at a worker count matching the run
+// that crashed (167 workers, 2026-09-02). Every feed goroutine touches
+// the shared maps, so this is the case worth running under -race; the
+// single-worker tests never overlap enough to expose ordering bugs.
+func TestConcurrentWorkersAtScale(t *testing.T) {
+	const workers = 167
+
+	stateDir := t.TempDir()
+	fixture, err := os.ReadFile(filepath.Join("..", "harness", "dshacp", "testdata", "session.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := &registry.Registry{Path: filepath.Join(stateDir, "workers.jsonl")}
+
+	models := []config.ModelConfig{{Name: "m-dsh", Endpoint: "http://127.0.0.1:1/v1", Model: "x", Harness: "dsh"}}
+	o := New(&supervisor.Driver{}, models, stateDir)
+	o.DshRecoverGrace = 10 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go o.watchRegistry(ctx)
+	go o.pollWorkers(ctx)
+
+	// Drain the feed throughout: a full channel would serialize the
+	// producers and hide the interleaving this test exists to create.
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		for {
+			select {
+			case <-o.Feed():
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	// Spawn workers from several goroutines at once, each with a session
+	// log appearing under the tailer's feet.
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			sid := fmt.Sprintf("ses_%03d", i)
+			logDir := filepath.Join(stateDir, "dsh-sessions", "proj", sid)
+			if err := os.MkdirAll(logDir, 0o755); err != nil {
+				return
+			}
+			_ = os.WriteFile(filepath.Join(logDir, "session.jsonl"), fixture, 0o644)
+			if _, err := reg.Allocate(sid, "m-dsh", "task", "/repo", 1000+i); err != nil {
+				return
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	// Let the watcher and tailers work through the backlog, then tear the
+	// whole thing down while they are still mid-flight.
+	time.Sleep(500 * time.Millisecond)
+	o.Shutdown()
+	cancel()
+	<-drained
+
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if len(o.workerPID) == 0 {
+		t.Error("no workers registered — the watcher never saw the backlog")
 	}
 }

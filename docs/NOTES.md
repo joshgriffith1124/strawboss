@@ -618,3 +618,33 @@ share would panic — now `barCells` clamps into the bar.
 The race detector could not be run: it needs cgo and this box has no C
 compiler at all (no gcc, cc, or clang). Worth installing one before the
 next hunt.
+
+## Two ProcessState races (2026-09-02, found by -race once gcc existed)
+
+With a C compiler available, `make race` found two instances of one
+idiom, both pre-existing:
+
+    go func() { _ = cmd.Wait() }()   // reap; ProcessState marks death
+    ...
+    for w.cmd.ProcessState == nil { ... }   // another goroutine
+
+`Cmd.Wait()` writes `ProcessState`, so polling that field from a
+different goroutine is a data race. Sites: `dshacp` worker shutdown
+against its reaper, and `live`'s Shutdown plus ensureServers against the
+opencode-serve reaper.
+
+Both now publish death by closing a channel the reaper closes — a
+`managedServer{cmd, exited}` in live, an `exited chan struct{}` on the
+dsh worker — and nothing reads a field Wait() owns. The dsh shutdown also
+drops a 60×50ms poll for a plain 3s select.
+
+Honest scope: these are stale-read races, not a plausible source of the
+runtime fatal error from the crash. They are fixed because they are
+wrong, not because they explain it.
+
+`TestConcurrentWorkersAtScale` now drives 167 workers — the crashed run's
+count — with the registry watcher spawning tailers, pollWorkers sampling,
+and Shutdown tearing down mid-flight. Clean under -race across repeated
+runs, which is evidence against a data race in the feed paths at that
+scale. `make race` is a separate target because the detector needs cgo
+and the suite must still run on a box without a C compiler.

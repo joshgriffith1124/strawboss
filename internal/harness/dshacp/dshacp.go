@@ -165,7 +165,12 @@ type worker struct {
 	stop     string // stopReason once the prompt settled
 	failErr  string // rpc/process error once settled
 	settled  chan struct{}
-	done     bool
+	// exited closes once the process has been reaped. Death is published
+	// here, never by reading cmd.ProcessState: Wait() writes that field,
+	// so polling it from another goroutine is a data race (found by
+	// -race, 2026-09-02).
+	exited chan struct{}
+	done   bool
 }
 
 type rpcReply struct {
@@ -246,6 +251,7 @@ func (h *Harness) Spawn(ctx context.Context, task string, mc config.ModelConfig)
 		proxy:   proxy,
 		pending: map[int]chan rpcReply{},
 		settled: make(chan struct{}),
+		exited:  make(chan struct{}),
 	}
 	cmd.Stderr = w.stderr
 	if err := cmd.Start(); err != nil {
@@ -253,7 +259,10 @@ func (h *Harness) Spawn(ctx context.Context, task string, mc config.ModelConfig)
 		return "", fmt.Errorf("spawning dsh worker: %w", err)
 	}
 	go w.readLoop(stdout)
-	go func() { _ = cmd.Wait() }() // reap; ProcessState marks death
+	go func() { // reap, then publish death by closing the channel
+		_ = cmd.Wait()
+		close(w.exited)
+	}()
 
 	boot := h.BootTimeout
 	if boot == 0 {
@@ -689,13 +698,13 @@ func (w *worker) shutdown() {
 	if w.cmd.Process == nil {
 		return
 	}
-	for i := 0; i < 60; i++ {
-		if w.cmd.ProcessState != nil {
-			return
-		}
-		time.Sleep(50 * time.Millisecond)
+	// Closing stdin is dsh's graceful shutdown (docs/NOTES.md); give it
+	// the same 3s to go before insisting.
+	select {
+	case <-w.exited:
+	case <-time.After(3 * time.Second):
+		_ = w.cmd.Process.Signal(syscall.SIGKILL)
 	}
-	_ = w.cmd.Process.Signal(syscall.SIGKILL)
 }
 
 func (w *worker) stderrHint() string {

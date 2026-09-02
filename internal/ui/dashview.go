@@ -289,9 +289,10 @@ func (m Model) viewDetailSplit(w, h int) string {
 	}
 	if m.supCtx > 0 {
 		// MOCKUP.html shows "context    168k/200k" in this panel; the
-		// denominator is the standard Claude window.
-		ctx := " " + sDim.Render(fmt.Sprintf("context  %8s", formatTokens(m.supCtx)+"/"+formatTokens(supCtxWindow)))
-		if m.supCtx >= ctxWarnTokens {
+		// denominator is the session model's own window, not a constant —
+		// a 1M-context model read as 5x fuller than it was.
+		ctx := " " + sDim.Render(fmt.Sprintf("context  %8s", formatTokens(m.supCtx)+"/"+formatTokens(m.ctxWindow())))
+		if m.supCtx >= m.ctxWarnAt() {
 			ctx += " " + sErr.Render("— every call re-reads it all; /new starts fresh")
 		}
 		// Insert after the auth line so context sits with the identity of

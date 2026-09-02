@@ -266,7 +266,7 @@ func (m Model) viewTokensPanel(w int) string {
 	// that makes a bloated resumed session visible (and worth /new).
 	if m.supCtx > 0 {
 		v := sText.Render(formatTokens(m.supCtx))
-		if m.supCtx >= ctxWarnTokens {
+		if m.supCtx >= m.ctxWarnAt() {
 			v = sErr.Render(formatTokens(m.supCtx) + " · /new?")
 		}
 		lines = append(lines, kv(w, "  context", v))

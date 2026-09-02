@@ -76,14 +76,33 @@ func (m Model) supTokens() (in, cacheRead, cacheWrite, out int) {
 		m.supCacheWrite + m.turnCacheWrite, m.supOut + m.turnOut
 }
 
-// ctxWarnTokens is where supervisor context counts as bloated: every
-// future API call re-reads it all, so a resumed 100k+ session burns that
-// much cache per call for possibly stale history. supCtxWindow is the
-// standard Claude context window, shown as the footprint's denominator.
+// The context gauge is a FRACTION of the session model's real window, not
+// an absolute token count. A fixed 100k line was written when 200k was the
+// only window there was; against a 1M-context model it painted the gauge
+// red at 11% full, which is just wrong. The window arrives from the result
+// event's modelUsage (see supervisor.ResultEvent.ModelWindows) and is
+// persisted per run, so a resume is honest before its first turn.
 const (
-	ctxWarnTokens = 100_000
-	supCtxWindow  = 200_000
+	// defaultCtxWindow stands in until the first result reports the real
+	// one — the long-standing Claude window, and a conservative guess.
+	defaultCtxWindow = 200_000
+	// ctxWarnFrac is where "every call re-reads all of this" stops being
+	// background cost and starts being worth a fresh session.
+	ctxWarnFrac = 0.5
 )
+
+// ctxWindow is the denominator for the supervisor context gauge.
+func (m Model) ctxWindow() int {
+	if m.supCtxWindow > 0 {
+		return m.supCtxWindow
+	}
+	return defaultCtxWindow
+}
+
+// ctxWarnAt is the footprint that earns a warning for this model.
+func (m Model) ctxWarnAt() int {
+	return int(float64(m.ctxWindow()) * ctxWarnFrac)
+}
 
 // noteSupCtx records the supervisor's context footprint (0 = unknown,
 // keeps existing) and advises a fresh session ONCE when it crosses the
@@ -93,7 +112,7 @@ func (m *Model) noteSupCtx(ctx int) {
 		return
 	}
 	m.supCtx = ctx
-	if ctx >= ctxWarnTokens && !m.ctxWarned {
+	if ctx >= m.ctxWarnAt() && !m.ctxWarned {
 		m.ctxWarned = true
 		m.chat = append(m.chat, chatItem{kind: "note", when: time.Now(),
 			text: fmt.Sprintf("supervisor context is ~%s tokens — every call re-reads it all; type /new to start a fresh session (s lists past ones)", formatTokens(ctx))})
@@ -226,6 +245,7 @@ type Model struct {
 	// full prompt size (fresh + cache reads + writes). Every call re-reads
 	// the whole prefix, so this is what each future call will cost again.
 	supCtx                 int
+	supCtxWindow           int  // session model's real window (0 = not yet reported)
 	ctxWarned              bool // big-context advice shown once per session
 	fiveHour, sevenDay     float64
 	delegationResultTokens []int        // per-result estimate, for the avg
@@ -426,6 +446,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.supCost += msg.CostUSD
 		m.supTurns += msg.Turns
 		m.turnIn, m.turnOut, m.turnCacheRead, m.turnCacheWrite = 0, 0, 0, 0
+		if msg.CtxWindow > 0 {
+			m.supCtxWindow = msg.CtxWindow // learned before the gauge is judged
+		}
 		m.noteSupCtx(msg.Ctx)
 		return m, Listen(m.feed)
 	case SupRateLimitMsg:

@@ -27,6 +27,10 @@ type supUsageTotals struct {
 	// footprint. Persisted so a resume can show what the next prompt will
 	// re-read BEFORE it burns.
 	Ctx int `json:"ctx"`
+	// Win is the session model's context window, persisted for the same
+	// reason as Ctx: a resumed session must show a truthful gauge before
+	// the first turn reports one.
+	Win int `json:"win"`
 }
 
 func (o *Orchestrator) supUsagePath(run string) string {
@@ -62,6 +66,9 @@ func (o *Orchestrator) recordSupUsage(msg ui.SupUsageMsg) {
 	o.supTotals.CacheWrite += msg.CacheWrite
 	o.supTotals.Turns += msg.Turns
 	o.supTotals.CostUSD += msg.CostUSD
+	if msg.CtxWindow > 0 {
+		o.supTotals.Win = msg.CtxWindow
+	}
 	t := o.supTotals
 	o.mu.Unlock()
 	path := o.supUsagePath(run)
@@ -89,7 +96,7 @@ func (o *Orchestrator) seedSupUsage() {
 			Input: t.In, Output: t.Out,
 			CacheRead: t.CacheRead, CacheWrite: t.CacheWrite,
 			CostUSD: t.CostUSD, Turns: t.Turns,
-			Ctx: t.Ctx,
+			Ctx: t.Ctx, CtxWindow: t.Win,
 		})
 	}
 }

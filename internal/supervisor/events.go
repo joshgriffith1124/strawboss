@@ -151,6 +151,11 @@ type ResultEvent struct {
 	Usage         Usage
 	DurationMS    int
 	DurationAPIMS int
+	// ModelWindows is each model's context window from the result's
+	// modelUsage map. The CLI uses a small helper model alongside the
+	// session's own, so the caller must pick by the model name from
+	// system/init rather than assuming one entry.
+	ModelWindows map[string]int
 }
 
 // UnknownEvent preserves lines this parser doesn't understand (new CLI

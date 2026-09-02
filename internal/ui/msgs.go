@@ -72,6 +72,10 @@ type SupUsageMsg struct {
 	// a resumed session shows its context BEFORE the first token burns.
 	// 0 = unknown, keeps existing.
 	Ctx int
+	// CtxWindow is the session model's real context window, resolved from
+	// the result event's modelUsage (or the persisted ledger on a seed).
+	// 0 = unknown, keeps existing — never assume a size.
+	CtxWindow int
 }
 
 // SupTurnUsageMsg is one API call's usage WITHIN the running turn (from

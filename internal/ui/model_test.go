@@ -947,3 +947,55 @@ func TestBarCellsNeverPanics(t *testing.T) {
 		})
 	}
 }
+
+// TestCtxGaugeUsesModelWindow: the gauge went red at 115k on a
+// 1M-context model, because the threshold was a fixed 100k written when
+// 200k was the only window there was.
+func TestCtxGaugeUsesModelWindow(t *testing.T) {
+	tests := []struct {
+		name     string
+		window   int // 0 = never reported
+		ctx      int
+		wantWin  int
+		wantWarn bool
+	}{
+		{"unknown window falls back to 200k", 0, 50_000, 200_000, false},
+		{"unknown window warns at half", 0, 120_000, 200_000, true},
+		{"1M model at 115k is fine", 1_000_000, 115_000, 1_000_000, false},
+		{"1M model at 400k is fine", 1_000_000, 400_000, 1_000_000, false},
+		{"1M model warns past half", 1_000_000, 600_000, 1_000_000, true},
+		{"200k model warns past half", 200_000, 115_000, 200_000, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := Model{supCtxWindow: tt.window}
+			if got := m.ctxWindow(); got != tt.wantWin {
+				t.Errorf("ctxWindow() = %d, want %d", got, tt.wantWin)
+			}
+			if got := tt.ctx >= m.ctxWarnAt(); got != tt.wantWarn {
+				t.Errorf("ctx %d warn = %v, want %v (threshold %d)",
+					tt.ctx, got, tt.wantWarn, m.ctxWarnAt())
+			}
+		})
+	}
+}
+
+// TestSupUsageLearnsWindow: the window arrives with the turn's usage and
+// must be applied before the same message's context is judged, or the
+// first turn on a 1M model still warns.
+func TestSupUsageLearnsWindow(t *testing.T) {
+	m := New(make(chan tea.Msg))
+	next, _ := m.Update(SupUsageMsg{Turns: 1, Ctx: 300_000, CtxWindow: 1_000_000})
+	got := next.(Model)
+	if got.ctxWindow() != 1_000_000 {
+		t.Errorf("window = %d, want 1000000", got.ctxWindow())
+	}
+	if got.ctxWarned {
+		t.Error("warned at 300k of a 1M window")
+	}
+	// A later 0 must not erase what was learned.
+	next2, _ := got.Update(SupUsageMsg{Turns: 1, Ctx: 310_000})
+	if got := next2.(Model).ctxWindow(); got != 1_000_000 {
+		t.Errorf("window after unreported update = %d, want 1000000", got)
+	}
+}

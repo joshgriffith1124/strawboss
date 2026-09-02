@@ -16,7 +16,10 @@ import (
 )
 
 // mapSupEvent translates one supervisor stream event into UI msgs.
-func mapSupEvent(ev supervisor.Event, pid int) []tea.Msg {
+// supModel is the session model from system/init: the result's modelUsage
+// also lists the CLI's small internal helper, so the window has to be
+// picked by name rather than guessed from the map.
+func mapSupEvent(ev supervisor.Event, pid int, supModel string) []tea.Msg {
 	switch e := ev.(type) {
 	case supervisor.InitEvent:
 		auth := "subscription"
@@ -79,6 +82,7 @@ func mapSupEvent(ev supervisor.Event, pid int) []tea.Msg {
 			CacheWrite: e.Usage.CacheCreationTokens,
 			CostUSD:    e.TotalCostUSD,
 			Turns:      1,
+			CtxWindow:  e.ModelWindows[supModel],
 		}, ui.SupTurnDoneMsg{}}
 	case supervisor.UnknownEvent:
 		if e.Type != "" {

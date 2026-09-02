@@ -147,7 +147,7 @@ func TestMapSupEvent(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tt.check(t, mapSupEvent(tt.ev, 42))
+			tt.check(t, mapSupEvent(tt.ev, 42, "claude-fable-5"))
 		})
 	}
 }

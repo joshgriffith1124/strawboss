@@ -648,3 +648,39 @@ and Shutdown tearing down mid-flight. Clean under -race across repeated
 runs, which is evidence against a data race in the feed paths at that
 scale. `make race` is a separate target because the detector needs cgo
 and the suite must still run on a box without a C compiler.
+
+## The context gauge assumed 200k (2026-09-02, live report)
+
+Running fable 5.1 (1M window), the supervisor context gauge went red at
+115k — 11% full. Two hardcoded constants: `supCtxWindow = 200_000` as the
+denominator and `ctxWarnTokens = 100_000` as an absolute red line, both
+written when 200k was the only window there was.
+
+**The stream reports the real window.** The `result` event's `modelUsage`
+map carries `contextWindow` per model:
+
+    "modelUsage": {
+      "claude-haiku-4-5-20251001": {"costUSD":0.0009, "contextWindow":200000},
+      "claude-fable-5":            {"costUSD":0.164,  "contextWindow":1000000}
+    }
+
+Note both entries: the CLI runs a small helper model alongside the
+session's own (already recorded above), so the window must be picked by
+the model name from `system/init` — never guessed from the map, and never
+by taking the largest.
+
+So `ResultEvent.ModelWindows` now carries the map, the orchestrator
+remembers the init model to resolve it, and the UI keeps
+`supCtxWindow`. The denominator is that window; the warn line is half of
+it, not a constant. Unknown stays 200k — conservative, and the gauge
+never claims a size it wasn't told. The window is persisted in the run
+ledger (`win` in sup-usage-<run>.json) next to `ctx`, for the same
+reason: a resumed session must be honest before its first turn.
+
+Flake fixed alongside: `TestShutdownKillsEverything` is the only test
+that starts the full `Run` loop, so it is the only one where
+`ensureServers` is live. Its endpoint is a localhost httptest URL with no
+`/global/health` route, so ensureServers judged the server down and
+spawned a REAL `opencode serve` against the port — which Shutdown then
+had to tear down inside its budget. It failed intermittently on any box
+with opencode installed. The mux now answers the health probe.

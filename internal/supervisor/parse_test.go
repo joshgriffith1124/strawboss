@@ -284,3 +284,38 @@ func TestUsageAddTotal(t *testing.T) {
 		t.Errorf("Total = %d", a.Total())
 	}
 }
+
+// TestParseResultModelWindows: the result's modelUsage carries each
+// model's real context window. The gauge used to assume 200k, which
+// turned red at 11% of a 1M-context model's window.
+func TestParseResultModelWindows(t *testing.T) {
+	line := []byte(`{"type":"result","subtype":"success","total_cost_usd":0.16,` +
+		`"modelUsage":{"claude-haiku-4-5-20251001":{"costUSD":0.0009,"contextWindow":200000},` +
+		`"claude-fable-5":{"costUSD":0.164,"contextWindow":1000000}}}`)
+	ev, err := ParseLine(line)
+	if err != nil {
+		t.Fatalf("ParseLine: %v", err)
+	}
+	res, ok := ev.(ResultEvent)
+	if !ok {
+		t.Fatalf("got %T, want ResultEvent", ev)
+	}
+	if got := res.ModelWindows["claude-fable-5"]; got != 1_000_000 {
+		t.Errorf("fable window = %d, want 1000000", got)
+	}
+	if got := res.ModelWindows["claude-haiku-4-5-20251001"]; got != 200_000 {
+		t.Errorf("haiku window = %d, want 200000", got)
+	}
+}
+
+// TestParseResultNoModelUsage: older streams have no modelUsage; the
+// window stays unknown rather than becoming a bogus zero-window gauge.
+func TestParseResultNoModelUsage(t *testing.T) {
+	ev, err := ParseLine([]byte(`{"type":"result","subtype":"success","total_cost_usd":0.1}`))
+	if err != nil {
+		t.Fatalf("ParseLine: %v", err)
+	}
+	if w := ev.(ResultEvent).ModelWindows; len(w) != 0 {
+		t.Errorf("windows = %v, want empty", w)
+	}
+}

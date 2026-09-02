@@ -79,6 +79,7 @@ type Orchestrator struct {
 	budgetStopped bool
 
 	lastPrompt string // first prompt of the current session (history label)
+	supModel   string // session model from system/init (picks its ctx window)
 
 	// loud-denial tracking (see notify.go)
 	toolCmds       map[string]string // toolID → "Name command…"
@@ -321,7 +322,15 @@ func (o *Orchestrator) startStream(ctx context.Context) (*supervisor.Stream, err
 				o.mu.Unlock()
 				o.appendSessionHistory(init.SessionID, run, label)
 			}
-			msgs := mapSupEvent(ev, pid)
+			if init, isInit := ev.(supervisor.InitEvent); isInit && init.Model != "" {
+				o.mu.Lock()
+				o.supModel = init.Model
+				o.mu.Unlock()
+			}
+			o.mu.Lock()
+			supModel := o.supModel
+			o.mu.Unlock()
+			msgs := mapSupEvent(ev, pid, supModel)
 			o.observeSup(msgs)
 			o.emit(ctx, msgs...)
 		}

@@ -210,6 +210,15 @@ func TestBuildSystemPrompt(t *testing.T) {
 func TestShutdownKillsEverything(t *testing.T) {
 	var aborts atomic.Int32
 	mux := http.NewServeMux()
+	// This is the only test that starts the full Run loop, so it is the
+	// only one where ensureServers is live. Its endpoint is a localhost
+	// URL, so without a health route ensureServers concludes the server is
+	// down and spawns a REAL `opencode serve` against the port, which then
+	// has to be torn down inside Shutdown's budget — flaky on any box with
+	// opencode installed. Answering the probe keeps server management out.
+	mux.HandleFunc("GET /global/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
 	mux.HandleFunc("POST /session/{sid}/abort", func(w http.ResponseWriter, r *http.Request) {
 		if r.PathValue("sid") == "ses_live" {
 			aborts.Add(1)

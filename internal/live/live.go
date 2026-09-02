@@ -411,7 +411,7 @@ func BuildSystemPrompt(exe string, models []config.ModelConfig) string {
 Delegate with the Bash tool:
   %s delegate --model <name> --task "<complete, self-contained instructions>"
 
-Available worker models, in preference order — use the first unless a task clearly needs another: %s. Workers run in your working directory and cannot see this conversation — every task description must stand alone. The command blocks until every worker finishes and prints one terse result per worker (worker id, status, summary, full-log path); read a log file only when you truly need detail.
+Available worker models, in preference order — use the first unless a task clearly needs another: %s. Workers run in your working directory and cannot see this conversation — every task description must stand alone. The command blocks until every worker finishes and prints one terse result per worker (worker id, status, summary, full-log path). The log path is for the human — the TUI renders it. Never read it yourself: those files are worker transcripts and reading one costs more context than dozens of delegations, so reads under the strawboss state directory are denied. If a result is too thin to act on, delegate a follow-up task that reports what you need.
 
 If a task's text contains $( ), backticks, or < >, do NOT put it in --task: those read as shell syntax and the whole delegate call is denied. Write the task to a file and pass the path instead — a path has no shell metacharacters, and this also suits long tasks:
   %s delegate --model <name> --task-file /tmp/task1.md

@@ -736,3 +736,40 @@ reads cost about what 195 delegations cost. All 16 were in one project,
 whose ledger shows a 92k footprint. Read is allowlisted, so this needs a
 deny rule to actually stop, and the system prompt still says "read a log
 file only when you truly need detail". Decision pending.
+
+## Closing the invariant-3 leak: deny rules need the //abs form (2026-09-02)
+
+The supervisor was reading worker transcripts through the allowlisted
+Read tool — 16 reads, ~35,300 tokens, against delegate results averaging
+181 (audit above). An allowlist cannot fix this: Read has to stay
+granted, so the hole has to be carved out with `--disallowedTools`, where
+deny beats allow.
+
+**Verified against the real CLI, both ways** — the syntax is a trap:
+
+    Read(//home/u/.strawboss/**)   BLOCKS   ← //abs form
+    Read(/home/u/.strawboss/**)    ALLOWS   ← silently matches nothing
+
+A plain absolute path is treated as relative to cwd and quietly matches
+nothing; there is no error, so a wrong rule looks exactly like a working
+one. Relative rules (`Read(logs/**)`) do work, but resolve against the
+supervisor's cwd — the project, not the state dir. The block reports
+`<tool_use_error>File is in a directory that is denied by your permission
+settings.</tool_use_error>` and does NOT appear in the result's
+`permission_denials` array, so that field cannot be used to confirm it.
+
+`supervisorDisallowedTools` denies the whole state dir, which covers
+worker transcripts, dsh session logs, the registry and the ledgers.
+End-to-end check: a read under the state dir is blocked while a file in
+the project directory still reads fine — so the supervisor's habit of
+having workers fetch raw evidence into the repo and reading it itself is
+untouched. Only its own scratch state is off limits.
+
+**`cat`/`head`/`tail` were consequently left OUT of the allowlist** even
+though they were denied in real runs. A Bash rule cannot be path-scoped,
+so granting cat would read a transcript straight past the Read deny rule.
+File content comes through Read, which honours the rules; `ls`, `wc` and
+`find` stay because they leak only names and counts. The system prompt no
+longer says "read a log file only when you truly need detail" — it says
+the log path belongs to the human, and to delegate a follow-up task when
+a result is too thin.

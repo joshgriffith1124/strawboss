@@ -26,6 +26,11 @@ type Driver struct {
 	PermissionMode string
 	// AllowedTools is passed as --allowedTools (comma-joined) when set.
 	AllowedTools []string
+	// DisallowedTools is passed as --disallowedTools (comma-joined) when
+	// set. Deny beats allow, which is the only way to carve a hole out of
+	// a broad grant like Read — path patterns must use the //abs form
+	// (docs/NOTES.md); a plain absolute path silently fails to match.
+	DisallowedTools []string
 	// SystemPrompt is passed as --append-system-prompt when set.
 	SystemPrompt string
 	// Dir is the subprocess working directory. Empty means inherit.
@@ -151,6 +156,9 @@ func (d *Driver) Start(prompt string) (*Turn, error) {
 	}
 	if len(d.AllowedTools) > 0 {
 		args = append(args, "--allowedTools", strings.Join(d.AllowedTools, ","))
+	}
+	if len(d.DisallowedTools) > 0 {
+		args = append(args, "--disallowedTools", strings.Join(d.DisallowedTools, ","))
 	}
 	if d.SystemPrompt != "" {
 		args = append(args, "--append-system-prompt", d.SystemPrompt)

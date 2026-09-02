@@ -2,6 +2,7 @@ package main
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -47,15 +48,17 @@ func TestSupervisorAllowedToolsCoversRealDenials(t *testing.T) {
 		"Read", "Edit", "Write", "Glob",
 		"Grep",                  // 19% of its calls were denied
 		"WebFetch", "WebSearch", // 100% denied
-		"Bash(ls:*)", "Bash(cat:*)", "Bash(head:*)", "Bash(wc:*)", "Bash(find:*)",
+		"Bash(ls:*)", "Bash(wc:*)", "Bash(find:*)",
 		"Bash(git status:*)", "Bash(git log:*)", "Bash(git diff:*)", "Bash(git show:*)",
 	} {
 		if !have[want] {
 			t.Errorf("allowlist missing %q", want)
 		}
 	}
-	// Nothing that writes or executes arbitrary code got in with them.
-	for _, unwanted := range []string{"Bash", "Bash(:*)", "Bash(python3:*)", "Bash(rm:*)", "Bash(git push:*)"} {
+	// Nothing that writes, executes arbitrary code, or reads file content
+	// past Read's path deny rules got in with them.
+	for _, unwanted := range []string{"Bash", "Bash(:*)", "Bash(python3:*)", "Bash(rm:*)",
+		"Bash(git push:*)", "Bash(cat:*)", "Bash(head:*)", "Bash(tail:*)"} {
 		if have[unwanted] {
 			t.Errorf("allowlist unexpectedly contains %q", unwanted)
 		}
@@ -64,5 +67,45 @@ func TestSupervisorAllowedToolsCoversRealDenials(t *testing.T) {
 	withExtra := supervisorAllowedTools("/opt/strawboss", []string{"Bash(make:*)"})
 	if len(withExtra) != len(got)+1 || withExtra[len(withExtra)-1] != "Bash(make:*)" {
 		t.Errorf("extras did not append cleanly: %v", withExtra)
+	}
+}
+
+// TestSupervisorDisallowedTools: worker transcripts live under the state
+// dir, and invariant 3 keeps them out of supervisor context. Read is
+// broadly allowed, so only a deny rule closes it — and the rule has to use
+// the //abs form, because a plain absolute path is read as relative to cwd
+// and silently matches nothing (verified against the real CLI).
+func TestSupervisorDisallowedTools(t *testing.T) {
+	tests := []struct {
+		name, stateDir, want string
+	}{
+		{"typical state dir", "/home/u/.strawboss", "Read(//home/u/.strawboss/**)"},
+		{"trailing slash", "/home/u/.strawboss/", "Read(//home/u/.strawboss/**)"},
+		{"nested temp dir", "/tmp/x/y", "Read(//tmp/x/y/**)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := supervisorDisallowedTools(tt.stateDir)
+			if len(got) != 1 || got[0] != tt.want {
+				t.Errorf("supervisorDisallowedTools(%q) = %v, want [%s]", tt.stateDir, got, tt.want)
+			}
+			// The form that silently fails must never be produced.
+			if strings.HasPrefix(got[0], "Read(/") && !strings.HasPrefix(got[0], "Read(//") {
+				t.Errorf("%q uses the plain-absolute form, which matches nothing", got[0])
+			}
+		})
+	}
+}
+
+// TestAllowlistGrantsNoPathBlindFileReader: cat/head would read a worker
+// transcript straight past the Read deny rule, since Bash rules cannot be
+// path-scoped.
+func TestAllowlistGrantsNoPathBlindFileReader(t *testing.T) {
+	for _, a := range supervisorAllowedTools("/opt/strawboss", nil) {
+		for _, bad := range []string{"Bash(cat:", "Bash(head:", "Bash(tail:", "Bash(less:", "Bash(more:"} {
+			if strings.HasPrefix(a, bad) {
+				t.Errorf("allowlist contains %q — it reads file content outside Read's deny rules", a)
+			}
+		}
 	}
 }

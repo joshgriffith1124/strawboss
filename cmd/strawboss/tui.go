@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -91,10 +92,35 @@ func supervisorAllowedTools(exe string, extra []string) []string {
 		// Read-only shell. Every one of these appeared in a real denial;
 		// nothing here writes, so the supervisor can look around without
 		// gaining the ability to act outside the delegate contract.
-		"Bash(ls:*)", "Bash(cat:*)", "Bash(head:*)", "Bash(wc:*)", "Bash(find:*)",
+		//
+		// cat/head/tail are deliberately absent even though they were
+		// denied too: file content comes through Read, which honours the
+		// path deny rules below. A Bash rule cannot be path-scoped, so
+		// granting cat would reopen the worker-transcript hole that
+		// supervisorDisallowedTools exists to close. ls/wc/find leak only
+		// names and counts, which is why they stay.
+		"Bash(ls:*)", "Bash(wc:*)", "Bash(find:*)",
 		"Bash(git status:*)", "Bash(git log:*)", "Bash(git diff:*)", "Bash(git show:*)",
 	}
 	return append(base, extra...)
+}
+
+// supervisorDisallowedTools keeps the state directory out of supervisor
+// context. Worker transcripts, dsh session logs and the registry all live
+// there, and invariant 3 says they reach the TUI and never the
+// supervisor: an audit found 16 such reads costing ~35,300 tokens against
+// delegate results averaging 181 (docs/NOTES.md). Read is broadly
+// allowed, so only a deny rule can carve this hole out of it.
+//
+// The //abs form is required. A plain absolute path in a Read() rule is
+// treated as relative to cwd and silently matches nothing — verified
+// against the real CLI, both ways.
+func supervisorDisallowedTools(stateDir string) []string {
+	abs, err := filepath.Abs(stateDir)
+	if err != nil {
+		return nil // no rule beats a rule that silently matches nothing
+	}
+	return []string{"Read(//" + strings.TrimPrefix(filepath.ToSlash(abs), "/") + "/**)"}
 }
 
 func buildLive(stateDir, modelsPath string, fresh bool) (ui.Model, func(), error) {
@@ -127,6 +153,7 @@ func buildLive(stateDir, modelsPath string, fresh bool) (ui.Model, func(), error
 	}
 
 	allowed := supervisorAllowedTools(exe, cfg.Supervisor.AllowedTools)
+	denied := supervisorDisallowedTools(stateDir)
 	system := cfg.Supervisor.SystemPrompt
 	if system == "" {
 		system = live.BuildSystemPrompt(exe, models)
@@ -140,11 +167,12 @@ func buildLive(stateDir, modelsPath string, fresh bool) (ui.Model, func(), error
 		return zero, nil, err
 	}
 	driver := &supervisor.Driver{
-		Command:        cfg.Supervisor.Command,
-		PermissionMode: cfg.Supervisor.PermissionMode,
-		AllowedTools:   allowed,
-		SystemPrompt:   system,
-		Dir:            cwd,
+		Command:         cfg.Supervisor.Command,
+		PermissionMode:  cfg.Supervisor.PermissionMode,
+		AllowedTools:    allowed,
+		DisallowedTools: denied,
+		SystemPrompt:    system,
+		Dir:             cwd,
 		// Inherited by delegate (via the supervisor's Bash) to stamp
 		// registry events with this run.
 		Env: []string{"STRAWBOSS_RUN=" + runID},

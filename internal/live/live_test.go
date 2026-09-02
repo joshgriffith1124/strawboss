@@ -202,7 +202,10 @@ func TestBuildSystemPrompt(t *testing.T) {
 		"--task-file", "$( )",
 		// Workers get a repo map and failures auto-escalate; the
 		// supervisor must not spend tokens duplicating either.
-		"repository map", "retries the task ONCE"} {
+		"repository map", "retries the task ONCE",
+		// The log path is the human's; reading it is the invariant-3 leak
+		// the deny rule closes, so the prompt must say so.
+		"Never read it yourself"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("prompt missing %q", want)
 		}

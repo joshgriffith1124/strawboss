@@ -16,8 +16,8 @@ tested at the end (same rule as milestones). Struck items are done.
 9. ~~Session picker / history browser~~ (`s` opens the per-project picker)
 10. **Per-task auto model routing** — strawboss picks the worker model by
     task shape instead of the supervisor hand-picking (needs ≥2 models
-    actually loaded on the GX10 to matter — deepseek-v4-flash still
-    pending).
+    actually loaded on the GX10 to matter — it serves one at a time;
+    glm-5.3-flash since 2026-09-06).
 11. ~~Permission prompts (lite)~~ — denials are loud (chat note with a
     paste-ready allowed_tools fix, toast, remote push). Full interactive
     prompts deferred until the denial log shows they'd pay.

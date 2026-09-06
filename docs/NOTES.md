@@ -46,8 +46,10 @@ KICKOFF.md. Add to this file whenever reality disagrees with the docs.
 - Consequently `models.toml` `endpoint` = the **opencode server URL** (local), and `model` =
   opencode's `provider/model` ref (e.g. `spark-a/qwen3.8-27b`). GX10 endpoints stay
   opencode's concern.
-- Currently only `qwen3.8-27b` is loaded server-side (config also lists `qwen3.8-flash-next`,
-  `deepseek-v4-flash`; `/v1/models` shows one). 262k context, sglang.
+- The GX10 serves **one model at a time** (`/v1/models` shows one). It was `qwen3.8-27b` on
+  sglang through 2026-09-05; since 2026-09-06 it is `glm-5.3-flash` on vLLM (see the GLM
+  section below). opencode's provider config lists more ids than are loaded — a
+  delegation to an unloaded one fails at request time.
 
 ## opencode 1.18.25 serve API (verified live; fixtures in `internal/harness/opencode/testdata/`)
 
@@ -275,6 +277,39 @@ file on disk → terse result, 5s). Three obstacles, all handled:
    hostname to its IPv4 until the DNS side serves an A record. (The
    box's mDNS .local name also died with an IP change — the router's
    DNS name is the stable one.)
+
+## GLM-5.3-flash on vLLM (verified 2026-09-06)
+
+The GX10 switched serving stacks and models: `/v1/models` now reports only
+`glm-5.3-flash` (`owned_by: vllm`, root `glm-5.3-flash-nvfp4`, `max_model_len`
+262144); qwen3.8-27b is no longer loaded. Both harnesses verified live with a
+trivial file-creation task (`strawboss delegate --escalate=false`): dsh done in
+7s, opencode done in 19s.
+
+- **The sglang workarounds are harmless on vLLM.** Streamed `tool_calls` deltas
+  carry the id/name only on the first chunk and omit them afterwards (no explicit
+  nulls), so proxy.go's null-stripping is a pass-through. vLLM accepts dsh's
+  `thinking: {type: disabled}` body and — unlike that sglang build — takes
+  `reasoning_effort` `low` and `high` without a 400, so `STRAWBOSS_DSH_REASONING`
+  can be set to dsh's own vocabulary (low|high|max) on this server.
+- **GLM does not think unless asked.** With no reasoning flags on the wire (the
+  default composition) the `reasoning` field comes back null even for a coding
+  prompt; `reasoning_effort: high` makes it reason. `max_tokens = 49152` (the
+  default) is plenty for non-thinking runs.
+- **Usage shape is OpenAI-standard** (`prompt_tokens`/`completion_tokens`,
+  `prompt_tokens_details: null`); the context gauge picks up 262144 from
+  `max_model_len` as it did with sglang.
+- **A long-lived `opencode serve` does not reload its provider config.** The
+  server that had been up since 2026-09-02 rejected `spark-a/glm-5.3-flash`
+  (worker "stopped without completing its reply (no error recorded by
+  opencode)") until it was restarted; `/config/providers` on the running server
+  is the thing to check. `strawboss delegate` does not spawn the server — only
+  the TUI does — so after editing opencode.json, kill the old server and let
+  the TUI respawn it (or start `opencode serve --port 4477 --hostname 127.0.0.1`
+  by hand).
+- `~/.strawboss/models.toml` now leads with `glm-dsh` (dsh) and `glm-coder`
+  (opencode, same model — the escalation hop changes harness, not model);
+  the qwen/deepseek entries are commented out until they are loaded again.
 
 ## dsh parallel workers vs session-query.db (2026-08-29, live TUI run)
 

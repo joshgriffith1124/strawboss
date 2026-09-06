@@ -1092,3 +1092,62 @@ func TestStreamingSurvivesModelCopies(t *testing.T) {
 		t.Errorf("chat did not receive the finished message: %+v", got.chat)
 	}
 }
+
+// Slash commands: "/name …" is supervisor input (the CLI expands it), so
+// it must reach OnPrompt untouched; only /new stays local. While a bare
+// "/word" is typed, Tab completes from the supervisor's advertised list
+// instead of switching tabs, and the hint strip shows the candidates.
+func TestSlashCommandsCompleteAndPassThrough(t *testing.T) {
+	var sent []string
+	m := demoState(t)
+	m.OnPrompt = func(s string) { sent = append(sent, s) }
+	m = apply(t, m, SupInitMsg{SessionID: "0123456789abcdef", Model: "claude-fable-5", Auth: "subscription",
+		SlashCommands: []string{"compact", "loop", "context"}})
+
+	m.input.SetValue("/lo")
+	if got := m.slashMatches(); len(got) != 1 || got[0] != "/loop" {
+		t.Fatalf("matches for /lo = %v", got)
+	}
+	if !strings.Contains(m.viewChatColumn(80, 20), "/loop") {
+		t.Error("hint strip missing /loop")
+	}
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	if m.input.Value() != "/loop " || m.tab != tabChat {
+		t.Fatalf("after tab: input=%q tab=%d", m.input.Value(), m.tab)
+	}
+	// With arguments typed, there is nothing to complete: no hint, and
+	// Tab goes back to switching tabs.
+	m.input.SetValue("/loop 5m run one iteration of LOOP.md")
+	if got := m.slashMatches(); got != nil {
+		t.Fatalf("matches with args = %v", got)
+	}
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	if m.tab == tabChat {
+		t.Fatal("tab with arguments should switch tabs")
+	}
+	m.tab = tabChat
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatal("enter produced no cmd")
+	}
+	m = apply(t, m, cmd())
+	if len(sent) != 1 || sent[0] != "/loop 5m run one iteration of LOOP.md" {
+		t.Fatalf("sent = %q", sent)
+	}
+	// /c lists both local-less matches alphabetically as given; /n offers /new first.
+	m.input.SetValue("/c")
+	if got := m.slashMatches(); len(got) != 2 {
+		t.Fatalf("matches for /c = %v", got)
+	}
+	m.input.SetValue("/n")
+	if got := m.slashMatches(); len(got) != 1 || got[0] != "/new" {
+		t.Fatalf("matches for /n = %v", got)
+	}
+	// A supervisor note lands in the chat as a note line.
+	m = apply(t, m, SupNoteMsg{Text: "compact failed: Not enough messages to compact.", IsError: true})
+	last := m.chat[len(m.chat)-1]
+	if last.kind != "note" || !last.isError || !strings.Contains(last.text, "compact failed") {
+		t.Fatalf("note = %+v", last)
+	}
+}

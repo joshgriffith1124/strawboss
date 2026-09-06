@@ -16,6 +16,18 @@ type SupInitMsg struct {
 	Model     string
 	Auth      string // "subscription" or a warning
 	PID       int
+	// SlashCommands is what the supervisor CLI expands when a message
+	// starts with "/name" (skills + built-ins, terminal-only ones already
+	// dropped). Drives the chat input's "/" completion.
+	SlashCommands []string
+}
+
+// SupNoteMsg puts an informational line from the supervisor feed into
+// the chat: compact results, scheduled-job caveats — things that are not
+// the model speaking but that the operator should see inline.
+type SupNoteMsg struct {
+	Text    string
+	IsError bool
 }
 
 // SupUserMsg echoes a user prompt into the chat (replay uses it; live mode

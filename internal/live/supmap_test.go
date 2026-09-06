@@ -3,6 +3,7 @@ package live
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -149,5 +150,50 @@ func TestMapSupEvent(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tt.check(t, mapSupEvent(tt.ev, 42, "claude-fable-5"))
 		})
+	}
+}
+
+// Slash-command plumbing: init advertises the CLI's command list minus the
+// terminal-only ones; /compact's status lines become a status + a note;
+// a /loop cron firing logs its lifecycle; CronCreate warns that the job
+// dies with the process.
+func TestMapSupEventSlashCommands(t *testing.T) {
+	msgs := mapSupEvent(supervisor.InitEvent{SessionID: "s", Model: "m", APIKeySource: "none",
+		SlashCommands: []string{"loop", "doctor", "compact"}, TerminalOnly: []string{"doctor"}}, 1, "m")
+	init, ok := msgs[0].(ui.SupInitMsg)
+	if !ok || len(init.SlashCommands) != 2 || init.SlashCommands[0] != "compact" || init.SlashCommands[1] != "loop" {
+		t.Fatalf("init = %#v", msgs[0])
+	}
+
+	msgs = mapSupEvent(supervisor.StatusEvent{Status: "compacting"}, 1, "m")
+	if st, ok := msgs[0].(ui.SupStatusMsg); !ok || st.Status != "compacting context…" {
+		t.Fatalf("compacting = %#v", msgs)
+	}
+	msgs = mapSupEvent(supervisor.StatusEvent{CompactResult: "failed", CompactError: "Not enough messages to compact."}, 1, "m")
+	if len(msgs) != 2 {
+		t.Fatalf("compact failed msgs = %#v", msgs)
+	}
+	if note, ok := msgs[1].(ui.SupNoteMsg); !ok || !note.IsError || note.Text != "compact failed: Not enough messages to compact." {
+		t.Fatalf("compact note = %#v", msgs[1])
+	}
+	msgs = mapSupEvent(supervisor.StatusEvent{}, 1, "m")
+	if msgs != nil {
+		t.Fatalf("empty status should map to nothing, got %#v", msgs)
+	}
+
+	msgs = mapSupEvent(supervisor.CommandLifecycleEvent{State: "started"}, 1, "m")
+	if lg, ok := msgs[0].(ui.RawLogMsg); !ok || lg.Line != "scheduled command started" {
+		t.Fatalf("lifecycle = %#v", msgs)
+	}
+
+	msgs = mapSupEvent(supervisor.AssistantEvent{ToolUses: []supervisor.ToolUse{{ID: "t1", Name: "CronCreate", Input: json.RawMessage(`{}`)}}}, 1, "m")
+	var warned bool
+	for _, msg := range msgs {
+		if n, ok := msg.(ui.SupNoteMsg); ok && strings.Contains(n.Text, "scheduled job") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Fatalf("no cron note in %#v", msgs)
 	}
 }

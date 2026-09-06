@@ -51,12 +51,33 @@ type InitEvent struct {
 	ClaudeCodeVersion string
 	CWD               string
 	Tools             []string
+	// SlashCommands is what the CLI will expand when a user message starts
+	// with "/name" — skills and built-ins alike (verified over stream-json
+	// stdin, docs/NOTES.md). TerminalOnly lists the subset that only works
+	// in the interactive terminal (doctor, color, …) and is dropped from
+	// the TUI's completion list.
+	SlashCommands []string
+	TerminalOnly  []string
 }
 
-// StatusEvent is a system/status line ("requesting", ...).
+// StatusEvent is a system/status line ("requesting", "compacting", …).
+// A /compact command ends with a status line carrying compact_result
+// ("failed" with compact_error, or a success marker) and a null status.
 type StatusEvent struct {
-	SessionID string
-	Status    string
+	SessionID     string
+	Status        string
+	CompactResult string
+	CompactError  string
+}
+
+// CommandLifecycleEvent brackets a turn the CLI started on its own — a
+// scheduled job (/loop's cron) firing inside the persistent process.
+// State is "started" or "completed"; each such turn also re-emits
+// system/init for the same session.
+type CommandLifecycleEvent struct {
+	SessionID   string
+	CommandUUID string
+	State       string
 }
 
 // ThinkingEvent is a system/thinking_tokens line: a live estimate of the
@@ -177,13 +198,14 @@ type TurnDoneEvent struct {
 	Interrupted bool
 }
 
-func (InitEvent) event()        {}
-func (StatusEvent) event()      {}
-func (ThinkingEvent) event()    {}
-func (AssistantEvent) event()   {}
-func (ToolResultsEvent) event() {}
-func (StreamDeltaEvent) event() {}
-func (RateLimitEvent) event()   {}
-func (ResultEvent) event()      {}
-func (UnknownEvent) event()     {}
-func (TurnDoneEvent) event()    {}
+func (InitEvent) event()             {}
+func (StatusEvent) event()           {}
+func (ThinkingEvent) event()         {}
+func (AssistantEvent) event()        {}
+func (ToolResultsEvent) event()      {}
+func (StreamDeltaEvent) event()      {}
+func (RateLimitEvent) event()        {}
+func (CommandLifecycleEvent) event() {}
+func (ResultEvent) event()           {}
+func (UnknownEvent) event()          {}
+func (TurnDoneEvent) event()         {}

@@ -223,6 +223,10 @@ type Model struct {
 	auth      string
 	pid       int
 	supStatus string // "✻ …" line
+	// slashCmds is the supervisor CLI's command list (from system/init):
+	// "/name …" typed in chat goes to the CLI verbatim, which expands it
+	// like the interactive terminal would. Only /new is handled locally.
+	slashCmds []string
 	// streaming is the in-progress supervisor reply. A plain string on
 	// purpose: Model is passed by value and boxed into tea.Model between
 	// updates, and a strings.Builder here panics on the next write after
@@ -367,7 +371,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// ── feed messages ─────────────────────────────────────────────
 	case SupInitMsg:
 		m.sessionID, m.supModel, m.auth, m.pid = msg.SessionID, msg.Model, msg.Auth, msg.PID
+		if len(msg.SlashCommands) > 0 {
+			m.slashCmds = msg.SlashCommands
+		}
 		m.log("sup", "session "+msg.SessionID+" · "+msg.Model+" · "+msg.Auth)
+		return m, Listen(m.feed)
+	case SupNoteMsg:
+		m.chat = append(m.chat, chatItem{kind: "note", when: time.Now(), text: msg.Text, isError: msg.IsError})
+		m.log("sup", msg.Text)
 		return m, Listen(m.feed)
 	case SupUserMsg:
 		m.chat = append(m.chat, chatItem{kind: "user", when: msg.Time, text: msg.Text})
@@ -672,6 +683,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// slashMatches lists the commands the chat input could complete to: the
+// local /new plus the supervisor's list, prefix-matched against the input
+// while it is still a bare "/word" (no arguments yet). Empty otherwise.
+func (m Model) slashMatches() []string {
+	v := m.input.Value()
+	if !strings.HasPrefix(v, "/") || strings.ContainsAny(v, " \t") {
+		return nil
+	}
+	var out []string
+	for _, c := range append([]string{"new"}, m.slashCmds...) {
+		if strings.HasPrefix("/"+c, v) {
+			out = append(out, "/"+c)
+		}
+	}
+	return out
+}
+
+// completeSlash fills the input with the first matching command and a
+// trailing space, ready for arguments. Reports false when there was
+// nothing to complete so Tab keeps its tab-switching job.
+func (m Model) completeSlash() (bool, Model) {
+	matches := m.slashMatches()
+	if len(matches) == 0 {
+		return false, m
+	}
+	m.input.SetValue(matches[0] + " ")
+	m.input.CursorEnd()
+	return true, m
+}
+
 // ringBell shows the failure toast and rings the terminal bell — the
 // point is NOT watching the dashboard.
 func (m *Model) ringBell(text string) {
@@ -783,6 +824,11 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.quitting = true
 		return m, tea.Quit
 	case "tab":
+		if typing {
+			if done, next := m.completeSlash(); done {
+				return next, nil
+			}
+		}
 		m.tab = (m.tab + 1) % 3
 		return m, nil
 	case "shift+tab":

@@ -27,6 +27,10 @@ func (m Model) viewChat(w, h int) string {
 
 func (m Model) viewChatColumn(w, h int) string {
 	inputH := 3
+	hint := m.slashHint(w)
+	if hint != "" {
+		inputH++
+	}
 	logH := h - inputH
 	if logH < 3 {
 		logH = 3
@@ -122,7 +126,38 @@ func (m Model) viewChatColumn(w, h int) string {
 		Border(lipgloss.RoundedBorder()).BorderForeground(cFaint).
 		Width(w - 2).Render(m.input.View())
 
+	if hint != "" {
+		return lipgloss.JoinVertical(lipgloss.Left, log, hint, inputBox)
+	}
 	return lipgloss.JoinVertical(lipgloss.Left, log, inputBox)
+}
+
+// slashHint is the one-line completion strip shown above the input while
+// a bare "/word" is being typed: the matching commands, first one bold
+// (what Tab will pick), truncated to the column width.
+func (m Model) slashHint(w int) string {
+	matches := m.slashMatches()
+	if len(matches) == 0 {
+		return ""
+	}
+	// Fit by dropping whole entries (never slice a styled string): the
+	// budget is the column minus the leader and a trailing " …".
+	budget := w - 6
+	var parts []string
+	used := 0
+	for i, c := range matches {
+		if used+len(c)+3 > budget {
+			parts = append(parts, sFaint.Render("…"))
+			break
+		}
+		used += len(c) + 3
+		if i == 0 {
+			parts = append(parts, sTealB.Render(c))
+		} else {
+			parts = append(parts, sTeal.Render(c))
+		}
+	}
+	return " " + sFaint.Render("⇥ ") + strings.Join(parts, sFaint.Render(" · "))
 }
 
 // toolBlock renders an inline tool line that WRAPS instead of vanishing

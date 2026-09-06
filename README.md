@@ -15,6 +15,13 @@ any OpenAI-compatible endpoint). The TUI shows the live worker table,
 streaming transcripts, and the token economy: what the plan-metered
 supervisor spent vs. what your free local workers churned through.
 
+Anything you type that starts with `/` goes to the supervisor as a Claude
+Code slash command — `/loop 10m Run one iteration of LOOP.md`, `/compact`,
+`/context`, your own `.claude/commands` skills. Tab completes from the
+list the CLI advertises; `/new` (fresh session) is the one strawboss
+handles itself. A `/loop` lives only as long as the supervisor process:
+esc, `/new`, or a crash drops it (the chat says so when one is scheduled).
+
 ![The chat tab: supervisor conversation, inline delegations, and the token
 economy — 180k fresh plan tokens steering 4M free local
 tokens](docs/screenshot-chat.png)

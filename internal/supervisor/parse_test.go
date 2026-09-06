@@ -319,3 +319,46 @@ func TestParseResultNoModelUsage(t *testing.T) {
 		t.Errorf("windows = %v, want empty", w)
 	}
 }
+
+// slash.jsonl: real lines around slash commands over stream-json stdin —
+// the init that advertises the command list, the command_lifecycle pair a
+// /loop cron firing emits, and the status pair a /compact produces.
+func TestParseSlashCommandLines(t *testing.T) {
+	events := parseFixture(t, "slash.jsonl")
+	if len(events) != 5 {
+		t.Fatalf("got %d events, want 5: %#v", len(events), events)
+	}
+	init, ok := events[0].(InitEvent)
+	if !ok {
+		t.Fatalf("events[0] = %T, want InitEvent", events[0])
+	}
+	if !contains(init.SlashCommands, "loop") || !contains(init.SlashCommands, "compact") {
+		t.Errorf("slash commands missing loop/compact: %v", init.SlashCommands)
+	}
+	if !contains(init.TerminalOnly, "doctor") {
+		t.Errorf("terminal-only commands = %v, want doctor", init.TerminalOnly)
+	}
+	for i, want := range []string{"started", "completed"} {
+		lc, ok := events[1+i].(CommandLifecycleEvent)
+		if !ok || lc.State != want || lc.CommandUUID != "dee4ba3d-ae83-45cc-b725-e266f93dc0e3" {
+			t.Errorf("events[%d] = %#v, want lifecycle %s", 1+i, events[1+i], want)
+		}
+	}
+	st, ok := events[3].(StatusEvent)
+	if !ok || st.Status != "compacting" {
+		t.Errorf("events[3] = %#v, want compacting status", events[3])
+	}
+	st, ok = events[4].(StatusEvent)
+	if !ok || st.Status != "" || st.CompactResult != "failed" || st.CompactError != "Not enough messages to compact." {
+		t.Errorf("events[4] = %#v, want failed compact_result", events[4])
+	}
+}
+
+func contains(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}

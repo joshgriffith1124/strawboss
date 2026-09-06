@@ -33,6 +33,15 @@ func ParseLine(line []byte) (Event, error) {
 		return parseRateLimit(line, env.SessionID)
 	case "result":
 		return parseResult(line, env.SessionID)
+	case "command_lifecycle":
+		var v struct {
+			CommandUUID string `json:"command_uuid"`
+			State       string `json:"state"`
+		}
+		if err := json.Unmarshal(line, &v); err != nil {
+			return UnknownEvent{Type: "command_lifecycle", Raw: line, Err: err}, nil
+		}
+		return CommandLifecycleEvent{SessionID: env.SessionID, CommandUUID: v.CommandUUID, State: v.State}, nil
 	default:
 		return UnknownEvent{Type: env.Type, Raw: line}, nil
 	}
@@ -48,6 +57,8 @@ func parseSystem(line []byte, subtype, sessionID string) (Event, error) {
 			ClaudeCodeVersion string   `json:"claude_code_version"`
 			CWD               string   `json:"cwd"`
 			Tools             []string `json:"tools"`
+			SlashCommands     []string `json:"slash_commands"`
+			TerminalOnly      []string `json:"terminal_slash_commands"`
 		}
 		if err := json.Unmarshal(line, &v); err != nil {
 			return UnknownEvent{Type: "system/init", Raw: line, Err: err}, nil
@@ -60,15 +71,19 @@ func parseSystem(line []byte, subtype, sessionID string) (Event, error) {
 			ClaudeCodeVersion: v.ClaudeCodeVersion,
 			CWD:               v.CWD,
 			Tools:             v.Tools,
+			SlashCommands:     v.SlashCommands,
+			TerminalOnly:      v.TerminalOnly,
 		}, nil
 	case "status":
 		var v struct {
-			Status string `json:"status"`
+			Status        string `json:"status"`
+			CompactResult string `json:"compact_result"`
+			CompactError  string `json:"compact_error"`
 		}
 		if err := json.Unmarshal(line, &v); err != nil {
 			return UnknownEvent{Type: "system/status", Raw: line, Err: err}, nil
 		}
-		return StatusEvent{SessionID: sessionID, Status: v.Status}, nil
+		return StatusEvent{SessionID: sessionID, Status: v.Status, CompactResult: v.CompactResult, CompactError: v.CompactError}, nil
 	case "thinking_tokens":
 		var v struct {
 			EstimatedTokens int `json:"estimated_tokens"`

@@ -6,6 +6,7 @@ package live
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -14,6 +15,23 @@ import (
 	"github.com/joshgriffith1124/strawboss/internal/supervisor"
 	"github.com/joshgriffith1124/strawboss/internal/ui"
 )
+
+// usableSlashCommands returns the CLI's slash commands minus the
+// terminal-only ones, sorted for the completion list.
+func usableSlashCommands(all, terminalOnly []string) []string {
+	skip := map[string]bool{}
+	for _, c := range terminalOnly {
+		skip[c] = true
+	}
+	var out []string
+	for _, c := range all {
+		if !skip[c] {
+			out = append(out, c)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
 
 // mapSupEvent translates one supervisor stream event into UI msgs.
 // supModel is the session model from system/init: the result's modelUsage
@@ -26,12 +44,23 @@ func mapSupEvent(ev supervisor.Event, pid int, supModel string) []tea.Msg {
 		if e.APIKeySource != "none" {
 			auth = "API KEY (" + e.APIKeySource + ") — invariant violated"
 		}
-		return []tea.Msg{ui.SupInitMsg{SessionID: e.SessionID, Model: e.Model, Auth: auth, PID: pid}}
+		return []tea.Msg{ui.SupInitMsg{SessionID: e.SessionID, Model: e.Model, Auth: auth, PID: pid,
+			SlashCommands: usableSlashCommands(e.SlashCommands, e.TerminalOnly)}}
 	case supervisor.StatusEvent:
-		if e.Status == "requesting" {
+		switch {
+		case e.Status == "requesting":
 			return []tea.Msg{ui.SupStatusMsg{Status: "thinking…"}}
+		case e.Status == "compacting":
+			return []tea.Msg{ui.SupStatusMsg{Status: "compacting context…"}}
+		case e.CompactResult == "failed":
+			return []tea.Msg{ui.SupStatusMsg{Status: ""}, ui.SupNoteMsg{Text: "compact failed: " + e.CompactError, IsError: true}}
+		case e.CompactResult != "":
+			return []tea.Msg{ui.SupStatusMsg{Status: ""}, ui.SupNoteMsg{Text: "context compacted (" + e.CompactResult + ")"}}
 		}
 		return nil
+	case supervisor.CommandLifecycleEvent:
+		// A scheduled job (/loop) firing its own turn inside the process.
+		return []tea.Msg{ui.RawLogMsg{Source: "sup", Line: "scheduled command " + e.State}}
 	case supervisor.ThinkingEvent:
 		return []tea.Msg{ui.SupStatusMsg{Status: fmt.Sprintf("thinking… ~%d tok", e.EstimatedTokens)}}
 	case supervisor.StreamDeltaEvent:
@@ -61,6 +90,12 @@ func mapSupEvent(ev supervisor.Event, pid int, supModel string) []tea.Msg {
 				Command:  cmd,
 				Delegate: parseDelegate(cmd),
 			})
+			if tu.Name == "CronCreate" {
+				// /loop schedules a session-only cron job: it fires as long
+				// as THIS process lives and vanishes with it (NOTES.md).
+				msgs = append(msgs, ui.SupNoteMsg{Text: "scheduled job lives only in this supervisor process — " +
+					"esc (interrupt), /new, or a crash drops it; re-issue the /loop after a respawn"})
+			}
 		}
 		return msgs
 	case supervisor.ToolResultsEvent:

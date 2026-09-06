@@ -278,6 +278,42 @@ file on disk → terse result, 5s). Three obstacles, all handled:
    box's mDNS .local name also died with an IP change — the router's
    DNS name is the stable one.)
 
+## Slash commands over stream-json stdin (verified 2026-09-06, Claude Code 2.1.263)
+
+Question: can the TUI hand `/loop …`, `/compact`, a custom `.claude/commands`
+skill, etc. to the headless supervisor? Yes — the persistent `claude -p
+--input-format stream-json` process expands a user message whose text starts
+with `/name` exactly like the interactive terminal, in the content shape
+`Stream.Send` already writes (`content: [{type: text, text: "/ping"}]`; a
+plain string works too). Findings from real runs (fixture
+`internal/supervisor/testdata/slash.jsonl`):
+
+- **The init event advertises the list**: `slash_commands` (skills + built-ins,
+  ~50 entries: loop, compact, context, clear, model, effort, …) and
+  `terminal_slash_commands` (doctor, color, reload-plugins — terminal-only).
+  The chat input completes from that list (Tab while typing a bare `/word`);
+  only `/new` is strawboss's own.
+- **Unknown commands are free**: `/nosuchcmd` yields an assistant text
+  "Unknown command: /nosuchcmd" and a result with `num_turns: 0` — no model
+  call, so there is no need to validate client-side.
+- **`/compact` works** and reports through `system/status`: `status:
+  "compacting"`, then a line with `status: null, compact_result: "failed",
+  compact_error: "Not enough messages to compact."` (the success shape was
+  not captured; the parser carries `compact_result` verbatim). The TUI shows
+  "compacting context…" then a chat note.
+- **`/loop` runs headless.** The skill calls `CronCreate` (session-only job,
+  "dies when Claude exits"); the cron fires new turns *inside the alive
+  process* — verified three firings at one-minute cadence with no stdin
+  input. Each firing emits a top-level `command_lifecycle` event
+  (`state: started|completed`, `command_uuid`) around a fresh `system/init`
+  for the SAME session id (so the init handler must stay idempotent — it
+  is: session history dedupes) and a normal assistant/result sequence.
+  Consequence: **interrupt (esc), `/new`, or a crash kills the loop** —
+  strawboss respawns with `--resume`, which restores the conversation but
+  not the cron. The TUI notes this inline whenever it sees a CronCreate.
+- Built-in `--resume` still applies: a slash command that mutates session
+  state (`/model`, `/effort`) persists in the session like any other turn.
+
 ## GLM-5.3-flash on vLLM (verified 2026-09-06)
 
 The GX10 switched serving stacks and models: `/v1/models` now reports only

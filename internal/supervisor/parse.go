@@ -33,6 +33,21 @@ func ParseLine(line []byte) (Event, error) {
 		return parseRateLimit(line, env.SessionID)
 	case "result":
 		return parseResult(line, env.SessionID)
+	case "control_response":
+		var v struct {
+			Response struct {
+				Subtype   string `json:"subtype"`
+				RequestID string `json:"request_id"`
+				Error     string `json:"error"`
+			} `json:"response"`
+		}
+		if err := json.Unmarshal(line, &v); err != nil {
+			return UnknownEvent{Type: "control_response", Raw: line, Err: err}, nil
+		}
+		return ControlResponseEvent{RequestID: v.Response.RequestID, Subtype: v.Response.Subtype, Error: v.Response.Error}, nil
+	case "tool_progress":
+		// Heartbeats for a long-running tool call — chatter.
+		return nil, nil
 	case "command_lifecycle":
 		var v struct {
 			CommandUUID string `json:"command_uuid"`

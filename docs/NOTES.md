@@ -150,9 +150,11 @@ pattern for the TUI:
   the process warm is free.
 - One `result` event per turn (num_turns cumulative); the process does not exit
   between turns.
-- SIGINT terminates the whole process (unlike interactive esc). Interrupt is
-  therefore: kill → respawn with --resume on the next prompt — identical to
-  crash recovery. Closing stdin ends the process gracefully.
+- SIGINT terminates the whole process (unlike interactive esc). Superseded
+  2026-09-06: the interrupt `control_request` over stdin cancels the turn in
+  place (see "Interrupt without killing the process" below); SIGINT is now
+  only the fallback when that write fails. Closing stdin ends the process
+  gracefully.
 - New stream event: `system/thinking_tokens` `{estimated_tokens,
   estimated_tokens_delta}`, emitted periodically while reasoning — now feeds
   the status line ("thinking… ~82 tok") instead of spamming logs as unparsed.
@@ -308,11 +310,69 @@ plain string works too). Findings from real runs (fixture
   (`state: started|completed`, `command_uuid`) around a fresh `system/init`
   for the SAME session id (so the init handler must stay idempotent — it
   is: session history dedupes) and a normal assistant/result sequence.
-  Consequence: **interrupt (esc), `/new`, or a crash kills the loop** —
-  strawboss respawns with `--resume`, which restores the conversation but
-  not the cron. The TUI notes this inline whenever it sees a CronCreate.
+  Consequence: **`/new` or a crash kills the loop** — strawboss respawns
+  with `--resume`, which restores the conversation but not the cron. (esc
+  no longer does, since the interrupt became a control message — next
+  section.) The TUI notes this inline whenever it sees a CronCreate.
 - Built-in `--resume` still applies: a slash command that mutates session
   state (`/model`, `/effort`) persists in the session like any other turn.
+
+## Interrupt without killing the process (verified 2026-09-06, Claude Code 2.1.263)
+
+Why it mattered: an accidental esc in the TUI at 14:27 on 2026-09-06 sent
+SIGINT to the supervisor, the CLI killed its background shells on exit, and
+the 11-worker `strawboss delegate` batch running under one of them died with
+it (9 workers "terminated signal received"). The CLI advertises
+`capabilities: [interrupt_receipt_v1, interrupt_cancel_queued_v1, …]` in
+system/init; the matching stdin message is
+
+    {"type":"control_request","request_id":"<id>","request":{"subtype":"interrupt"}}
+
+Verified mid-turn against a 150-second foreground Bash call with a
+`sleep 400` background task alongside (fixture
+`internal/supervisor/testdata/interrupt.jsonl`):
+
+- The CLI answers `{"type":"control_response","response":{"subtype":"success",
+  "request_id":"<id>","response":{"still_queued":[]}}}`, rejects the running
+  tool (its tool_result reads "The user doesn't want to proceed with this
+  tool use…"), injects a user line `[Request interrupted by user for tool
+  use]`, and closes the turn with a `result` of subtype
+  `error_during_execution`, `is_error: true`, no `result` text.
+- **The process stays alive** and answers the next user message normally.
+- **Background shells survive**: the `sleep 400` was still running after the
+  interrupt and until the process exited. A delegate batch therefore
+  survives esc now; only `/new`, a crash, or quitting the TUI kills it.
+- Interrupting while idle just returns the control_response; nothing else.
+  `Stream` tags the first error result after an interrupt as `Interrupted`
+  (shown as "turn interrupted", not a supervisor error) and clears that
+  flag on the next Send or a scheduled turn start so it cannot mislabel a
+  later result.
+- While a long tool runs the CLI emits `tool_progress` heartbeats
+  (`elapsed_time_seconds`, `parent_tool_use_id`) — parsed as chatter.
+
+## Worker sampling temperature (2026-09-06)
+
+The GX10's vLLM overrides its sampling defaults with GLM-5.3-flash's
+generation_config, i.e. temperature 1.0; dsh sends no temperature, and at
+1.0 GLM leaks stray CJK tokens into code (three of the day's worker
+transcripts; two workers spent their whole budget rewriting corrupted
+files). `@deepseek-ai/dsh-llm-deepseek`'s plugin Config schema has no
+temperature key (only thinking / reasoningEffort / maxTokens / …);
+`options.temperature` exists but is per-call, set by the agent. So the
+worker's LLM proxy (proxy.go) now forces `temperature` into every
+chat-completions body when `models.toml` sets one — `temperature = 0.2` on
+`glm-dsh`. The server-side equivalent is vLLM's
+`--override-generation-config '{"temperature":0.2}'`, pending a serve cycle
+on the GX10; lower temperature also raises its speculative-decode accept
+rate (0.48 live vs 0.9 measured at temperature 0). Opencode-harness
+entries are not covered — set it server-side or in opencode's provider
+config.
+
+Capacity facts from the same investigation (server owner's numbers): KV
+cache pinned at 3 GiB = 295k tokens, max concurrency 1.13 at the 262k
+context, `--max-num-seqs 6`, 700+ preemptions in a day with up to 11
+parallel workers; ~5 GiB free on the box, so the pin can reach ~5 GiB at
+most. Two parallel workers is the ceiling on this pin.
 
 ## GLM-5.3-flash on vLLM (verified 2026-09-06)
 

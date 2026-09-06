@@ -362,3 +362,23 @@ func contains(list []string, s string) bool {
 	}
 	return false
 }
+
+// interrupt.jsonl: real lines from an interrupt control_request sent
+// mid-turn over stream-json stdin — the tool heartbeat (chatter), the
+// control_response, the injected "[Request interrupted]" user text (not
+// feed material), and the error_during_execution result that closes the
+// cancelled turn.
+func TestParseInterruptLines(t *testing.T) {
+	events := parseFixture(t, "interrupt.jsonl")
+	if len(events) != 2 {
+		t.Fatalf("got %d events, want 2 (progress and user text skipped): %#v", len(events), events)
+	}
+	cr, ok := events[0].(ControlResponseEvent)
+	if !ok || cr.Subtype != "success" || cr.RequestID != "int-1" {
+		t.Errorf("events[0] = %#v, want success control response int-1", events[0])
+	}
+	res, ok := events[1].(ResultEvent)
+	if !ok || res.Subtype != "error_during_execution" || !res.IsError || res.Interrupted {
+		t.Errorf("events[1] = %#v, want error_during_execution result (Interrupted is the stream's to set)", events[1])
+	}
+}

@@ -70,6 +70,14 @@ type StatusEvent struct {
 	CompactError  string
 }
 
+// ControlResponseEvent answers a control_request written to stdin (the
+// interrupt). Subtype is "success" or "error"; Error carries the reason.
+type ControlResponseEvent struct {
+	RequestID string
+	Subtype   string
+	Error     string
+}
+
 // CommandLifecycleEvent brackets a turn the CLI started on its own — a
 // scheduled job (/loop's cron) firing inside the persistent process.
 // State is "started" or "completed"; each such turn also re-emits
@@ -163,9 +171,13 @@ type RateLimitEvent struct {
 // turn, and the notional API cost (marginal real cost is $0.00 on
 // subscription).
 type ResultEvent struct {
-	SessionID     string
-	Subtype       string // "success", ...
-	IsError       bool
+	SessionID string
+	Subtype   string // "success", "error_during_execution", ...
+	IsError   bool
+	// Interrupted marks the result that closed a turn the operator
+	// interrupted (Stream.Interrupt): the CLI reports it as an
+	// error_during_execution, which is not a failure to alarm on.
+	Interrupted   bool
 	Result        string
 	TotalCostUSD  float64
 	NumTurns      int
@@ -206,6 +218,7 @@ func (ToolResultsEvent) event()      {}
 func (StreamDeltaEvent) event()      {}
 func (RateLimitEvent) event()        {}
 func (CommandLifecycleEvent) event() {}
+func (ControlResponseEvent) event()  {}
 func (ResultEvent) event()           {}
 func (UnknownEvent) event()          {}
 func (TurnDoneEvent) event()         {}

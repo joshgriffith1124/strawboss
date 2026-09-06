@@ -199,3 +199,28 @@ func TestLoadModelsToolsMode(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestModelTemperature(t *testing.T) {
+	dir := t.TempDir()
+	write := func(body string) string {
+		p := filepath.Join(dir, "models.toml")
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	models, err := LoadModels(write("[models.x]\nendpoint = \"http://h:1\"\nmodel = \"m\"\nharness = \"dsh\"\ntemperature = 0.2\n\n[models.y]\nendpoint = \"http://h:1\"\nmodel = \"m\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if models[0].Temperature == nil || *models[0].Temperature != 0.2 {
+		t.Errorf("x temperature = %v", models[0].Temperature)
+	}
+	if models[1].Temperature != nil {
+		t.Errorf("y temperature should be unset, got %v", *models[1].Temperature)
+	}
+	if _, err := LoadModels(write("[models.x]\nendpoint = \"http://h:1\"\nmodel = \"m\"\ntemperature = 3\n")); err == nil ||
+		!strings.Contains(err.Error(), "out of range") {
+		t.Errorf("temperature 3 accepted: %v", err)
+	}
+}

@@ -278,7 +278,7 @@ func (o *Orchestrator) supervisorLoop(ctx context.Context) {
 			return
 		case <-o.interrupt:
 			if s := current(); s != nil && s.Alive() {
-				s.Interrupt() // process exits; next prompt respawns with --resume
+				s.Interrupt() // cancels the turn in place; the process stays up
 			}
 		case prompt := <-o.prompts:
 			o.mu.Lock()

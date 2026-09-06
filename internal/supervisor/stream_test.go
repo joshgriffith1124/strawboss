@@ -19,6 +19,12 @@ func fakeStreamClaude(t *testing.T) string {
 echo '{"type":"system","subtype":"init","session_id":"stream-s1","apiKeySource":"none"}'
 n=0
 while read line; do
+  case "$line" in
+  *control_request*)
+    echo '{"type":"control_response","response":{"subtype":"success","request_id":"interrupt-1","response":{"still_queued":[]}}}'
+    echo '{"type":"result","subtype":"error_during_execution","is_error":true,"num_turns":1,"usage":{"input_tokens":1,"output_tokens":0}}'
+    continue;;
+  esac
   n=$((n+1))
   echo '{"type":"assistant","message":{"id":"m'$n'","content":[{"type":"text","text":"reply '$n'"}],"usage":{"input_tokens":1,"output_tokens":2}}}'
   echo '{"type":"result","subtype":"success","is_error":false,"result":"reply '$n'","total_cost_usd":0.01,"num_turns":1,"usage":{"input_tokens":1,"output_tokens":2}}'
@@ -100,17 +106,33 @@ func TestStreamInterrupt(t *testing.T) {
 	}
 	// Wait for init so the process is definitely up.
 	collectStream(t, s, func(ev Event) bool { _, ok := ev.(InitEvent); return ok })
+	// The interrupt is a control message, not a signal: the turn closes
+	// with an interrupted (not failed) result and the process lives on.
 	s.Interrupt()
-	events := collectStream(t, s, func(ev Event) bool { _, ok := ev.(TurnDoneEvent); return ok })
-	done := events[len(events)-1].(TurnDoneEvent)
-	if !done.Interrupted || done.ExitErr != nil {
-		t.Errorf("done = %+v", done)
+	events := collectStream(t, s, func(ev Event) bool { _, ok := ev.(ResultEvent); return ok })
+	if _, ok := events[len(events)-2].(ControlResponseEvent); !ok {
+		t.Errorf("no control response before the result: %#v", events)
 	}
-	if s.Alive() {
-		t.Error("still alive after interrupt")
+	res := events[len(events)-1].(ResultEvent)
+	if !res.Interrupted || !res.IsError || res.Subtype != "error_during_execution" {
+		t.Errorf("result = %+v", res)
 	}
-	if err := s.Send("nope"); err == nil {
-		t.Error("Send to a dead stream must error")
+	if !s.Alive() {
+		t.Fatal("process died on interrupt")
+	}
+	// The next prompt's result is a normal one — the interrupt flag does
+	// not leak forward.
+	if err := s.Send("again"); err != nil {
+		t.Fatal(err)
+	}
+	events = collectStream(t, s, func(ev Event) bool { _, ok := ev.(ResultEvent); return ok })
+	if res := events[len(events)-1].(ResultEvent); res.Interrupted || res.IsError {
+		t.Errorf("post-interrupt result = %+v", res)
+	}
+	s.Shutdown(2 * time.Second)
+	events = collectStream(t, s, func(ev Event) bool { _, ok := ev.(TurnDoneEvent); return ok })
+	if done := events[len(events)-1].(TurnDoneEvent); done.ExitErr != nil {
+		t.Errorf("shutdown = %+v", done)
 	}
 }
 

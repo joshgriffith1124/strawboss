@@ -76,6 +76,10 @@ type llmProxy struct {
 	srv      *http.Server
 	ln       net.Listener
 	upstream *url.URL
+	// temperature, when set, is written into every chat-completions
+	// request body: dsh's adapter has no temperature setting, and a
+	// server left to the model's generation_config samples GLM at 1.0.
+	temperature *float64
 }
 
 // startLLMProxy listens on a random localhost port, forwarding to the
@@ -107,12 +111,25 @@ func (p *llmProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	out.Scheme = p.upstream.Scheme
 	out.Host = p.upstream.Host
 	out.Path = p.upstream.Path + r.URL.Path
-	req, err := http.NewRequestWithContext(r.Context(), r.Method, out.String(), r.Body)
+	body := io.Reader(r.Body)
+	length := r.ContentLength
+	if p.temperature != nil && r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/chat/completions") {
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		raw = setTemperature(raw, *p.temperature)
+		body, length = strings.NewReader(string(raw)), int64(len(raw))
+	}
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, out.String(), body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
 	req.Header = r.Header.Clone()
+	req.ContentLength = length
+	req.Header.Del("Content-Length")
 	resp, err := Transport.RoundTrip(req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -150,6 +167,23 @@ func (p *llmProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	}
+}
+
+// setTemperature returns the request body with "temperature" set to t,
+// replacing any value the client sent. A body that is not a JSON object
+// passes through unchanged (the server will reject it on its own terms).
+func setTemperature(body []byte, t float64) []byte {
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(body, &obj) != nil || obj == nil {
+		return body
+	}
+	val, _ := json.Marshal(t)
+	obj["temperature"] = val
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return body
+	}
+	return out
 }
 
 // scrubToolCallNulls deletes null id/type/function/function.name fields

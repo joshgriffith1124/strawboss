@@ -39,6 +39,12 @@ type ModelConfig struct {
 	// (docs/NOTES.md). Ignored by the opencode harness (opencode.json
 	// limit.output owns it there).
 	MaxTokens int `toml:"max_tokens"`
+	// Temperature, when set, is forced onto every chat-completions request
+	// a dsh worker makes (the worker's LLM proxy rewrites the body). Local
+	// servers otherwise fall back to the model's generation_config — GLM's
+	// is 1.0, where it emits stray CJK tokens into code (docs/NOTES.md).
+	// Unset = leave the request alone. Ignored by the opencode harness.
+	Temperature *float64 `toml:"temperature"`
 }
 
 // Supervisor holds settings for spawning the claude CLI.
@@ -212,6 +218,9 @@ func LoadModels(path string) ([]ModelConfig, error) {
 		case "", "native", "code", "both":
 		default:
 			return nil, fmt.Errorf("model %q: unknown tools_mode %q (native, code, or both)", name, mc.ToolsMode)
+		}
+		if mc.Temperature != nil && (*mc.Temperature < 0 || *mc.Temperature > 2) {
+			return nil, fmt.Errorf("model %q: temperature %v out of range (0–2)", name, *mc.Temperature)
 		}
 		out = append(out, mc)
 	}

@@ -94,7 +94,7 @@ func mapSupEvent(ev supervisor.Event, pid int, supModel string) []tea.Msg {
 				// /loop schedules a session-only cron job: it fires as long
 				// as THIS process lives and vanishes with it (NOTES.md).
 				msgs = append(msgs, ui.SupNoteMsg{Text: "scheduled job lives only in this supervisor process — " +
-					"esc (interrupt), /new, or a crash drops it; re-issue the /loop after a respawn"})
+					"/new or a crash drops it (esc does not); re-issue the /loop after a respawn"})
 			}
 		}
 		return msgs
@@ -110,6 +110,8 @@ func mapSupEvent(ev supervisor.Event, pid int, supModel string) []tea.Msg {
 		// The result closes a turn; SupTurnDoneMsg (no error) flushes any
 		// streaming text and clears the status line. In stream mode the
 		// process outlives the turn, so this is the only turn boundary.
+		// An interrupted turn's result says so instead of reading as an
+		// error.
 		return []tea.Msg{ui.SupUsageMsg{
 			Input:      e.Usage.InputTokens,
 			Output:     e.Usage.OutputTokens,
@@ -118,7 +120,13 @@ func mapSupEvent(ev supervisor.Event, pid int, supModel string) []tea.Msg {
 			CostUSD:    e.TotalCostUSD,
 			Turns:      1,
 			CtxWindow:  e.ModelWindows[supModel],
-		}, ui.SupTurnDoneMsg{}}
+		}, ui.SupTurnDoneMsg{Interrupted: e.Interrupted}}
+	case supervisor.ControlResponseEvent:
+		line := "interrupt acknowledged"
+		if e.Subtype != "success" {
+			line = "interrupt " + e.Subtype + ": " + e.Error
+		}
+		return []tea.Msg{ui.RawLogMsg{Source: "sup", Line: line}}
 	case supervisor.UnknownEvent:
 		if e.Type != "" {
 			return []tea.Msg{ui.RawLogMsg{Source: "sup", Line: "unparsed " + e.Type + " event"}}

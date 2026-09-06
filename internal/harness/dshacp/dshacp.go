@@ -214,6 +214,9 @@ func (h *Harness) Spawn(ctx context.Context, task string, mc config.ModelConfig)
 	// The worker's LLM traffic goes through a local translating proxy
 	// (see proxy.go: sglang's null-bearing tool_calls deltas).
 	proxy, err := startLLMProxy(mc.Endpoint)
+	if err == nil {
+		proxy.temperature = mc.Temperature
+	}
 	if err != nil {
 		return "", fmt.Errorf("spawning dsh worker: %w", err)
 	}

@@ -2,6 +2,8 @@ package dshacp
 
 import (
 	"bufio"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -86,5 +88,57 @@ func TestProxyPassesNonStreamThrough(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != 418 {
 		t.Errorf("status = %d", resp.StatusCode)
+	}
+}
+
+// A configured temperature is forced onto chat-completions bodies (dsh
+// sends none, so the server's model default — 1.0 for GLM — would win);
+// other paths and the client's other fields pass through untouched.
+func TestProxyForcesTemperature(t *testing.T) {
+	var gotBody, gotPath string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody, gotPath = string(b), r.URL.Path
+		if int64(len(b)) != r.ContentLength {
+			t.Errorf("content-length %d, body %d", r.ContentLength, len(b))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer upstream.Close()
+
+	p, err := startLLMProxy(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	temp := 0.2
+	p.temperature = &temp
+
+	resp, err := http.Post(p.URL()+"/chat/completions", "application/json",
+		strings.NewReader(`{"model":"glm-5.3-flash","temperature":1.0,"messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	var body map[string]any
+	if err := json.Unmarshal([]byte(gotBody), &body); err != nil {
+		t.Fatalf("upstream body not JSON: %q", gotBody)
+	}
+	if body["temperature"] != 0.2 || body["model"] != "glm-5.3-flash" || body["messages"] == nil {
+		t.Errorf("upstream body = %s", gotBody)
+	}
+
+	resp, err = http.Post(p.URL()+"/models", "application/json", strings.NewReader(`{"x":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if gotPath != "/models" || gotBody != `{"x":1}` {
+		t.Errorf("non-chat request rewritten: %s %s", gotPath, gotBody)
+	}
+
+	if got := string(setTemperature([]byte(`not json`), 0.2)); got != "not json" {
+		t.Errorf("non-JSON body changed: %q", got)
 	}
 }

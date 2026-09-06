@@ -27,6 +27,9 @@ endpoint = "http://your-inference-host:8000/v1"
 model = "qwen3.8-27b"
 harness = "dsh"
 # api_key = "local"           # sent to the endpoint; "local" when omitted
+# temperature = 0.2           # forced onto every request; unset leaves the
+#                             # server's model default (GLM's is 1.0, which
+#                             # leaks CJK tokens into code — docs/NOTES.md)
 # max_tokens = 49152          # per-request output cap (shared with the
 #                             # model's reasoning); default 49152
 # tools_mode = "native"       # tool transport: native (default) · code

@@ -28,6 +28,13 @@ type Stream struct {
 	writeMu  sync.Mutex
 	done     chan struct{}
 	stopping atomic.Bool
+	// interrupting is set between an interrupt control_request and the
+	// result that closes the turn it cancelled; that result is tagged
+	// Interrupted rather than surfacing as an error. A new prompt or a
+	// scheduled turn starting clears it (an interrupt sent while idle
+	// cancels nothing).
+	interrupting atomic.Bool
+	interruptSeq atomic.Int64
 }
 
 // StartStream spawns the persistent supervisor. The stream ends (Events
@@ -97,6 +104,17 @@ func (d *Driver) StartStream() (*Stream, error) {
 			if init, ok := ev.(InitEvent); ok && init.SessionID != "" {
 				d.SetSessionID(init.SessionID)
 			}
+			switch e := ev.(type) {
+			case ResultEvent:
+				if s.interrupting.Swap(false) && e.IsError {
+					e.Interrupted = true
+					ev = e
+				}
+			case CommandLifecycleEvent:
+				if e.State == "started" {
+					s.interrupting.Store(false)
+				}
+			}
 			events <- ev
 		}
 		scanErr := sc.Err()
@@ -152,16 +170,37 @@ func (s *Stream) Send(text string) error {
 	if !s.Alive() {
 		return fmt.Errorf("supervisor process is gone")
 	}
+	s.interrupting.Store(false)
 	if _, err := s.stdin.Write(append(b, '\n')); err != nil {
 		return fmt.Errorf("sending to supervisor: %w", err)
 	}
 	return nil
 }
 
-// Interrupt sends SIGINT. In stream mode this ends the whole process
-// — the caller respawns with --resume,
-// which is exactly the recovery path a crash takes.
+// Interrupt cancels the in-flight turn WITHOUT ending the process: it
+// writes the CLI's interrupt control_request over stdin (verified against
+// the real binary, docs/NOTES.md). The running tool call is rejected, the
+// turn closes with an error_during_execution result (tagged Interrupted
+// here), and the process — with its background shells, i.e. any running
+// delegate batch, and any /loop cron — stays alive for the next prompt.
+// If the write fails the process is already gone; SIGINT then makes sure
+// of it and the caller respawns with --resume as before.
 func (s *Stream) Interrupt() {
+	msg := map[string]any{
+		"type":       "control_request",
+		"request_id": fmt.Sprintf("interrupt-%d", s.interruptSeq.Add(1)),
+		"request":    map[string]string{"subtype": "interrupt"},
+	}
+	b, _ := json.Marshal(msg)
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if s.Alive() {
+		s.interrupting.Store(true)
+		if _, err := s.stdin.Write(append(b, '\n')); err == nil {
+			return
+		}
+		s.interrupting.Store(false)
+	}
 	s.stopping.Store(true)
 	if s.cmd.Process != nil {
 		_ = s.cmd.Process.Signal(syscall.SIGINT)

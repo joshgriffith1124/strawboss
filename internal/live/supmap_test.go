@@ -202,3 +202,21 @@ func TestMapSupEventSlashCommands(t *testing.T) {
 		t.Fatalf("no cron note in %#v", msgs)
 	}
 }
+
+// An interrupted turn's result reaches the UI as "interrupted", not as an
+// error; the control acknowledgement is a log line.
+func TestMapSupEventInterrupt(t *testing.T) {
+	msgs := mapSupEvent(supervisor.ResultEvent{Subtype: "error_during_execution", IsError: true, Interrupted: true}, 1, "m")
+	done, ok := msgs[len(msgs)-1].(ui.SupTurnDoneMsg)
+	if !ok || !done.Interrupted || done.Err != "" {
+		t.Fatalf("turn done = %#v", msgs)
+	}
+	msgs = mapSupEvent(supervisor.ControlResponseEvent{RequestID: "interrupt-1", Subtype: "success"}, 1, "m")
+	if lg, ok := msgs[0].(ui.RawLogMsg); !ok || lg.Line != "interrupt acknowledged" {
+		t.Fatalf("control response = %#v", msgs)
+	}
+	msgs = mapSupEvent(supervisor.ControlResponseEvent{Subtype: "error", Error: "no turn"}, 1, "m")
+	if lg, ok := msgs[0].(ui.RawLogMsg); !ok || lg.Line != "interrupt error: no turn" {
+		t.Fatalf("control error = %#v", msgs)
+	}
+}

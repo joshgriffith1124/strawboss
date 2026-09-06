@@ -168,9 +168,13 @@ func parseDelegate(cmd string) *ui.DelegateInfo {
 			d.Task = toks[i+1]
 		case strings.HasPrefix(toks[i], "--task="):
 			d.Task = strings.TrimPrefix(toks[i], "--task=")
+		case toks[i] == "--task-file" && i+1 < len(toks):
+			d.TaskFile = toks[i+1]
+		case strings.HasPrefix(toks[i], "--task-file="):
+			d.TaskFile = strings.TrimPrefix(toks[i], "--task-file=")
 		}
 	}
-	if d.Model == "" && d.Task == "" {
+	if d.Model == "" && d.Task == "" && d.TaskFile == "" {
 		return nil
 	}
 	return d

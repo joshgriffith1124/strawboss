@@ -59,6 +59,10 @@ type SupToolMsg struct {
 type DelegateInfo struct {
 	Model string
 	Task  string
+	// TaskFile is set when the supervisor used --task-file instead of an
+	// inline --task: the prompt lives on disk, so this is what the chat
+	// can show for it.
+	TaskFile string
 }
 
 // SupToolResultMsg closes a tool call.

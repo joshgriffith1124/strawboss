@@ -1151,3 +1151,24 @@ func TestSlashCommandsCompleteAndPassThrough(t *testing.T) {
 		t.Fatalf("note = %+v", last)
 	}
 }
+
+// Tool results render on one line: a Read of an indented file (cat -n
+// numbers, YAML nesting) must not keep its whitespace runs, and a
+// --task-file delegation shows the file instead of an empty task.
+func TestToolResultSqueezesWhitespaceAndTaskFile(t *testing.T) {
+	m := demoState(t)
+	m = apply(t, m,
+		SupToolMsg{ToolID: "t9", Name: "Bash", Command: `strawboss delegate --model glm-dsh --task-file /tmp/task.md`,
+			Delegate: &DelegateInfo{Model: "glm-dsh", TaskFile: "/tmp/task.md"}},
+		SupToolResultMsg{ToolID: "t9", Content: "   306\t          - btnWorkByHome:\n   307\t              Control: ModernButton\n"})
+	out, in := m.chat[len(m.chat)-2], m.chat[len(m.chat)-1]
+	if out.text != "Bash glm-dsh · task file /tmp/task.md" {
+		t.Errorf("tool-out = %q", out.text)
+	}
+	if in.text != "306 - btnWorkByHome: 307 Control: ModernButton" {
+		t.Errorf("tool-in = %q", in.text)
+	}
+	if strings.Contains(m.viewChatColumn(100, 30), "  - btnWorkByHome") {
+		t.Error("whitespace run survived into the view")
+	}
+}

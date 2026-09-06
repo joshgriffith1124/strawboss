@@ -398,16 +398,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.flushStreaming()
 		text := msg.Command
 		if msg.Delegate != nil {
-			text = msg.Delegate.Model + " " + fmt.Sprintf("%q", truncPlain(msg.Delegate.Task, 220))
+			switch {
+			case msg.Delegate.Task != "":
+				text = msg.Delegate.Model + " " + fmt.Sprintf("%q", truncPlain(msg.Delegate.Task, 220))
+			case msg.Delegate.TaskFile != "":
+				text = msg.Delegate.Model + " · task file " + truncPlain(msg.Delegate.TaskFile, 220)
+			default:
+				text = msg.Delegate.Model
+			}
 		}
 		m.chat = append(m.chat, chatItem{kind: "tool-out", when: time.Now(), toolID: msg.ToolID,
 			text: msg.Name + " " + text})
 		m.log("sup", "→ "+msg.Name+" "+truncPlain(msg.Command, 120))
 		return m, Listen(m.feed)
 	case SupToolResultMsg:
-		// Store generously; the renderer wraps and caps for display.
+		// Store generously; the renderer wraps and caps for display. The
+		// result is shown on one line, so whitespace runs (cat -n line
+		// numbers, YAML indentation, newlines) squeeze to single spaces —
+		// otherwise a Read of an indented file renders as a few tokens
+		// adrift in a sea of blanks.
 		m.chat = append(m.chat, chatItem{kind: "tool-in", when: time.Now(), toolID: msg.ToolID,
-			text: truncPlain(msg.Content, 600), isError: msg.IsError})
+			text: truncPlain(squeezeSpace(msg.Content, 4000), 600), isError: msg.IsError})
 		m.delegationResultTokens = append(m.delegationResultTokens, len(msg.Content)/4)
 		// Delegation results (terse "wN status …" lines and budget
 		// refusals) also feed the supervisor pane's recent list.
@@ -975,6 +986,15 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 	}
 	return m, nil
+}
+
+// squeezeSpace collapses every run of whitespace (including newlines and
+// tabs) in the first cap bytes of s to a single space.
+func squeezeSpace(s string, cap int) string {
+	if len(s) > cap {
+		s = s[:cap]
+	}
+	return strings.Join(strings.Fields(s), " ")
 }
 
 func firstLine(s string) string {

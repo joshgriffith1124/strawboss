@@ -39,6 +39,11 @@ func TestParseDelegate(t *testing.T) {
 			want: nil,
 		},
 		{
+			name: "task file",
+			cmd:  `strawboss delegate --model glm-dsh --task-file /tmp/pct-task-l.md`,
+			want: &ui.DelegateInfo{Model: "glm-dsh", TaskFile: "/tmp/pct-task-l.md"},
+		},
+		{
 			name: "strawboss but different subcommand",
 			cmd:  `strawboss version`,
 			want: nil,

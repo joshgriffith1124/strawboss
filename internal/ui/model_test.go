@@ -163,14 +163,28 @@ func TestPromptHandlerWins(t *testing.T) {
 
 func TestSortedWorkers(t *testing.T) {
 	m := New(make(chan tea.Msg))
+	base := time.Date(2026, 9, 6, 14, 0, 0, 0, time.UTC)
 	m = apply(t, m,
-		WorkerUpsertMsg{ID: "w1", Status: "done"},
-		WorkerUpsertMsg{ID: "w2", Status: "running"},
+		// Registry replay arrives oldest first; the table must not show it
+		// that way — finished rows go newest first.
+		WorkerUpsertMsg{ID: "w1", Status: "done", Started: base, Ended: base.Add(time.Minute)},
+		WorkerUpsertMsg{ID: "w4", Status: "failed", Started: base.Add(2 * time.Minute), Ended: base.Add(20 * time.Minute)},
+		WorkerUpsertMsg{ID: "w5", Status: "done", Started: base.Add(3 * time.Minute), Ended: base.Add(5 * time.Minute)},
+		WorkerUpsertMsg{ID: "w2", Status: "running", Started: base.Add(30 * time.Minute)},
+		WorkerUpsertMsg{ID: "w6", Status: "running", Started: base.Add(31 * time.Minute)},
 		WorkerUpsertMsg{ID: "w3", Status: "queued"},
 	)
-	rows := m.sortedWorkers()
-	if rows[0].ID != "w3" || rows[1].ID != "w2" || rows[2].ID != "w1" {
-		t.Errorf("order = %s %s %s", rows[0].ID, rows[1].ID, rows[2].ID)
+	var got []string
+	for _, r := range m.sortedWorkers() {
+		got = append(got, r.ID)
+	}
+	want := "w3 w2 w6 w4 w5 w1"
+	if strings.Join(got, " ") != want {
+		t.Errorf("order = %v, want %s", got, want)
+	}
+	// Same end instant: higher id is newer.
+	if workerNum("w316") <= workerNum("w237") || workerNum("x") != 0 {
+		t.Error("workerNum")
 	}
 }
 

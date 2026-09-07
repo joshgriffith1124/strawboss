@@ -5,6 +5,7 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1070,7 +1071,9 @@ func isDelegationResult(line string) bool {
 }
 
 // sortedWorkers returns the display order: queued+running first (newest
-// spawn last, like the mock's live rows), then finished by end time desc.
+// spawn last, like the mock's live rows), then finished newest first —
+// the row that just ended sits right under the live ones, and the
+// history a session has replayed from the registry trails off below.
 func (m Model) sortedWorkers() []workerRow {
 	out := make([]workerRow, len(m.workers))
 	copy(out, m.workers)
@@ -1084,6 +1087,32 @@ func (m Model) sortedWorkers() []workerRow {
 			return 2
 		}
 	}
-	sort.SliceStable(out, func(i, j int) bool { return rank(out[i]) < rank(out[j]) })
+	finishedAt := func(w workerRow) time.Time {
+		if !w.Ended.IsZero() {
+			return w.Ended
+		}
+		return w.Started
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		ri, rj := rank(out[i]), rank(out[j])
+		if ri != rj {
+			return ri < rj
+		}
+		if ri < 2 {
+			return false // live rows keep arrival order
+		}
+		ti, tj := finishedAt(out[i]), finishedAt(out[j])
+		if !ti.Equal(tj) {
+			return ti.After(tj)
+		}
+		return workerNum(out[i].ID) > workerNum(out[j].ID)
+	})
 	return out
+}
+
+// workerNum is the numeric part of a "wN" id (0 when it has none), so
+// same-instant rows still order newest first.
+func workerNum(id string) int {
+	n, _ := strconv.Atoi(strings.TrimPrefix(id, "w"))
+	return n
 }

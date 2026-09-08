@@ -287,8 +287,15 @@ WSL forwarder and the AT&T gateway directly:
 
 | query | answer |
 |---|---|
-| A, with an EDNS OPT record | rcode 0, 1 answer, **no A record in it** |
+| A, with an EDNS OPT record | rcode 0, answer count 1 — and that one record is the **OPT pseudo-record itself (type 41), placed in the ANSWER section**; the A record is gone |
 | A, plain (no EDNS) | rcode 0, 1 answer, the correct A |
+| AAAA, with EDNS | OPT in the answer section followed by the real AAAA records |
+
+So the gateway echoes the client's OPT into the answer section instead of
+the additional section, and for A queries it drops the real answer while
+doing so. (Disabling IPv6 on the LAN did not change any of this on the
+same day: the eight stale AAAA records carry a two-day TTL and were still
+served, and the Windows host still held its global v6 addresses.)
 
 Go's pure resolver always adds EDNS, so it sees the name as having only
 AAAA records (eight stale ones) and dials dead IPv6; glibc and Node retry

@@ -280,6 +280,25 @@ file on disk → terse result, 5s). Three obstacles, all handled:
    box's mDNS .local name also died with an IP change — the router's
    DNS name is the stable one.)
 
+## LAN hostname vs Go's resolver: the EDNS answer is bogus (proven 2026-09-08)
+
+Raw UDP DNS queries for the GX10's router-assigned name, sent to both the
+WSL forwarder and the AT&T gateway directly:
+
+| query | answer |
+|---|---|
+| A, with an EDNS OPT record | rcode 0, 1 answer, **no A record in it** |
+| A, plain (no EDNS) | rcode 0, 1 answer, the correct A |
+
+Go's pure resolver always adds EDNS, so it sees the name as having only
+AAAA records (eight stale ones) and dials dead IPv6; glibc and Node retry
+without EDNS and get the address, which is why opencode and OpenClaw work
+with the hostname while Go code does not. Pinning the IP in the router's
+DHCP reservations (done) makes the IP in `models.toml` permanent; the
+"revert to hostname" note is withdrawn. If hostnames are ever wanted in Go
+code, ROADMAP item 13 — retry `LookupIPAddr` with a plain query when the
+EDNS one yields no A — is the fix, and the table above is its test case.
+
 ## Slash commands over stream-json stdin (verified 2026-09-06, Claude Code 2.1.263)
 
 Question: can the TUI hand `/loop …`, `/compact`, a custom `.claude/commands`

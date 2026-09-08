@@ -27,7 +27,9 @@ tested at the end (same rule as milestones). Struck items are done.
     failure. Escalate to the next config that *probes healthy* instead.
 13. **EDNS-proof name resolution** — retry `LookupIPAddr` with a plain
     (no-EDNS) query when it fails, so LAN hostnames survive routers that
-    misorder EDNS answers (see the WSL2/router note in NOTES.md); then
+    answer EDNS A queries with a bogus record (proven with raw queries,
+    NOTES.md "EDNS"; low priority now that the inference host's IP is a
+    DHCP reservation); then
     revert models.toml endpoints from IPs back to hostnames.
 
 Explicitly not planned: a local-TUI/remote-execution split (`--remote

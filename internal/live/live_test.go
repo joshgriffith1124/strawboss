@@ -731,6 +731,49 @@ func TestDshModelProbeNotesNotLoaded(t *testing.T) {
 	}
 }
 
+// TestPollWorkersSurvivesUnknownModel: models.toml can gain an entry while
+// the TUI runs (delegate re-reads it per call, the TUI does not), so a
+// worker may name a model this session never loaded. With a reachable
+// opencode endpoint in the config that used to dereference a nil client and
+// kill the TUI (crash log, 2026-09-21). It must poll on and say so once.
+func TestPollWorkersSurvivesUnknownModel(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{}`)) // GET /session/status: reachable, nothing busy
+	}))
+	defer srv.Close()
+
+	models := []config.ModelConfig{{Name: "m1", Endpoint: srv.URL, Model: "p/x", Harness: "opencode"}}
+	o := New(&supervisor.Driver{}, models, t.TempDir())
+	o.workerSession["w1"] = "ses_stranger"
+	o.workerModel["w1"] = "added-later"
+	o.workerDir["w1"] = t.TempDir()
+	o.unfinished["w1"] = true
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go o.pollWorkers(ctx)
+
+	// Two full passes: the stats for m1 only emit after the loop that used
+	// to crash, and the second pass proves the note is not repeated.
+	notes, passes := 0, 0
+	drainUntil(t, o.Feed(), 15*time.Second, func(m tea.Msg) bool {
+		switch msg := m.(type) {
+		case ui.RawLogMsg:
+			if strings.Contains(msg.Line, "added-later") {
+				notes++
+			}
+		case ui.ModelStatMsg:
+			if msg.Name == "m1" {
+				passes++
+			}
+		}
+		return passes == 2
+	})
+	if notes != 1 {
+		t.Errorf("unknown-model notes = %d, want exactly 1", notes)
+	}
+}
+
 // TestBudgetGuard: warn at 80%, stop at the ceiling (marker written for
 // delegate to refuse on), and a window-based stop lifts when the window
 // recovers.

@@ -237,6 +237,8 @@ func (o *Orchestrator) pollWorkers(ctx context.Context) {
 		at        time.Time
 	}
 	llmProbes := map[string]*llmProbe{}
+	// Models named by workers but absent from o.Models, each logged once.
+	unknownModels := map[string]bool{}
 	for {
 		select {
 		case <-ctx.Done():
@@ -250,19 +252,37 @@ func (o *Orchestrator) pollWorkers(ctx context.Context) {
 		type snapshot struct{ worker, session, model, dir string }
 		o.mu.Lock()
 		var open, openDsh []snapshot
+		var strangers []string
 		for wid := range o.unfinished {
 			s := snapshot{wid, o.workerSession[wid], o.workerModel[wid], o.workerDir[wid]}
-			if mc, ok := o.modelConfig(s.model); ok && mc.Harness == "dsh" {
+			mc, known := o.modelConfig(s.model)
+			switch {
+			case !known:
+				// models.toml gained this entry after the TUI loaded it (the
+				// delegate command re-reads the file per call; the TUI does
+				// not). There is no endpoint to poll: the row still opens and
+				// closes from the registry, just without live usage. Treating
+				// it as an opencode worker dereferenced a nil client and took
+				// the whole TUI down (docs/NOTES.md).
+				if !unknownModels[s.model] {
+					unknownModels[s.model] = true
+					strangers = append(strangers, s.model)
+				}
+			case mc.Harness == "dsh":
 				openDsh = append(openDsh, s)
-				continue
+			default:
+				open = append(open, s)
 			}
-			open = append(open, s)
 		}
 		dshOut := make(map[string]int, len(o.dshOut))
 		for k, v := range o.dshOut {
 			dshOut[k] = v
 		}
 		o.mu.Unlock()
+		for _, name := range strangers {
+			o.emit(ctx, ui.RawLogMsg{Source: "app", Line: "worker model " + name +
+				" is not in the models.toml this session loaded — restart strawboss to see its live stats"})
+		}
 
 		// The status endpoint is project-scoped: query each endpoint once
 		// per distinct worker directory (plus bare, for reachability).
@@ -277,7 +297,7 @@ func (o *Orchestrator) pollWorkers(ctx context.Context) {
 			merged := map[string]opencode.SessionStatus{}
 			dirs := map[string]bool{}
 			for _, s := range open {
-				if o.clientFor(s.model).Base != base || dirs[s.dir] {
+				if wc := o.clientFor(s.model); wc == nil || wc.Base != base || dirs[s.dir] {
 					continue
 				}
 				dirs[s.dir] = true

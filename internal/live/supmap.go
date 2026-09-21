@@ -166,12 +166,25 @@ func parseDelegate(cmd string) *ui.DelegateInfo {
 		return nil
 	}
 	d := &ui.DelegateInfo{}
+	// --model repeats (it is sticky per task group): show each distinct
+	// name once, in order — "fast-local+qwen-dsh".
+	addModel := func(name string) {
+		for _, have := range strings.Split(d.Model, "+") {
+			if have == name {
+				return
+			}
+		}
+		if d.Model != "" {
+			d.Model += "+"
+		}
+		d.Model += name
+	}
 	for i := 0; i < len(toks); i++ {
 		switch {
 		case toks[i] == "--model" && i+1 < len(toks):
-			d.Model = toks[i+1]
+			addModel(toks[i+1])
 		case strings.HasPrefix(toks[i], "--model="):
-			d.Model = strings.TrimPrefix(toks[i], "--model=")
+			addModel(strings.TrimPrefix(toks[i], "--model="))
 		case toks[i] == "--task" && i+1 < len(toks):
 			d.Task = toks[i+1]
 		case strings.HasPrefix(toks[i], "--task="):
@@ -184,6 +197,9 @@ func parseDelegate(cmd string) *ui.DelegateInfo {
 	}
 	if d.Model == "" && d.Task == "" && d.TaskFile == "" {
 		return nil
+	}
+	if d.Model == "" {
+		d.Model = "auto" // no --model: delegate routes each task itself
 	}
 	return d
 }

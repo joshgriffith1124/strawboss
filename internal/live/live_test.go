@@ -212,6 +212,50 @@ func TestBuildSystemPrompt(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPromptTiered(t *testing.T) {
+	t.Run("tiered", func(t *testing.T) {
+		p := BuildSystemPrompt("/usr/local/bin/strawboss", []config.ModelConfig{
+			{Name: "qwen-dsh", Model: "qwen3.8-27b", Tier: 2, Description: "multi-file changes"},
+			{Name: "fast-local", Model: "small-model", Tier: 1, Description: "renames, test stubs"},
+		})
+		for _, want := range []string{
+			"TIERED", "LOWEST tier", "the next tier up", "retries the task ONCE",
+			"fast-local (small-model) · tier 1 — renames, test stubs",
+			"qwen-dsh (qwen3.8-27b) · tier 2 — multi-file changes",
+			// Routing and availability are delegate's job; the prompt must
+			// say so or the supervisor reroutes by hand.
+			"--model auto", "sticky", "nearest available model",
+		} {
+			if !strings.Contains(p, want) {
+				t.Errorf("prompt missing %q", want)
+			}
+		}
+		if strings.Contains(p, "in preference order") {
+			t.Errorf("tiered prompt must not say %q", "in preference order")
+		}
+		if strings.Index(p, "fast-local (") >= strings.Index(p, "qwen-dsh (") {
+			t.Errorf("lower tier must be listed first regardless of slice order")
+		}
+	})
+	t.Run("untiered with description", func(t *testing.T) {
+		p := BuildSystemPrompt("/usr/local/bin/strawboss", []config.ModelConfig{
+			{Name: "a", Model: "m1", Description: "general"},
+			{Name: "b", Model: "m2"},
+		})
+		for _, want := range []string{
+			"in preference order", "the next model config",
+			"a (m1) — general", "b (m2)",
+		} {
+			if !strings.Contains(p, want) {
+				t.Errorf("prompt missing %q", want)
+			}
+		}
+		if strings.Contains(p, "TIERED") {
+			t.Errorf("untiered prompt must not contain %q", "TIERED")
+		}
+	})
+}
+
 // TestShutdownKillsEverything: exiting must abort unfinished workers and
 // terminate the in-flight supervisor turn.
 func TestShutdownKillsEverything(t *testing.T) {

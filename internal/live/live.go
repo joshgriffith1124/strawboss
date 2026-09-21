@@ -444,16 +444,13 @@ func (o *Orchestrator) Shutdown() {
 // BuildSystemPrompt tells the supervisor how to delegate: the whole reason
 // the topology works. exe is the strawboss binary path.
 func BuildSystemPrompt(exe string, models []config.ModelConfig) string {
-	var names []string
-	for _, mc := range models {
-		names = append(names, fmt.Sprintf("%s (%s)", mc.Name, mc.Model))
-	}
+	roster, retry := modelRoster(models)
 	return fmt.Sprintf(`You are a supervisor ("strawboss") that delegates self-contained coding tasks to free local AI workers instead of doing them yourself.
 
 Delegate with the Bash tool:
   %s delegate --model <name> --task "<complete, self-contained instructions>"
 
-Available worker models, in preference order — use the first unless a task clearly needs another: %s. Workers run in your working directory and cannot see this conversation — every task description must stand alone. The command blocks until every worker finishes and prints one terse result per worker (worker id, status, summary, full-log path). The log path is for the human — the TUI renders it. Never read it yourself: those files are worker transcripts and reading one costs more context than dozens of delegations, so reads under the strawboss state directory are denied. If a result is too thin to act on, delegate a follow-up task that reports what you need.
+%sWorkers run in your working directory and cannot see this conversation — every task description must stand alone. The command blocks until every worker finishes and prints one terse result per worker (worker id, status, summary, full-log path). The log path is for the human — the TUI renders it. Never read it yourself: those files are worker transcripts and reading one costs more context than dozens of delegations, so reads under the strawboss state directory are denied. If a result is too thin to act on, delegate a follow-up task that reports what you need.
 
 If a task's text contains $( ), backticks, or < >, do NOT put it in --task: those read as shell syntax and the whole delegate call is denied. Write the task to a file and pass the path instead — a path has no shell metacharacters, and this also suits long tasks:
   %s delegate --model <name> --task-file /tmp/task1.md
@@ -469,6 +466,43 @@ When parallel tasks might edit the SAME files, add --worktree: each worker then 
 
 Workers are SMALL local models with a limited output budget (roughly 16k tokens, shared with their internal reasoning). Scope every task so the deliverable is modest — aim for one file of at most ~200 lines per task, never a whole app in one file. If a worker fails with "only internal reasoning" or an empty reply, the task was too big: split it into smaller pieces instead of retrying the same task.
 
-Every worker automatically receives a compact repository map (file paths with top-level symbols), so don't spend task tokens describing the file layout — just name the files to touch. When a worker fails, delegate automatically retries the task ONCE on the next model config (the result says so) — never hand-retry a failed task on a different model yourself.`,
-		exe, strings.Join(names, ", "), exe, exe)
+Every worker automatically receives a compact repository map (file paths with top-level symbols), so don't spend task tokens describing the file layout — just name the files to touch. When a worker fails, delegate automatically retries the task ONCE on %s (the result says so) — never hand-retry a failed task on a different model yourself. Delegate also checks that a model is up before using it: a task aimed at one that is unreachable or not loaded runs on the nearest available model instead (the result says so), so never probe endpoints or reroute by hand.`,
+		exe, roster, exe, exe, retry)
+}
+
+// modelRoster renders the model paragraph of the supervisor prompt and the
+// phrase naming where a failed task is retried. Untiered configs read as a
+// flat preference list; tiered ones as a ladder, lowest tier first, each
+// entry carrying the description the supervisor routes by.
+func modelRoster(models []config.ModelConfig) (roster, retry string) {
+	if !config.Tiered(models) {
+		var names []string
+		sep := ", "
+		for _, mc := range models {
+			name := fmt.Sprintf("%s (%s)", mc.Name, mc.Model)
+			if mc.Description != "" {
+				// Descriptions carry their own commas.
+				name += " — " + mc.Description
+				sep = "; "
+			}
+			names = append(names, name)
+		}
+		return "Available worker models, in preference order — use the first unless a task clearly needs another: " +
+			strings.Join(names, sep) + ". ", "the next model config"
+	}
+
+	ladder := append([]config.ModelConfig(nil), models...)
+	sort.SliceStable(ladder, func(i, j int) bool { return ladder[i].Tier < ladder[j].Tier })
+	var b strings.Builder
+	b.WriteString("Worker models are TIERED — tier 1 is the fastest and cheapest, higher tiers are stronger but slower:\n")
+	for _, mc := range ladder {
+		fmt.Fprintf(&b, "  - %s (%s) · tier %d", mc.Name, mc.Model, mc.Tier)
+		if mc.Description != "" {
+			b.WriteString(" — " + mc.Description)
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("Pick the LOWEST tier whose description fits the task, and size the task to that tier; when unsure pass --model auto (or omit --model) and strawboss routes each task by its weight — a failure climbs a tier on its own either way. --model is sticky: it applies to the --task flags after it, so ONE call can mix tiers:\n")
+	b.WriteString("  delegate --model " + ladder[0].Name + " --task \"small task\" --model " + ladder[len(ladder)-1].Name + " --task \"big task\"\n")
+	return b.String(), "the next tier up"
 }

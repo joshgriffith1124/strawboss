@@ -44,6 +44,16 @@ func TestParseDelegate(t *testing.T) {
 			want: &ui.DelegateInfo{Model: "glm-dsh", TaskFile: "/tmp/pct-task-l.md"},
 		},
 		{
+			name: "no model means auto routing",
+			cmd:  `strawboss delegate --task "fix the tests"`,
+			want: &ui.DelegateInfo{Model: "auto", Task: "fix the tests"},
+		},
+		{
+			name: "sticky models across task groups",
+			cmd:  `strawboss delegate --model fast --task a --task b --model big --task c --model fast --task d`,
+			want: &ui.DelegateInfo{Model: "fast+big", Task: "d"},
+		},
+		{
 			name: "strawboss but different subcommand",
 			cmd:  `strawboss version`,
 			want: nil,

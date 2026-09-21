@@ -5,10 +5,13 @@ How the supervisor spawns workers, and what flows back into its context.
 ## The command
 
 ```
-strawboss delegate --model <name> --task "<prompt>" [--task "<prompt>"…] [--dir <path>] [--timeout 20m]
+strawboss delegate [--model <name>|auto] --task "<prompt>" [--task "<prompt>"…] [--dir <path>] [--timeout 20m]
 ```
 
-- `--model` — a named entry in `~/.strawboss/models.toml` (never a hostname).
+- `--model` — a named entry in `~/.strawboss/models.toml` (never a hostname),
+  or `auto` (the default when omitted). It is **sticky**: it binds the `--task`
+  flags that follow it, so one call can mix tiers
+  (`--model fast --task a --model big --task b`). See "Routing" below.
 - `--task` — a worker's prompt. **Repeat it to run tasks in parallel**: each task
   becomes its own concurrent worker inside this one invocation. (This is the
   parallelism mechanism on purpose — a compound shell command like
@@ -22,6 +25,34 @@ strawboss delegate --model <name> --task "<prompt>" [--task "<prompt>"…] [--di
 Blocks until every worker finishes and prints one terse result per worker. Exit 0
 iff all ended `done` — otherwise exit 1, so the supervisor's tool result is
 flagged as an error.
+
+## Routing: which model a task runs on
+
+Three decisions, all made inside the delegate call so none of them costs a
+supervisor round trip:
+
+1. **Want.** A pinned task wants the model it names. An `auto` task is scored
+   from its text (`internal/router`: word count, distinct files named, heavy
+   keywords like *refactor*/*debug*, light ones like *rename*/*report*) and the
+   score maps onto the tiers in `models.toml` — two points per tier. Untiered
+   files have nothing to map onto: auto is the first entry.
+2. **Availability.** The want is probed before dispatch (dsh: the endpoint
+   answers `/models` and lists the model; opencode: the server answers). A
+   model that is down or not loaded is routed around: same-tier sibling first,
+   then the nearest tier up, then down as a last resort. Each model is probed
+   once per call; if nothing is available the task runs on its want and
+   surfaces the real error.
+3. **Escalation.** A failed task retries once on the next tier up (next file
+   entry when untiered), skipping models that probe unavailable at that moment.
+
+The supervisor is told about a decision only when it could not have known it —
+one bracketed line ahead of the summary:
+
+```
+[auto → fast-local: score 0 → tier 1]
+[fast-local unavailable (endpoint unreachable); ran on qwen-dsh]
+[escalated from fast-local, which failed: …]
+```
 
 ## What the supervisor sees (the terse-result contract)
 

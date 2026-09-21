@@ -108,6 +108,17 @@ Type what you want built. The supervisor delegates; the dashboard (tab 2)
 shows workers live. `models.toml` order is preference order — the
 supervisor favors the first entry.
 
+**Tiered models.** With more than one model — say a small fast one next to
+a big slow one — give each entry a `tier` (1 = cheapest/fastest, higher =
+stronger) and a one-line `description` of what it is good for. The
+supervisor then routes each task to the lowest tier whose description
+fits — or passes `--model auto` and strawboss scores the task onto a tier
+itself — and a failed task escalates once to the next tier up. A model
+that is unreachable or not loaded is routed around automatically, so a
+fast model on a workstation that comes and goes is safe to list.
+`examples/models.toml` has a worked pair; `docs/DELEGATION.md` has the
+routing rules.
+
 ### Working on a remote machine
 
 Run strawboss *on* the box that holds the code — not locally against it.

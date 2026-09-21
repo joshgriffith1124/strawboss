@@ -17,14 +17,16 @@ tested at the end (same rule as milestones). Struck items are done.
 10. **Per-task auto model routing** — strawboss picks the worker model by
     task shape instead of the supervisor hand-picking (needs ≥2 models
     actually loaded on the GX10 to matter — it serves one at a time;
-    glm-5.3-flash since 2026-09-06).
+    glm-5.3-flash since 2026-09-06). Landed 2026-09-21 as tiered models:
+    `tier` + `description` in models.toml, `--model auto` scoring each
+    task onto a tier, sticky per-task `--model` (NOTES.md "Tiered
+    models"). Open: tune the score weights against real failure data.
 11. ~~Permission prompts (lite)~~ — denials are loud (chat note with a
     paste-ready allowed_tools fix, toast, remote push). Full interactive
     prompts deferred until the denial log shows they'd pay.
-12. **Escalation skips dead models** — the cheap-first ladder walks
-    models.toml file order blindly, so a failure on entry 1 escalates
-    into an unloaded/unreachable entry 2 and burns a guaranteed second
-    failure. Escalate to the next config that *probes healthy* instead.
+12. ~~Escalation skips dead models~~ — delegate probes availability
+    before dispatch and before escalating, and routes around a model
+    that is unreachable or not loaded (NOTES.md "Tiered models").
 13. **EDNS-proof name resolution** — retry `LookupIPAddr` with a plain
     (no-EDNS) query when it fails, so LAN hostnames survive routers that
     answer EDNS A queries with a bogus record (proven with raw queries,

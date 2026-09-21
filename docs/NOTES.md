@@ -629,6 +629,7 @@ invariants, plus a UX fix:
   attempts appear in the registry/TUI). Skipped with --worktree (the
   second attempt would share the first's partial state); --escalate=false
   opts out. The system prompt tells the supervisor not to hand-retry.
+  With tiers set (below) the ladder is the tier order instead.
 - **Repo map for workers** (Aider): `git ls-files` + regex-extracted
   top-level symbols (Go/Python/JS/TS/Rust/Ruby), capped at ~6KB,
   prepended to every worker prompt (map first, task last). Regex over
@@ -1085,3 +1086,83 @@ When a result lists windows but not the session model, the logs tab now
 says so (`context window unknown: result reports [...], session model is
 "..."`) instead of silently guessing — the next report of this should be
 diagnosable from the logs tab alone.
+
+## Tiered models (2026-09-21)
+
+A second, fast model on the WSL box next to the 27B on the Sparks made
+"file order is preference order" too blunt: the supervisor saw only
+`name (model)` per entry, so it had no basis for sending a rename to the
+small model and a multi-file change to the big one. Two optional
+`models.toml` keys fix that:
+
+- **`tier`** — 1 is cheapest/fastest, higher is stronger. Once any entry
+  sets one the file is *tiered* and unset entries become tier 1; a file
+  with no tiers behaves exactly as before.
+- **`description`** — a single-line routing hint rendered next to the
+  model in the supervisor prompt. It is the supervisor's only basis for
+  choosing, so it should name task shapes and sizes, not hardware.
+
+Tiered files change two behaviors. The prompt lists the ladder lowest
+tier first and says to pick the LOWEST tier whose description fits
+(`modelRoster`, internal/live). Escalation climbs to the nearest tier
+above the failed model's, first in file order within it, and never to a
+same-tier sibling — two entries serving the same model hit the same
+capability wall — so the top tier has no fallback (`router.Next`).
+Still one hop per task: a tier-1 failure that also fails
+on tier 2 goes back to the supervisor, not on to tier 3.
+
+Routing is a delegate-side decision in three steps (DELEGATION.md
+"Routing"; `internal/router` is pure logic, availability is injected):
+
+- **`--model auto`** (also the default when `--model` is omitted) scores
+  the task text — word count, distinct file paths, heavy keywords
+  (refactor, debug, implement…) up, light ones (rename, report, stub…)
+  down — and maps the score onto the tiers, two points per tier. A
+  heuristic on purpose: deterministic, table-tested, zero latency, and a
+  wrong guess low is cheap because the fast tier fails fast and
+  escalates. Asking the fast model to classify was the alternative; it
+  buys nondeterminism and a dependency on the one model most likely to
+  be off. The supervisor can always pin instead — it has the
+  descriptions and the better judgment.
+- **`--model` is sticky**: it binds the tasks after it, so one call fans
+  out across tiers. Tasks written before the first `--model` bind to it
+  (the supervisor sometimes writes `--task` first).
+- **Availability** (`live.Available`, the dashboard's own two conditions:
+  endpoint unreachable / model not loaded). Probed once per model before
+  dispatch and fresh before escalation. A dead want is routed around —
+  same-tier sibling, then up, then down — which closes ROADMAP 12:
+  escalation no longer walks into an unloaded entry. The fast model
+  lives on a workstation and comes and goes; this is what makes listing
+  it safe. The probe errs toward available (unparseable model list, any
+  HTTP answer from opencode) so it can never be why a working model
+  goes unused.
+
+The supervisor learns of a routing decision only when it could not have
+known it: one bracketed line (`[auto → …]`, `[… unavailable (…); ran on
+…]`) ahead of the summary, ~12 tokens, supervisor-facing only — the
+registry and TUI already show which model each worker ran on.
+
+Cost against invariant 2: the roster is a few dozen prompt tokens paid
+once per session; probes are local HTTP from the delegate process.
+
+### The crash it caused: a worker on a model the TUI never loaded (2026-09-21)
+
+Adding `fast-local` to models.toml under a running TUI killed it a minute
+later: `crash-<pid>.log`, nil pointer dereference, `internal/live/
+workers.go` in `pollWorkers`. The delegate command re-reads models.toml
+on every call; the TUI reads it once at startup. The first worker routed
+to the new entry reached the poller with a model name absent from
+`o.Models`: `modelConfig` missed, so the worker was filed as opencode by
+default, and the per-endpoint status loop called `clientFor(model).Base`
+on the nil that an unknown name returns. Every other `clientFor` caller
+already checked for nil. It needs a reachable opencode endpoint in the
+config to reach that line, which is why tests never met it.
+
+Latent since the poller was written — any models.toml edit plus one
+delegation would do it — and exactly the failure CLAUDE.md rules out (a
+worker the TUI cannot place is a displayed state, never a crash). Now an
+unknown model is its own case: no endpoint to poll, the row still opens
+and closes from the registry, and the logs tab says once that a restart
+will pick the model up. Not fixed: the TUI still does not hot-reload
+models.toml (`o.Models` is read lock-free from several goroutines;
+making it mutable is its own change).

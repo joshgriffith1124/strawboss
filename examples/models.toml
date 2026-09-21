@@ -2,6 +2,33 @@
 # reference these by name only. File order is preference order: the
 # supervisor is told to favor the first entry.
 #
+# Tiers (optional). Give entries a `tier` to run a capability ladder instead
+# of a flat list: 1 = cheapest/fastest, higher = stronger and slower. The
+# supervisor is told to pick the LOWEST tier whose `description` fits the
+# task, and a failed task escalates once to the next tier up (never to a
+# same-tier sibling). `description` is the one-line routing hint the
+# supervisor chooses by — say what the model is good for and how big a
+# task it can carry. Once any entry sets a tier, entries without one are
+# tier 1.
+#
+# The supervisor may name a model per task, or pass `--model auto` (the
+# default) and let strawboss score each task onto a tier. Either way a
+# model that is unreachable or not loaded is routed around — same-tier
+# sibling first, then the next tier up — so listing a model that is only
+# sometimes running is safe. A small fast model in front of a big one:
+#
+#   [models.fast-local]
+#   endpoint = "http://127.0.0.1:8080/v1"
+#   model = "your-small-model"
+#   harness = "dsh"
+#   tier = 1
+#   description = "fast and small: single-function edits, renames, test stubs, shell chores"
+#
+#   [models.qwen-dsh]
+#   ...
+#   tier = 2
+#   description = "stronger, slower: multi-file changes, new packages, debugging"
+#
 # Two harness flavors, one entry each below. README "Worker harness
 # setup" walks the prerequisites; docs/NOTES.md has the deep findings.
 

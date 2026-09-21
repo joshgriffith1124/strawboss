@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -45,6 +46,28 @@ type ModelConfig struct {
 	// is 1.0, where it emits stray CJK tokens into code (docs/NOTES.md).
 	// Unset = leave the request alone. Ignored by the opencode harness.
 	Temperature *float64 `toml:"temperature"`
+	// Tier ranks capability: 1 is the cheapest/fastest, higher is stronger
+	// (and slower). The supervisor is told to pick the lowest tier that fits
+	// a task, and a failed task escalates to the next tier up rather than
+	// the next file entry. 0 = unset: a file where no entry sets a tier is
+	// untiered and keeps plain file-order preference; once any entry sets
+	// one, LoadModels fills the unset ones with 1.
+	Tier int `toml:"tier"`
+	// Description is a one-line routing hint shown to the supervisor next
+	// to the model name — what the model is good for and how big a task it
+	// can carry. It is the supervisor's only basis for choosing a tier, so
+	// keep it concrete ("single-function edits, renames, test stubs").
+	Description string `toml:"description"`
+}
+
+// Tiered reports whether models use capability tiers (any entry sets one).
+func Tiered(models []ModelConfig) bool {
+	for _, mc := range models {
+		if mc.Tier > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // Supervisor holds settings for spawning the claude CLI.
@@ -170,7 +193,9 @@ var knownHarnesses = map[string]bool{"opencode": true, "dsh": true}
 
 // LoadModels reads models.toml at path and returns configs in declaration
 // order — the file's order is the preference order (the supervisor is told
-// to favor earlier entries), so list the preferred model first. Unlike
+// to favor earlier entries), so list the preferred model first. Entries
+// that set `tier` override that with a capability ladder (see
+// ModelConfig.Tier); file order then only breaks ties within a tier. Unlike
 // Load, a missing file IS an error: there is nothing to delegate to
 // without model configs.
 func LoadModels(path string) ([]ModelConfig, error) {
@@ -222,7 +247,22 @@ func LoadModels(path string) ([]ModelConfig, error) {
 		if mc.Temperature != nil && (*mc.Temperature < 0 || *mc.Temperature > 2) {
 			return nil, fmt.Errorf("model %q: temperature %v out of range (0–2)", name, *mc.Temperature)
 		}
+		if mc.Tier < 0 {
+			return nil, fmt.Errorf("model %q: tier %d must be 1 or higher", name, mc.Tier)
+		}
+		if strings.ContainsAny(mc.Description, "\r\n") {
+			return nil, fmt.Errorf("model %q: description must be a single line", name)
+		}
 		out = append(out, mc)
+	}
+	// A partly tiered file is still tiered: entries that skipped the key
+	// sit on the bottom rung rather than outside the ladder.
+	if Tiered(out) {
+		for i := range out {
+			if out[i].Tier == 0 {
+				out[i].Tier = 1
+			}
+		}
 	}
 	return out, nil
 }

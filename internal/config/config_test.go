@@ -181,6 +181,135 @@ model = "qwen2.5-7b"
 	}
 }
 
+func TestLoadModelsTiers(t *testing.T) {
+	tests := []struct {
+		name    string
+		toml    string
+		wantErr string
+		check   func(t *testing.T, models []ModelConfig)
+	}{
+		{
+			name: "untiered",
+			toml: `
+[models.one]
+endpoint = "http://h:1"
+model = "m"
+
+[models.two]
+endpoint = "http://h:1"
+model = "m"
+`,
+			check: func(t *testing.T, models []ModelConfig) {
+				if len(models) != 2 {
+					t.Fatalf("got %d models", len(models))
+				}
+				for i, mc := range models {
+					if mc.Tier != 0 {
+						t.Errorf("models[%d].Tier = %d, want 0", i, mc.Tier)
+					}
+				}
+				if Tiered(models) {
+					t.Error("Tiered = true, want false")
+				}
+			},
+		},
+		{
+			name: "tiered with description",
+			toml: `
+[models.fast]
+endpoint = "http://h:1"
+model = "m"
+tier = 1
+description = "small edits, renames"
+
+[models.big]
+endpoint = "http://h:1"
+model = "m"
+tier = 2
+`,
+			check: func(t *testing.T, models []ModelConfig) {
+				if len(models) != 2 {
+					t.Fatalf("got %d models", len(models))
+				}
+				fast, big := models[0], models[1]
+				if fast.Name != "fast" || big.Name != "big" {
+					t.Errorf("order = %s, %s", fast.Name, big.Name)
+				}
+				if fast.Tier != 1 {
+					t.Errorf("fast.Tier = %d, want 1", fast.Tier)
+				}
+				if fast.Description != "small edits, renames" {
+					t.Errorf("fast.Description = %q", fast.Description)
+				}
+				if big.Tier != 2 {
+					t.Errorf("big.Tier = %d, want 2", big.Tier)
+				}
+				if !Tiered(models) {
+					t.Error("Tiered = false, want true")
+				}
+			},
+		},
+		{
+			name: "unset tier defaults to 1 in a tiered file",
+			toml: `
+[models.a]
+endpoint = "http://h:1"
+model = "m"
+
+[models.b]
+endpoint = "http://h:1"
+model = "m"
+tier = 3
+`,
+			check: func(t *testing.T, models []ModelConfig) {
+				if len(models) != 2 {
+					t.Fatalf("got %d models", len(models))
+				}
+				if models[0].Tier != 1 {
+					t.Errorf("a.Tier = %d, want 1", models[0].Tier)
+				}
+				if models[1].Tier != 3 {
+					t.Errorf("b.Tier = %d, want 3", models[1].Tier)
+				}
+			},
+		},
+		{
+			name:    "negative tier",
+			toml:    "[models.x]\nendpoint = \"http://h:1\"\nmodel = \"m\"\ntier = -1\n",
+			wantErr: "must be 1 or higher",
+		},
+		{
+			name: "multiline description",
+			toml: `
+[models.x]
+endpoint = "http://h:1"
+model = "m"
+description = """
+line one
+line two
+"""
+`,
+			wantErr: "description must be a single line",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			models, err := LoadModels(writeFile(t, "models.toml", tt.toml))
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("err = %v, want containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			tt.check(t, models)
+		})
+	}
+}
+
 func TestLoadModelsMissingFile(t *testing.T) {
 	if _, err := LoadModels(filepath.Join(t.TempDir(), "nope.toml")); err == nil {
 		t.Fatal("want error for missing models.toml")

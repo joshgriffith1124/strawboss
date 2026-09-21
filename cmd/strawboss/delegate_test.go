@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/joshgriffith1124/strawboss/internal/config"
 	"github.com/joshgriffith1124/strawboss/internal/live"
 	"github.com/joshgriffith1124/strawboss/internal/registry"
 )
@@ -196,7 +198,7 @@ func TestDelegateBadArgs(t *testing.T) {
 		want string
 	}{
 		{"missing task", []string{"--model", "x"}, "at least one --task"},
-		{"missing model", []string{"--task", "x"}, "at least one --task"},
+		// No --model is no longer an error: it routes each task with auto.
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -679,5 +681,100 @@ func TestTaskFileErrors(t *testing.T) {
 				t.Errorf("err = %v, want one containing %q", err, tt.want)
 			}
 		})
+	}
+}
+
+// TestPinFor: --model is sticky for the tasks after it; tasks before the
+// first --model bind to it; no --model at all means auto.
+func TestPinFor(t *testing.T) {
+	tests := []struct {
+		name string
+		pins []modelPin
+		want []string // per task index
+	}{
+		{"no model flag routes automatically", nil, []string{"auto", "auto"}},
+		{"one model covers every task", []modelPin{{"big", 0}}, []string{"big", "big"}},
+		{"task before the first model binds to it", []modelPin{{"big", 1}}, []string{"big", "big"}},
+		{"sticky per group", []modelPin{{"fast", 0}, {"big", 2}}, []string{"fast", "fast", "big"}},
+		{"auto mixes with pins", []modelPin{{"auto", 0}, {"big", 1}}, []string{"auto", "big"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for i, want := range tt.want {
+				if got := pinFor(tt.pins, i); got != want {
+					t.Errorf("task %d: pinFor = %q, want %q", i, got, want)
+				}
+			}
+		})
+	}
+}
+
+// TestRouteTasks: auto tasks land on the tier their weight maps to, pinned
+// tasks on the model named, and either routes around a model that is down
+// — with a note only when the supervisor needs to know.
+func TestRouteTasks(t *testing.T) {
+	models := []config.ModelConfig{
+		{Name: "fast", Tier: 1},
+		{Name: "spark-a", Tier: 2},
+		{Name: "spark-b", Tier: 2},
+	}
+	light := "rename foo to bar in main.go"
+	heavy := "refactor and debug the parser across a.go, b.go and c.go; investigate the root cause"
+	availFn := func(down ...string) func(context.Context, config.ModelConfig) (bool, string) {
+		return func(_ context.Context, mc config.ModelConfig) (bool, string) {
+			for _, d := range down {
+				if d == mc.Name {
+					return false, "endpoint unreachable"
+				}
+			}
+			return true, ""
+		}
+	}
+	tests := []struct {
+		name     string
+		task     string
+		pins     []modelPin
+		down     []string
+		want     string
+		wantNote string // substring; "" = no note at all
+	}{
+		{"auto light task starts on the fast tier", light, nil, nil, "fast", "[auto → fast"},
+		{"auto heavy task starts on the big tier", heavy, nil, nil, "spark-a", "[auto → spark-a"},
+		{"auto routes around a dead fast model", light, nil, []string{"fast"}, "spark-a", "[fast unavailable (endpoint unreachable); ran on spark-a]"},
+		{"pinned and available says nothing", light, []modelPin{{"spark-a", 0}}, nil, "spark-a", ""},
+		{"pinned but down falls to its same-tier sibling", light, []modelPin{{"spark-a", 0}}, []string{"spark-a"}, "spark-b", "ran on spark-b"},
+		{"nothing available keeps the want so the real error surfaces", light, []modelPin{{"fast", 0}}, []string{"fast", "spark-a", "spark-b"}, "fast", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			routes, err := routeTasks(models, []string{tt.task}, tt.pins, "models.toml", availFn(tt.down...))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if routes[0].mc.Name != tt.want {
+				t.Errorf("model = %q, want %q", routes[0].mc.Name, tt.want)
+			}
+			if tt.wantNote == "" && routes[0].note != "" {
+				t.Errorf("note = %q, want none", routes[0].note)
+			}
+			if !strings.Contains(routes[0].note, tt.wantNote) {
+				t.Errorf("note = %q, want containing %q", routes[0].note, tt.wantNote)
+			}
+		})
+	}
+
+	if _, err := routeTasks(models, []string{light}, []modelPin{{"nope", 0}}, "models.toml", availFn()); err == nil ||
+		!strings.Contains(err.Error(), `no model "nope"`) {
+		t.Errorf("unknown model: err = %v", err)
+	}
+
+	// Each model is probed at most once per call, however many tasks.
+	probes := 0
+	counting := func(context.Context, config.ModelConfig) (bool, string) { probes++; return true, "" }
+	if _, err := routeTasks(models, []string{light, light, light}, nil, "models.toml", counting); err != nil {
+		t.Fatal(err)
+	}
+	if probes != 1 {
+		t.Errorf("probes = %d, want 1 (memoized per model)", probes)
 	}
 }

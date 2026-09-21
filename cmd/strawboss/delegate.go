@@ -20,6 +20,7 @@ import (
 	"github.com/joshgriffith1124/strawboss/internal/live"
 	"github.com/joshgriffith1124/strawboss/internal/registry"
 	"github.com/joshgriffith1124/strawboss/internal/repomap"
+	"github.com/joshgriffith1124/strawboss/internal/router"
 	"github.com/joshgriffith1124/strawboss/internal/runner"
 	"github.com/joshgriffith1124/strawboss/internal/worktree"
 )
@@ -74,12 +75,18 @@ func readTaskFile(path string) (string, error) {
 
 func runDelegate(args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("delegate", flag.ContinueOnError)
-	model := fs.String("model", "", "model config name from models.toml (required)")
 	var tasks []string
 	registerTaskFlags(fs, &tasks)
+	// --model is sticky: it binds the tasks that FOLLOW it, so one call can
+	// fan out across tiers (--model fast --task a --model big --task b).
+	var pins []modelPin
+	fs.Func("model", "model config name from models.toml, or \"auto\" (the default) to let strawboss route each task by weight; applies to the tasks that follow it", func(s string) error {
+		pins = append(pins, modelPin{name: s, from: len(tasks)})
+		return nil
+	})
 	dir := fs.String("dir", "", "worker working directory (default: current directory)")
 	useWorktree := fs.Bool("worktree", false, "run each worker in an isolated git worktree on its own strawboss/* branch")
-	escalate := fs.Bool("escalate", true, "on worker failure, retry the task once on the next model config in models.toml (skipped with --worktree)")
+	escalate := fs.Bool("escalate", true, "on worker failure, retry the task once on the next model config in models.toml — the next tier up when tiers are set (skipped with --worktree)")
 	useRepoMap := fs.Bool("repomap", true, "prepend a compact repo map (files + top-level symbols) to worker prompts")
 	timeout := fs.Duration("timeout", 20*time.Minute, "abort workers after this long")
 	stateDir := fs.String("state-dir", "", "state directory (default ~/.strawboss)")
@@ -87,8 +94,8 @@ func runDelegate(args []string, stdout io.Writer) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *model == "" || len(tasks) == 0 {
-		return errors.New("delegate: --model and at least one --task or --task-file are required")
+	if len(tasks) == 0 {
+		return errors.New("delegate: at least one --task or --task-file is required")
 	}
 
 	if *stateDir == "" {
@@ -120,22 +127,21 @@ func runDelegate(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	var mc config.ModelConfig
-	found := false
-	for _, m := range models {
-		if m.Name == *model {
-			mc, found = m, true
-			break
-		}
-	}
-	if !found {
-		return fmt.Errorf("delegate: no model %q in %s", *model, *modelsPath)
+	routes, err := routeTasks(models, tasks, pins, *modelsPath, live.Available)
+	if err != nil {
+		return err
 	}
 
 	// Delegation-loop guard: a task identical to one that already failed
 	// twice this run gets refused, not retried — re-delegating the same
-	// task into the same wall is the classic supervisor loop.
-	refused := failedTaskCounts(filepath.Join(*stateDir, "workers.jsonl"), os.Getenv("STRAWBOSS_RUN"), *model)
+	// task into the same wall is the classic supervisor loop. Counted per
+	// model the task actually lands on.
+	refusedBy := map[string]map[string]int{}
+	for _, r := range routes {
+		if _, ok := refusedBy[r.mc.Name]; !ok {
+			refusedBy[r.mc.Name] = failedTaskCounts(filepath.Join(*stateDir, "workers.jsonl"), os.Getenv("STRAWBOSS_RUN"), r.mc.Name)
+		}
+	}
 
 	warn := func(s string) { fmt.Fprintf(os.Stderr, "strawboss: %s\n", s) }
 
@@ -193,6 +199,8 @@ func runDelegate(args []string, stdout io.Writer) error {
 	outcomes := make([]runner.Outcome, len(tasks))
 	var wg sync.WaitGroup
 	for i, task := range tasks {
+		mc := routes[i].mc
+		refused := refusedBy[mc.Name]
 		if refused[task] >= 2 {
 			outcomes[i] = runner.Outcome{Res: harness.Result{
 				Status: harness.StatusFailed,
@@ -226,17 +234,26 @@ func runDelegate(args []string, stdout io.Writer) error {
 			}
 			outcomes[i] = runner.Run(ctx, h, reg, mc, prompt, task, workerDir, warn, decorate)
 			// Cheap-first escalation: a failure on the requested (cheap)
-			// model re-dispatches ONCE to the next config in models.toml,
-			// inside this call — the supervisor still reads a single terse
-			// result instead of hand-retrying. Worktree runs are excluded:
-			// the second attempt would share the first's partial state and
+			// model re-dispatches ONCE to the next config in models.toml
+			// (the next tier up when tiers are set), inside this call — the
+			// supervisor still reads a single terse result instead of
+			// hand-retrying. Availability is probed fresh: minutes have
+			// passed since dispatch, and escalating into a dead model burns
+			// a guaranteed second failure. Worktree runs are excluded: the
+			// second attempt would share the first's partial state and
 			// worktree finalization runs per attempt.
 			if *escalate && wts == nil && ctx.Err() == nil && !succeeded(outcomes[i]) {
-				if next, ok := nextModel(models, mc.Name); ok {
+				up := func(m config.ModelConfig) bool { ok, _ := live.Available(ctx, m); return ok }
+				if next, ok := router.Next(models, mc.Name, up); ok {
 					warn("escalating failed task to " + next.Name)
 					outcomes[i] = runEscalated(ctx, outcomes[i], next, mc.Name,
 						prompt, task, workerDir, *stateDir, reg, warn, decorate)
 				}
+			}
+			// The routing note rides on the supervisor-facing summary only:
+			// the registry and TUI already show which model each worker ran on.
+			if note := routes[i].note; note != "" && outcomes[i].Err == nil {
+				outcomes[i].Res.Summary = note + "\n" + outcomes[i].Res.Summary
 			}
 			if outcomes[i].Err != nil && wts != nil {
 				// The worker never ran or couldn't be tracked: nothing of
@@ -275,16 +292,90 @@ func succeeded(oc runner.Outcome) bool {
 	return oc.Err == nil && oc.Res.Status == harness.StatusDone
 }
 
-// nextModel returns the config after cur in models.toml file order — the
-// escalation ladder IS the preference order: entries below the requested
-// one are the fallbacks.
-func nextModel(models []config.ModelConfig, cur string) (config.ModelConfig, bool) {
-	for i, m := range models {
-		if m.Name == cur && i+1 < len(models) {
-			return models[i+1], true
+// modelPin is one --model flag: name binds the tasks from index from on,
+// until the next pin.
+type modelPin struct {
+	name string
+	from int
+}
+
+// pinFor returns the --model value governing task i. Tasks written before
+// the first --model bind to it too (the supervisor sometimes puts --task
+// first); no --model at all means auto.
+func pinFor(pins []modelPin, i int) string {
+	if len(pins) == 0 {
+		return router.Auto
+	}
+	name := pins[0].name
+	for _, p := range pins {
+		if p.from <= i {
+			name = p.name
 		}
 	}
-	return config.ModelConfig{}, false
+	return name
+}
+
+// route is where one task runs, plus the one-line note that tells the
+// supervisor when that was not simply the model it named.
+type route struct {
+	mc   config.ModelConfig
+	note string
+}
+
+// routeTasks decides each task's model before anything spawns. A pinned
+// task wants the model it names; an auto task wants whatever tier its
+// weight maps to (router.Pick). Either way the want is then resolved
+// against availability, so a task aimed at a model that is down or not
+// loaded runs on the nearest live one instead of failing on arrival. Each
+// model is probed at most once per call. When nothing is available the
+// task keeps its want and surfaces the real error.
+func routeTasks(models []config.ModelConfig, tasks []string, pins []modelPin, modelsPath string,
+	available func(context.Context, config.ModelConfig) (bool, string)) ([]route, error) {
+	type probe struct {
+		ok  bool
+		why string
+	}
+	probes := map[string]probe{}
+	check := func(mc config.ModelConfig) probe {
+		p, seen := probes[mc.Name]
+		if !seen {
+			p.ok, p.why = available(context.Background(), mc)
+			probes[mc.Name] = p
+		}
+		return p
+	}
+
+	routes := make([]route, len(tasks))
+	for i, task := range tasks {
+		name := pinFor(pins, i)
+		var want config.ModelConfig
+		note := ""
+		if name == router.Auto {
+			var why string
+			want, why = router.Pick(models, task)
+			if cut := strings.Index(why, " ("); cut >= 0 {
+				why = why[:cut] // the signals are for tests and humans, not supervisor tokens
+			}
+			note = "[auto → " + want.Name + ": " + why + "]"
+		} else {
+			found := false
+			for _, m := range models {
+				if m.Name == name {
+					want, found = m, true
+					break
+				}
+			}
+			if !found {
+				return nil, fmt.Errorf("delegate: no model %q in %s", name, modelsPath)
+			}
+		}
+		got, ok := router.Resolve(models, want, func(m config.ModelConfig) bool { return check(m).ok })
+		if ok && got.Name != want.Name {
+			note = "[" + want.Name + " unavailable (" + check(want).why + "); ran on " + got.Name + "]"
+		}
+		routes[i] = route{mc: got, note: note}
+	}
+	return routes, nil
 }
 
 // runEscalated re-dispatches a failed task once on the next model config.

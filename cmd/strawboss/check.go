@@ -44,7 +44,7 @@ func runCheck(args []string, stdout io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	res := verify.Run(ctx, *dir, spec)
-	fmt.Fprintln(stdout, verifyNote(spec, res))
+	fmt.Fprintln(stdout, verify.Note(spec, res))
 	if !res.OK {
 		return errors.New("check failed")
 	}

@@ -651,6 +651,120 @@ func TestSessionPicker(t *testing.T) {
 	}
 }
 
+func TestBranchReview(t *testing.T) {
+	m := New(make(chan tea.Msg))
+	m = apply(t, m,
+		tea.WindowSizeMsg{Width: 120, Height: 40},
+		tea.KeyMsg{Type: tea.KeyTab}, // dashboard
+	)
+
+	b1 := "strawboss/w1-trade-query"
+	b2 := "strawboss/w2-docstrings"
+	var listCalls int
+	m.OnListBranches = func() []BranchInfo {
+		listCalls++
+		return []BranchInfo{
+			{Name: b1, Ahead: 2, Files: 3, Added: 120, Deleted: 40,
+				Subject: "scaffold trade query", When: time.Now().Add(-5 * time.Minute)},
+			{Name: b2, Ahead: 1, Files: 1, Added: 30, Deleted: 2,
+				Subject: "docstrings for pkg", When: time.Now().Add(-time.Hour)},
+		}
+	}
+	var diffs []string
+	m.OnBranchDiff = func(name string) (string, error) {
+		diffs = append(diffs, name)
+		return "diff --git a/x.go b/x.go\n@@ -1 +1 @@\n-old line\n+new line for " + name, nil
+	}
+	var merges, discards []string
+	m.OnMergeBranch = func(name string) error {
+		merges = append(merges, name)
+		return nil
+	}
+	m.OnDiscardBranch = func(name string) error {
+		discards = append(discards, name)
+		return nil
+	}
+
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b")})
+	if !m.reviewing || len(m.branches) != 2 {
+		t.Fatalf("reviewing=%v branches=%d", m.reviewing, len(m.branches))
+	}
+	out := m.viewBranchPicker(120, 20)
+	for _, want := range []string{"w1-trade-query", "w2-docstrings", "+120", "-40", "scaffold trade query"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("picker missing %q", want)
+		}
+	}
+
+	// Select the second branch and open its diff.
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyDown}, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.brIdx != 1 || len(diffs) != 1 || diffs[0] != b2 {
+		t.Fatalf("brIdx=%d diffs=%v", m.brIdx, diffs)
+	}
+	if !strings.Contains(m.diffText, "new line for "+b2) {
+		t.Errorf("diffText = %q", m.diffText)
+	}
+	if got := m.viewBranchDiff(120, 20); !strings.Contains(got, "new line for "+b2) {
+		t.Errorf("diff view missing content")
+	}
+	// esc closes the diff but keeps the overlay open.
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.diffText != "" || !m.reviewing {
+		t.Fatalf("diffText=%q reviewing=%v", m.diffText, m.reviewing)
+	}
+
+	// Two-press merge confirm on the selected (second) branch.
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("m")})
+	if len(merges) != 0 || !strings.Contains(m.toast, "press m again") {
+		t.Fatalf("merges=%v toast=%q", merges, m.toast)
+	}
+	before := listCalls
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("m")})
+	if len(merges) != 1 || merges[0] != b2 || !strings.Contains(m.toast, "merged "+b2) {
+		t.Fatalf("merges=%v toast=%q", merges, m.toast)
+	}
+	if listCalls <= before {
+		t.Errorf("branch list not reloaded after merge (calls=%d)", listCalls)
+	}
+
+	// Discard: two presses confirm.
+	m = apply(t, m,
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")},
+	)
+	if len(discards) != 1 || discards[0] != b2 {
+		t.Fatalf("discards=%v", discards)
+	}
+
+	// Moving the selection between the two presses cancels the confirm.
+	m = apply(t, m,
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")},
+		tea.KeyMsg{Type: tea.KeyUp},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")},
+	)
+	if len(discards) != 1 {
+		t.Errorf("discard fired despite selection move: %v", discards)
+	}
+
+	// esc closes the overlay.
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.reviewing || m.brConfirm != "" {
+		t.Fatalf("reviewing=%v brConfirm=%q", m.reviewing, m.brConfirm)
+	}
+}
+
+func TestBranchReviewNoHooks(t *testing.T) {
+	m := New(make(chan tea.Msg))
+	m = apply(t, m,
+		tea.WindowSizeMsg{Width: 120, Height: 40},
+		tea.KeyMsg{Type: tea.KeyTab}, // dashboard
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b")},
+	)
+	if m.reviewing || !strings.Contains(m.toast, "demo replay — no branches") {
+		t.Fatalf("reviewing=%v toast=%q", m.reviewing, m.toast)
+	}
+}
+
 func TestLoudDenials(t *testing.T) {
 	m := demoState(t)
 	denial := "Permission to use Bash has been denied because Claude Code is running in don't ask mode. IMPORTANT: ..."

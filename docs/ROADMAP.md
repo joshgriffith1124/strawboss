@@ -48,6 +48,13 @@ tested at the end (same rule as milestones). Struck items are done.
     after each worker; a failure marks the worker failed, escalates, and
     returns a terse excerpt. Workers claim success; the supervisor cannot
     run tests to check.
+19. ~~Verify on TUI retries~~ — `r`/`R` retries go through runner.Run
+    without the verify gate delegate applies; a retried worker's "done"
+    is taken on faith.
+20. ~~Branch review in the TUI~~ — `--worktree` work lands on
+    strawboss/* branches and then waits for a human with git. List them
+    with diff stats, show the diff, merge or discard with one key
+    (Conductor/Claude Squad are diff-first; the survey's biggest gap).
 18. **Model-neutral repo** — the code already works with any number of
     models (everything reads models.toml), but examples, tests, fixtures,
     the mockup, the replay demo and NOTES name one setup (qwen-coder,

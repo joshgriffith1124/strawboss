@@ -30,6 +30,10 @@ func (m Model) View() string {
 
 	var body string
 	switch {
+	case m.reviewing && m.diffText != "":
+		body = m.viewBranchDiff(w, contentH)
+	case m.reviewing:
+		body = m.viewBranchPicker(w, contentH)
 	case m.picking:
 		body = m.viewSessionPicker(w, contentH)
 	case m.tab == tabChat:
@@ -104,12 +108,16 @@ func (m Model) viewTabs(w int) string {
 func (m Model) viewFooter(w int) string {
 	var hints [][2]string
 	switch {
+	case m.reviewing && m.diffText != "":
+		hints = [][2]string{{"↑↓/PgUp/Dn", "scroll"}, {"esc", "back"}}
+	case m.reviewing:
+		hints = [][2]string{{"↑↓", "select"}, {"↵", "diff"}, {"m", "merge"}, {"x", "discard"}, {"r", "refresh"}, {"esc", "close"}}
 	case m.picking:
 		hints = [][2]string{{"↑↓", "select"}, {"↵", "switch"}, {"n", "new"}, {"esc", "close"}}
 	case m.tab == tabChat:
 		hints = [][2]string{{"↵", "send"}, {"/new", "fresh session"}, {"/…", "supervisor command"}, {"PgUp/Dn", "scroll"}, {"⇥", "tabs"}, {"esc", "interrupt"}, {"ctrl+c", "quit"}}
 	case m.tab == tabDashboard:
-		hints = [][2]string{{"↑↓", "select"}, {"/", "filter"}, {"s", "sessions"}, {"n", "new"}, {"x", "kill"}, {"r", "retry"}, {"R", "retry-failed"}, {"⇥/1-3", "tabs"}, {"q", "quit"}}
+		hints = [][2]string{{"↑↓", "select"}, {"/", "filter"}, {"s", "sessions"}, {"b", "branches"}, {"n", "new"}, {"x", "kill"}, {"r", "retry"}, {"R", "retry-failed"}, {"⇥/1-3", "tabs"}, {"q", "quit"}}
 	default:
 		hints = [][2]string{{"f", "filter"}, {"s", "sessions"}, {"n", "new"}, {"⇥/1-3", "tabs"}, {"q", "quit"}}
 	}

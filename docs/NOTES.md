@@ -1285,3 +1285,27 @@ Fixed on both sides:
 
 Reads under the state dir stay denied: that rule is invariant 3, and a
 crash-log investigation is a fair thing to delegate.
+
+### Verify on retries, and branch review in the TUI (2026-09-22)
+
+TUI retries (`r`/`R`) ran workers through `runner.Run` with no decorate
+hook, so a retried worker's "done" skipped the verify gate. The gate's
+logic moved out of delegate's closure into `verify.Gate` (fingerprint
+baseline taken before the first attempt, check only when the tree
+changed, failing tail kept for an escalation) and `verify.Note`; delegate
+and the retry path now share it, so "done" means the same thing
+whichever started the worker.
+
+Branch review closes the loop `--worktree` left open: work landed on a
+strawboss/* branch and waited for someone to drop to git. `b` opens an
+overlay (built like the session picker) listing the branches — commits
+ahead, files, +/- lines, the worker's commit subject, age — with a
+colored, scrollable diff on enter, and merge (`m`) / discard (`x`), each
+needing a second press. `internal/worktree/review.go` does the git:
+diffs against the merge base (`HEAD...branch`, the branch's own changes
+only); merge is `--no-ff` into the project's current branch, refuses a
+dirty tree or detached HEAD, and on conflict aborts and names the files,
+leaving the repo exactly as it was; success removes the worktree and the
+branch. Every operation refuses non-strawboss branches. All local git from
+the TUI: zero supervisor tokens, and the supervisor is told to leave
+merging to the user.

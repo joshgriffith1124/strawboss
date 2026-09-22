@@ -204,6 +204,17 @@ type SessionInfo struct {
 	Current bool
 }
 
+// BranchInfo is one worker branch in the review overlay (strawboss/* only).
+type BranchInfo struct {
+	Name    string
+	Ahead   int
+	Files   int
+	Added   int
+	Deleted int
+	Subject string
+	When    time.Time
+}
+
 // SessionSwitchedMsg announces a completed session switch: the UI resets
 // chat and worker state; the conversation resumes on the next prompt.
 // ID "" means a fresh session — the next prompt starts a new conversation.

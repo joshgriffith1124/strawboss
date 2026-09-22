@@ -221,5 +221,9 @@ func buildLive(stateDir, modelsPath string, fresh bool) (ui.Model, func(), error
 	m.OnListSessions = o.ListSessions
 	m.OnSwitchSession = o.SwitchSession
 	m.OnNewSession = o.NewSession
+	m.OnListBranches = o.ListBranches
+	m.OnBranchDiff = o.BranchDiff
+	m.OnMergeBranch = o.MergeBranch
+	m.OnDiscardBranch = o.DiscardBranch
 	return m, o.Shutdown, nil
 }

@@ -240,39 +240,15 @@ func runDelegate(args []string, stdout io.Writer) error {
 			wt := wts[i]
 			finalize = func(res *harness.Result) { finalizeWorktree(res, *dir, wt.path, wt.branch, task) }
 		}
-		// verifyFail holds the excerpt of this task's last failed check, so
-		// an escalated attempt is told what broke instead of rediscovering
-		// it. Only this task's goroutine touches it.
-		verifyFail := ""
-		// Baseline for "did this task change anything": a worker that only
-		// read or reported leaves the tree as it found it, and running the
-		// project's check after it is minutes of pure waste. Taken before
-		// the first attempt, so an escalated attempt is still checked when
-		// the first one left changes behind. No baseline (not a git tree)
-		// means always check.
-		baseline, haveBaseline := "", false
+		// Per-worker verify gate (shared with the TUI's retry path). A
+		// zero spec never checks — the batch path owns shared-dir calls.
+		gateSpec := verify.Spec{}
 		if perWorker {
-			baseline, haveBaseline = verify.Fingerprint(workerDir)
+			gateSpec = check
 		}
-		unchanged := func() bool {
-			if !haveBaseline {
-				return false
-			}
-			now, ok := verify.Fingerprint(workerDir)
-			return ok && now == baseline
-		}
+		gate := verify.NewGate(ctx, workerDir, gateSpec)
 		decorate := func(res *harness.Result) {
-			if perWorker && res.Status == harness.StatusDone && !unchanged() {
-				r := verify.Run(ctx, workerDir, check)
-				res.Summary += "\n" + verifyNote(check, r)
-				if !r.OK {
-					res.Status = harness.StatusFailed
-					verifyFail = verify.Excerpt(r.Output, 12, 1500)
-					if verifyFail == "" { // a silent failure is still a failure to pass on
-						verifyFail = fmt.Sprintf("(the check printed nothing; exit code %d)", r.ExitCode)
-					}
-				}
-			}
+			gate.Decorate(res)
 			if finalize != nil {
 				finalize(res) // commit after the check: the branch note must be last
 			}
@@ -303,7 +279,7 @@ func runDelegate(args []string, stdout io.Writer) error {
 				if next, ok := router.Next(models, mc.Name, up); ok {
 					warn("escalating failed task to " + next.Name)
 					retryPrompt := prompt
-					if verifyFail != "" {
+					if verifyFail := gate.LastFailure(); verifyFail != "" {
 						retryPrompt += "\n\nA previous attempt at this task left the project failing its check (`" +
 							check.Command + "`). Its changes are still in the working tree — fix them or redo the task so the check passes:\n" +
 							verifyFail
@@ -357,7 +333,7 @@ func runDelegate(args []string, stdout io.Writer) error {
 		r := verify.Run(vctx, *dir, check)
 		cancel()
 		fmt.Fprintf(stdout, "%s (after all %d workers — it cannot tell which one broke it)\n",
-			verifyNote(check, r), len(tasks))
+			verify.Note(check, r), len(tasks))
 		batchFailed = !r.OK
 	}
 	if failed > 0 {
@@ -385,25 +361,6 @@ func verifySpec(dir, flagValue string) (verify.Spec, error) {
 	}
 	spec.Command, spec.Source = flagValue, "--verify"
 	return spec, nil
-}
-
-// verifyNote is the one bracketed line the supervisor reads about a check,
-// plus the failing tail when it failed. The excerpt is small on purpose:
-// the terse-result budget is ~250 tokens per worker.
-func verifyNote(spec verify.Spec, r verify.Result) string {
-	d := r.Duration.Round(time.Second)
-	switch {
-	case r.OK:
-		return fmt.Sprintf("[verified: `%s` passed in %s]", spec.Command, d)
-	case r.TimedOut:
-		return fmt.Sprintf("[verify TIMED OUT after %s: `%s` — counted as failed]", d, spec.Command)
-	default:
-		note := fmt.Sprintf("[verify FAILED: `%s` exit %d after %s]", spec.Command, r.ExitCode, d)
-		if ex := verify.Excerpt(r.Output, 6, 400); ex != "" {
-			note += "\n" + ex
-		}
-		return note
-	}
 }
 
 // succeeded reports whether an outcome is a completed, non-failed worker.

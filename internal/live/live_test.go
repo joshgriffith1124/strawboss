@@ -23,6 +23,7 @@ import (
 	"github.com/joshgriffith1124/strawboss/internal/registry"
 	"github.com/joshgriffith1124/strawboss/internal/supervisor"
 	"github.com/joshgriffith1124/strawboss/internal/ui"
+	"github.com/joshgriffith1124/strawboss/internal/verify"
 )
 
 // drainUntil pulls feed msgs until pred returns true or the timeout hits.
@@ -547,6 +548,120 @@ func TestRetryWorkerSpawnsNewWorker(t *testing.T) {
 	drainUntil(t, o.Feed(), 5*time.Second, func(m tea.Msg) bool {
 		tm, ok := m.(ui.ToastMsg)
 		return ok && strings.Contains(tm.Text, "still running")
+	})
+}
+
+// TestRetryWorkerRunsVerify: a retried worker runs the project's verify
+// check in its own directory exactly like delegated work (OnRetryWorker
+// wires verify.Gate into runner.Run): a failing check closes the new
+// worker as failed with the check's note in its summary, and a broken
+// .strawboss.toml refuses the retry up front with no worker spawned.
+func TestRetryWorkerRunsVerify(t *testing.T) {
+	setup := func(t *testing.T, verifyFile string) (*Orchestrator, *registry.Registry, *atomic.Int32) {
+		t.Helper()
+		var prompts atomic.Int32
+		mux := http.NewServeMux()
+		mux.HandleFunc("POST /api/session", func(w http.ResponseWriter, r *http.Request) {
+			fmt.Fprint(w, `{"data":{"id":"ses_retry"}}`)
+		})
+		mux.HandleFunc("POST /session/{sid}/prompt_async", func(w http.ResponseWriter, r *http.Request) {
+			prompts.Add(1)
+			w.WriteHeader(http.StatusNoContent)
+		})
+		mux.HandleFunc("GET /session/status", func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(`{}`))
+		})
+		mux.HandleFunc("GET /session/{sid}/message", func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(`[{"info":{"id":"msg_1","sessionID":"ses_retry","role":"assistant","time":{"created":1,"completed":2}},"parts":[{"type":"text","text":"did it right this time"}]}]`))
+		})
+		mux.HandleFunc("GET /api/session/{sid}", func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(`{"data":{"id":"ses_retry","tokens":{"input":10,"output":5,"reasoning":0,"cache":{"read":0,"write":0}}}}`))
+		})
+		srv := httptest.NewServer(mux)
+		t.Cleanup(srv.Close)
+
+		stateDir := t.TempDir()
+		wd := t.TempDir() // not a git tree: no baseline, so the check always runs
+		if err := os.WriteFile(filepath.Join(wd, verify.FileName), []byte(verifyFile), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		reg := &registry.Registry{Path: filepath.Join(stateDir, "workers.jsonl")}
+		w1, _ := reg.Allocate("ses_old", "m1", "the original task", wd, 0)
+		if err := reg.Finish(w1, "ses_old", "failed", "boom", "/l", time.Second, 1, 0, 1); err != nil {
+			t.Fatal(err)
+		}
+
+		models := []config.ModelConfig{{Name: "m1", Endpoint: srv.URL, Model: "p/x", Harness: "opencode"}}
+		o := New(&supervisor.Driver{}, models, stateDir)
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		go o.watchRegistry(ctx)
+
+		// History replay populates the task/model/dir maps retry reads.
+		drainUntil(t, o.Feed(), 5*time.Second, func(m tea.Msg) bool {
+			u, ok := m.(ui.WorkerUsageMsg)
+			return ok && u.ID == w1
+		})
+		return o, reg, &prompts
+	}
+
+	t.Run("failing check fails the retried worker", func(t *testing.T) {
+		o, _, prompts := setup(t, `verify = "echo retry-check-broke; exit 1"`)
+
+		o.OnRetryWorker("w1")
+		msgs := drainUntil(t, o.Feed(), 10*time.Second, func(m tea.Msg) bool {
+			u, ok := m.(ui.WorkerUpsertMsg)
+			return ok && u.ID == "w2" && u.Summary != ""
+		})
+		var fin ui.WorkerUpsertMsg
+		found := false
+		for _, m := range msgs {
+			if u, ok := m.(ui.WorkerUpsertMsg); ok && u.ID == "w2" && u.Summary != "" {
+				fin, found = u, true
+			}
+		}
+		if !found {
+			t.Fatalf("no finished upsert for w2 in %d msgs", len(msgs))
+		}
+		if fin.Status != "failed" {
+			t.Errorf("status = %q, want failed", fin.Status)
+		}
+		if !strings.Contains(fin.Summary, "[verify FAILED") {
+			t.Errorf("summary = %q, want the verify note", fin.Summary)
+		}
+		if !strings.Contains(fin.Summary, "retry-check-broke") {
+			t.Errorf("summary = %q, want the failing check's output", fin.Summary)
+		}
+		if prompts.Load() != 1 {
+			t.Errorf("prompts = %d, want 1", prompts.Load())
+		}
+	})
+
+	t.Run("broken verify config refuses the retry", func(t *testing.T) {
+		o, reg, prompts := setup(t, "bogus = 1\n")
+
+		o.OnRetryWorker("w1")
+		msgs := drainUntil(t, o.Feed(), 5*time.Second, func(m tea.Msg) bool {
+			tm, ok := m.(ui.ToastMsg)
+			return ok && strings.Contains(tm.Text, "unknown key")
+		})
+		for _, m := range msgs {
+			if u, ok := m.(ui.WorkerUpsertMsg); ok && u.ID != "w1" {
+				t.Errorf("worker %s upserted despite the refusal: %+v", u.ID, u)
+			}
+		}
+		if prompts.Load() != 0 {
+			t.Errorf("prompts = %d, want 0 (no worker may spawn)", prompts.Load())
+		}
+		evs, err := reg.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, ev := range evs {
+			if ev.Type == "spawned" && ev.Worker != "w1" {
+				t.Errorf("registry spawned event for %s despite the refusal: %+v", ev.Worker, ev)
+			}
+		}
 	})
 }
 

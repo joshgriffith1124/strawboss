@@ -211,6 +211,12 @@ type Model struct {
 	OnListSessions  func() []SessionInfo
 	OnSwitchSession func(id, run string)
 	OnNewSession    func()
+	// OnListBranches/OnBranchDiff/OnMergeBranch/OnDiscardBranch drive the
+	// branch review overlay (`b`); nil in demo mode.
+	OnListBranches  func() []BranchInfo
+	OnBranchDiff    func(name string) (string, error)
+	OnMergeBranch   func(name string) error
+	OnDiscardBranch func(name string) error
 
 	width, height int
 	tab           int
@@ -272,6 +278,14 @@ type Model struct {
 	picking  bool
 	sessions []SessionInfo
 	sessIdx  int
+
+	// branch review overlay
+	reviewing  bool
+	branches   []BranchInfo
+	brIdx      int
+	diffText   string // non-empty while the diff pane is open
+	diffScroll int
+	brConfirm  string // "m:<name>" or "x:<name>" after a first press; a second press confirms
 
 	// models
 	models []modelStat
@@ -836,6 +850,127 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// The branch review overlay owns the keyboard while open.
+	if m.reviewing {
+		if m.diffText != "" {
+			// Diff pane: close or scroll only.
+			switch msg.String() {
+			case "ctrl+c":
+				m.quitting = true
+				return m, tea.Quit
+			case "esc", "q", "enter":
+				m.diffText = ""
+				m.diffScroll = 0
+			case "down", "j":
+				m.diffScroll++
+			case "up", "k":
+				if m.diffScroll > 0 {
+					m.diffScroll--
+				}
+			case "pgdown":
+				m.diffScroll += 20
+			case "pgup":
+				m.diffScroll -= 20
+				if m.diffScroll < 0 {
+					m.diffScroll = 0
+				}
+			}
+			return m, nil
+		}
+		switch msg.String() {
+		case "ctrl+c":
+			m.quitting = true
+			return m, tea.Quit
+		case "esc", "q", "b":
+			m.reviewing = false
+			m.brConfirm = ""
+		case "up", "k":
+			if m.brIdx > 0 {
+				m.brIdx--
+			}
+			m.brConfirm = ""
+		case "down", "j":
+			if m.brIdx < len(m.branches)-1 {
+				m.brIdx++
+			}
+			m.brConfirm = ""
+		case "enter":
+			if m.brIdx < len(m.branches) && m.OnBranchDiff != nil {
+				text, err := m.OnBranchDiff(m.branches[m.brIdx].Name)
+				if err != nil {
+					m.showToast("diff: " + err.Error())
+					break
+				}
+				if text == "" {
+					text = "(no changes)"
+				}
+				m.diffText = text
+				m.diffScroll = 0
+			}
+		case "r":
+			if m.OnListBranches != nil {
+				m.branches = m.OnListBranches()
+				if m.brIdx >= len(m.branches) {
+					m.brIdx = len(m.branches) - 1
+				}
+				if m.brIdx < 0 {
+					m.brIdx = 0
+				}
+				m.brConfirm = ""
+			}
+		case "m", "x":
+			if m.brIdx >= len(m.branches) {
+				break
+			}
+			name := m.branches[m.brIdx].Name
+			kind := msg.String()
+			key := kind + ":" + name
+			if m.brConfirm != key {
+				m.brConfirm = key
+				if kind == "m" {
+					m.showToast("press m again to merge " + name + " into your branch")
+				} else {
+					m.showToast("press x again to discard " + name + " — its work is deleted")
+				}
+				break
+			}
+			m.brConfirm = ""
+			if kind == "m" {
+				if m.OnMergeBranch == nil {
+					m.showToast("demo replay — branch merge isn't wired")
+					break
+				}
+				if err := m.OnMergeBranch(name); err != nil {
+					m.showToast("merge: " + err.Error())
+					break
+				}
+				m.showToast("merged " + name)
+			} else {
+				if m.OnDiscardBranch == nil {
+					m.showToast("demo replay — branch discard isn't wired")
+					break
+				}
+				if err := m.OnDiscardBranch(name); err != nil {
+					m.showToast("discard: " + err.Error())
+					break
+				}
+				m.showToast("discarded " + name)
+			}
+			// A successful merge/discard changes the list: reload it as
+			// "r" does.
+			if m.OnListBranches != nil {
+				m.branches = m.OnListBranches()
+				if m.brIdx >= len(m.branches) {
+					m.brIdx = len(m.branches) - 1
+				}
+				if m.brIdx < 0 {
+					m.brIdx = 0
+				}
+			}
+		}
+		return m, nil
+	}
+
 	// Filter entry owns the keyboard while focused.
 	if m.filtering {
 		switch msg.String() {
@@ -946,6 +1081,16 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.showToast("demo replay — no session history")
 		}
+	case "b":
+		if m.OnListBranches == nil {
+			m.showToast("demo replay — no branches")
+			break
+		}
+		m.branches = m.OnListBranches()
+		m.brIdx = 0
+		m.diffText = ""
+		m.brConfirm = ""
+		m.reviewing = true
 	case "n":
 		return m, func() tea.Msg { return NewSessionMsg{} }
 	case "f":

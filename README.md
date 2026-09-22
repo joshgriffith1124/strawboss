@@ -125,6 +125,10 @@ after workers finish: a worker whose check fails is reported failed and
 escalated with the failing lines, so the supervisor stops taking a small
 model's "done" on faith. `strawboss stats` shows how each model is doing.
 
+**Branch review.** Work from `delegate --worktree` lands on `strawboss/*`
+branches. Press `b` in the TUI to list them with diff stats, `enter` to
+read a diff, `m` to merge one into your branch, `x` to discard it.
+
 ### Working on a remote machine
 
 Run strawboss *on* the box that holds the code — not locally against it.

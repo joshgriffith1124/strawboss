@@ -10,6 +10,7 @@ import (
 	"github.com/joshgriffith1124/strawboss/internal/repomap"
 	"github.com/joshgriffith1124/strawboss/internal/runner"
 	"github.com/joshgriffith1124/strawboss/internal/ui"
+	"github.com/joshgriffith1124/strawboss/internal/verify"
 )
 
 // retryTimeout bounds a TUI-spawned retry worker, matching delegate's
@@ -101,6 +102,14 @@ func (o *Orchestrator) OnRetryWorker(id string) {
 		o.emitAsync(ui.ToastMsg{Text: "retry " + id + ": " + err.Error()})
 		return
 	}
+	// The project's verify check applies to retries exactly as to
+	// delegations: without it a retried worker's "done" would be taken on
+	// faith. A broken .strawboss.toml refuses, as delegate does.
+	check, err := verify.Find(dir)
+	if err != nil {
+		o.emitAsync(ui.ToastMsg{Text: "retry " + id + ": " + err.Error()})
+		return
+	}
 	o.mu.Lock()
 	run := o.RunID
 	o.mu.Unlock()
@@ -111,7 +120,8 @@ func (o *Orchestrator) OnRetryWorker(id string) {
 		reg := &registry.Registry{Path: filepath.Join(o.StateDir, "workers.jsonl"), Run: run}
 		warn := func(s string) { o.emitAsync(ui.RawLogMsg{Source: "wrk", Line: s}) }
 		prompt := repomap.Prompt(repomap.Build(dir, 0), task)
-		if oc := runner.Run(ctx, h, reg, mc, prompt, task, dir, warn, nil); oc.Err != nil {
+		gate := verify.NewGate(ctx, dir, check)
+		if oc := runner.Run(ctx, h, reg, mc, prompt, task, dir, warn, gate.Decorate); oc.Err != nil {
 			o.emitAsync(ui.ToastMsg{Text: "retry of " + id + " failed: " + oc.Err.Error()})
 		}
 	}()

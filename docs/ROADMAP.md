@@ -33,6 +33,21 @@ tested at the end (same rule as milestones). Struck items are done.
     NOTES.md "EDNS"; low priority now that the inference host's IP is a
     DHCP reservation); then
     revert models.toml endpoints from IPs back to hostnames.
+14. **Hot-reload models.toml** — the TUI reads it once at startup while
+    delegate re-reads it per call; the gap crashed the TUI on 2026-09-21
+    (NOTES.md "The crash it caused"). Watch the file and swap the model
+    set safely so the Models pane and the supervisor's view follow edits.
+15. **Model scorecard** — `strawboss stats`: success rate, escalation
+    rate and median time per model and per auto-score band, from
+    workers.jsonl; the same figures in the Models pane. The data item
+    10's weight tuning needs.
+16. **Per-model concurrency cap** — optional `max_concurrent` in
+    models.toml; tasks over the cap wait as "queued" in the worker table
+    instead of thrashing one GPU (IDEA.md failure point 4).
+17. **Verify gate** — a per-project `verify` command (or `--verify`) run
+    after each worker; a failure marks the worker failed, escalates, and
+    returns a terse excerpt. Workers claim success; the supervisor cannot
+    run tests to check.
 
 Explicitly not planned: a local-TUI/remote-execution split (`--remote
 host:/path`). Everything that touches code is one co-located unit —

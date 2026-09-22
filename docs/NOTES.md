@@ -1224,8 +1224,13 @@ row closes as failed ("aborted while queued") and does not escalate —
 escalation only follows real attempts. The wait counts against the
 delegate's `--timeout`.
 
-Not done: routing does not yet prefer a same-tier sibling with a free slot
-over a saturated model; a saturated pick simply queues.
+Routing now prefers a free slot: before dispatch, delegate counts each
+model's held slots (`slots.Busy`) plus the tasks this call already routed
+to it, and a saturated pick moves to the first available same-tier
+sibling with room (`router.PreferFree`, note `[X slots full; ran on Y]`).
+Never across tiers, so it cannot change capability. With no free sibling
+the task queues as before. The count is a snapshot, so two delegate calls
+racing for the last slot can still both land on it and one queues.
 
 ### Verify gate (2026-09-22)
 
@@ -1309,3 +1314,28 @@ leaving the repo exactly as it was; success removes the worktree and the
 branch. Every operation refuses non-strawboss branches. All local git from
 the TUI: zero supervisor tokens, and the supervisor is told to leave
 merging to the user.
+
+### Undo a worker's edits (2026-09-22)
+
+Most delegations edit the shared working directory, and a worker that
+failed verify (or did the wrong thing) left its edits with no rollback.
+`runner.Run` now snapshots the tree right before spawn and right after
+the result (`internal/snapshot`): `git add -A` into a private index
+(`GIT_INDEX_FILE`), `write-tree`, `commit-tree` on HEAD, saved as
+`refs/strawboss/snap/<id>/before|after`. Untracked files are included,
+which `git stash create` would have missed, and the real index, working
+tree and stash list never move. Skipped for linked worktrees: their work
+already lands on a branch that review can discard.
+
+`u` on a finished worker row, pressed twice, restores every path that
+differs between the two snapshots: `git restore --source=before
+--worktree` for files that existed, removal for files the worker
+created. If any of those paths differs between `after` and a fresh
+snapshot of now, it refuses and names them, touching nothing. Success
+drops the refs, so an undo cannot run twice.
+
+Limit: the snapshots bracket a time window, not a process. Edits made in
+the same directory by a concurrent worker (or by hand) during that window
+count as this worker's and are reverted with it. Parallel tasks that need
+separate rollback should use `--worktree`. Not done: `strawboss clean`
+does not prune snapshot refs yet (they are small: trees share blobs).

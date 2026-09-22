@@ -351,6 +351,65 @@ func TestWorkerKillRetryKeys(t *testing.T) {
 	}
 }
 
+func TestWorkerUndoKey(t *testing.T) {
+	m := demoState(t)
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	if m.tab != tabDashboard {
+		t.Fatalf("tab = %d", m.tab)
+	}
+
+	// Finish w2 so it becomes undoable; w1 stays running.
+	m = apply(t, m, WorkerUpsertMsg{ID: "w2", Status: "done", Summary: "ok", Dir: "/tmp/w2"})
+	m.selected = 1 // display order now: w1 (running), w2 (done)
+	if wk := m.selectedWorker(); wk == nil || wk.ID != "w2" {
+		t.Fatalf("selected = %+v", wk)
+	}
+
+	var calls []string
+	var dirs []string
+	m.OnUndoWorker = func(id, dir string) ([]string, error) {
+		calls = append(calls, id)
+		dirs = append(dirs, dir)
+		return []string{"a.go"}, nil
+	}
+
+	// First "u" arms the confirmation without calling the hook.
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u")})
+	if len(calls) != 0 {
+		t.Fatalf("first u called the hook %d time(s)", len(calls))
+	}
+	if !strings.Contains(m.toast, "press u again to revert w2's edits") {
+		t.Errorf("toast = %q", m.toast)
+	}
+
+	// A stray key disarms: the next "u" re-arms instead of undoing.
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")}) // no room to move; still a key press
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u")})
+	if len(calls) != 0 {
+		t.Fatalf("u after a stray key called the hook %d time(s)", len(calls))
+	}
+
+	// Confirm: the second "u" on a fresh arm undoes with the worker's dir.
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u")})
+	if len(calls) != 1 || calls[0] != "w2" || dirs[0] != "/tmp/w2" {
+		t.Fatalf("calls = %v, dirs = %v", calls, dirs)
+	}
+	if !strings.Contains(m.toast, "reverted 1 file(s) from w2") {
+		t.Errorf("toast = %q", m.toast)
+	}
+
+	// A running worker never reaches the hook, even twice.
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")}) // back to w1 (running)
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u")})
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u")})
+	if len(calls) != 1 {
+		t.Fatalf("running worker called the hook %d time(s)", len(calls))
+	}
+	if !strings.Contains(m.toast, "w1 is still running") {
+		t.Errorf("toast = %q", m.toast)
+	}
+}
+
 func TestToastMsgShowsAndExpires(t *testing.T) {
 	m := New(make(chan tea.Msg))
 	m = apply(t, m, ToastMsg{Text: "retrying w3's task on qwen-coder"})

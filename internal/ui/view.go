@@ -117,7 +117,7 @@ func (m Model) viewFooter(w int) string {
 	case m.tab == tabChat:
 		hints = [][2]string{{"↵", "send"}, {"/new", "fresh session"}, {"/…", "supervisor command"}, {"PgUp/Dn", "scroll"}, {"⇥", "tabs"}, {"esc", "interrupt"}, {"ctrl+c", "quit"}}
 	case m.tab == tabDashboard:
-		hints = [][2]string{{"↑↓", "select"}, {"/", "filter"}, {"s", "sessions"}, {"b", "branches"}, {"n", "new"}, {"x", "kill"}, {"r", "retry"}, {"R", "retry-failed"}, {"⇥/1-3", "tabs"}, {"q", "quit"}}
+		hints = [][2]string{{"↑↓", "select"}, {"/", "filter"}, {"s", "sessions"}, {"b", "branches"}, {"n", "new"}, {"x", "kill"}, {"r", "retry"}, {"R", "retry-failed"}, {"u", "undo"}, {"⇥/1-3", "tabs"}, {"q", "quit"}}
 	default:
 		hints = [][2]string{{"f", "filter"}, {"s", "sessions"}, {"n", "new"}, {"⇥/1-3", "tabs"}, {"q", "quit"}}
 	}

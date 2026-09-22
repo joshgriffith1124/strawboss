@@ -217,6 +217,8 @@ type Model struct {
 	OnBranchDiff    func(name string) (string, error)
 	OnMergeBranch   func(name string) error
 	OnDiscardBranch func(name string) error
+	// OnUndoWorker reverts a finished worker's edits (`u`); nil in demo mode.
+	OnUndoWorker func(id, dir string) (files []string, err error)
 
 	width, height int
 	tab           int
@@ -286,6 +288,10 @@ type Model struct {
 	diffText   string // non-empty while the diff pane is open
 	diffScroll int
 	brConfirm  string // "m:<name>" or "x:<name>" after a first press; a second press confirms
+
+	// undoConfirm holds the worker id awaiting a second "u" press; any
+	// other key press disarms it.
+	undoConfirm string
 
 	// models
 	models []modelStat
@@ -1049,6 +1055,10 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// non-typing tabs
+	// Any key other than "u" disarms an armed undo confirmation.
+	if msg.String() != "u" {
+		m.undoConfirm = ""
+	}
 	switch msg.String() {
 	case "q":
 		m.quitting = true
@@ -1154,6 +1164,39 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.showToast(fmt.Sprintf("retrying %d failed worker(s)", len(cmds)))
 		return m, tea.Batch(cmds...)
+	case "u":
+		if m.tab != tabDashboard {
+			break
+		}
+		wk := m.selectedWorker()
+		if wk == nil {
+			break
+		}
+		if wk.Status != "done" && wk.Status != "failed" {
+			m.showToast(wk.ID + " is still running — nothing to undo yet")
+			break
+		}
+		if m.OnUndoWorker == nil {
+			m.showToast("demo replay — no undo")
+			break
+		}
+		if m.undoConfirm != wk.ID {
+			m.undoConfirm = wk.ID
+			m.showToast("press u again to revert " + wk.ID + "'s edits")
+			break
+		}
+		m.undoConfirm = ""
+		id, dir := wk.ID, wk.Dir
+		files, err := m.OnUndoWorker(id, dir)
+		if err != nil {
+			m.showToast("undo " + id + ": " + err.Error())
+			break
+		}
+		if len(files) == 0 {
+			m.showToast(id + " changed no files")
+			break
+		}
+		m.showToast(fmt.Sprintf("reverted %d file(s) from %s", len(files), id))
 	}
 	return m, nil
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/joshgriffith1124/strawboss/internal/harness/opencode"
 	"github.com/joshgriffith1124/strawboss/internal/registry"
 	"github.com/joshgriffith1124/strawboss/internal/slots"
+	"github.com/joshgriffith1124/strawboss/internal/snapshot"
 )
 
 // NewHarness builds the WorkerHarness a model config names. LoadModels
@@ -107,6 +108,8 @@ func takeSlot(ctx context.Context, reg *registry.Registry, mc config.ModelConfig
 // that failed — for the caller's log. decorate (may be nil) can amend the
 // result before it is recorded and returned — worktree finalization uses
 // it so the branch note reaches the supervisor, registry, and TUI alike.
+// A worker in a git repo (not a linked worktree) gets before/after snapshots
+// under refs/strawboss/snap/<id>/ so the TUI can undo its edits.
 func Run(ctx context.Context, h harness.WorkerHarness, reg *registry.Registry, mc config.ModelConfig, prompt, task, dir string, warn func(string), decorate func(*harness.Result)) (oc Outcome) {
 	if warn == nil {
 		warn = func(string) {}
@@ -130,6 +133,17 @@ func Run(ctx context.Context, h harness.WorkerHarness, reg *registry.Registry, m
 		return oc
 	}
 	defer release()
+
+	// Undo support snapshots for a git repo
+	snap := snapshot.Wanted(dir)
+	var before string
+	if snap {
+		var serr error
+		if before, serr = snapshot.Take(dir); serr != nil {
+			warn("undo snapshot: " + serr.Error())
+			snap = false
+		}
+	}
 
 	start := time.Now()
 	session, err := h.Spawn(ctx, prompt, mc)
@@ -158,6 +172,13 @@ func Run(ctx context.Context, h harness.WorkerHarness, reg *registry.Registry, m
 		return oc
 	}
 
+	if snap {
+		if serr := snapshot.Save(dir, oc.WorkerID, "before", before); serr != nil {
+			warn("undo snapshot: " + serr.Error())
+			snap = false
+		}
+	}
+
 	res, err := h.Result(ctx, session)
 	if err != nil {
 		if ctx.Err() == nil {
@@ -176,6 +197,13 @@ func Run(ctx context.Context, h harness.WorkerHarness, reg *registry.Registry, m
 			WorkerID: session,
 			Status:   harness.StatusFailed,
 			Summary:  fmt.Sprintf("aborted: %v after %s", context.Cause(ctx), time.Since(start).Round(time.Second)),
+		}
+	}
+	if snap {
+		if after, serr := snapshot.Take(dir); serr != nil {
+			warn("undo snapshot: " + serr.Error())
+		} else if serr := snapshot.Save(dir, oc.WorkerID, "after", after); serr != nil {
+			warn("undo snapshot: " + serr.Error())
 		}
 	}
 	if decorate != nil {

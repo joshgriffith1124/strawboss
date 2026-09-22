@@ -55,13 +55,11 @@ tested at the end (same rule as milestones). Struck items are done.
     strawboss/* branches and then waits for a human with git. List them
     with diff stats, show the diff, merge or discard with one key
     (Conductor/Claude Squad are diff-first; the survey's biggest gap).
-21. **Undo a worker's edits** — most delegations edit the shared working
-    directory, and a worker that fails verify (or just does the wrong
-    thing) leaves its edits behind with no rollback. Snapshot the tree
-    before each non-worktree task (`git stash create` + a ref under
-    refs/strawboss/, which touches nothing) and add a TUI key on the
-    worker row that restores it — refusing if later workers changed the
-    same files.
+21. ~~Undo a worker's edits~~ — runner.Run snapshots the whole tree
+    (untracked files included, via a private index) before and after each
+    worker outside a linked worktree, under refs/strawboss/snap/<id>/;
+    `u` twice on a finished worker row restores the files it changed,
+    refusing if any of them changed again since (NOTES.md "Undo").
 22. ~~Route to a free slot~~ — a model at its `max_concurrent` cap
     queued new work even when a same-tier sibling was idle; routeTasks now
     hands the task to an available same-tier sibling with a free slot

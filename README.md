@@ -65,7 +65,7 @@ results](docs/screenshot-dashboard.png)
 
 - Live worker table with streaming transcripts, per-worker tok/s
   sparklines, context-window usage, kill (`x`) / retry (`r`) / retry-all
-  (`R`), filtering (`/`)
+  (`R`), undo a worker's edits (`u`, press twice), filtering (`/`)
 - Token economy: plan vs. free-local split, notional API value, real
   plan-window gauges (5h/7d) parsed from the stream
 - Two worker harnesses: opencode server sessions and DeepSeek Harness

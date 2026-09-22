@@ -16,6 +16,7 @@ import (
 	"github.com/joshgriffith1124/strawboss/internal/harness/dshacp"
 	"github.com/joshgriffith1124/strawboss/internal/harness/opencode"
 	"github.com/joshgriffith1124/strawboss/internal/registry"
+	"github.com/joshgriffith1124/strawboss/internal/slots"
 )
 
 // NewHarness builds the WorkerHarness a model config names. LoadModels
@@ -51,6 +52,51 @@ type Outcome struct {
 	Err      error
 }
 
+// SlotsDir is where concurrency-slot lock files live for a registry: the
+// state dir's slots/ (the registry is <state>/workers.jsonl), so every
+// process sharing a registry shares the slots.
+func SlotsDir(reg *registry.Registry) string {
+	return filepath.Join(filepath.Dir(reg.Path), "slots")
+}
+
+// takeSlot claims one of mc's concurrency slots. Uncapped models (and a
+// free slot) return at once with no queued id. When all slots are busy the
+// task is registered as queued and takeSlot waits; if ctx ends first the
+// queued row is closed as failed and release is nil.
+func takeSlot(ctx context.Context, reg *registry.Registry, mc config.ModelConfig, task, dir string,
+	warn func(string)) (release func(), queuedID string, err error) {
+	if mc.MaxConcurrent <= 0 {
+		return func() {}, "", nil
+	}
+	sdir := SlotsDir(reg)
+	release, ok, err := slots.TryAcquire(sdir, mc.Name, mc.MaxConcurrent)
+	if err != nil {
+		return nil, "", fmt.Errorf("slot for %s: %w", mc.Name, err)
+	}
+	if ok {
+		return release, "", nil
+	}
+	queuedID, err = reg.Queue(mc.Name, task, dir)
+	if err != nil {
+		return nil, "", err
+	}
+	warn(fmt.Sprintf("%s queued: all %d %s slots busy", queuedID, mc.MaxConcurrent, mc.Name))
+	waitStart := time.Now()
+	release, err = slots.Acquire(ctx, sdir, mc.Name, mc.MaxConcurrent)
+	if err != nil {
+		if ctx.Err() == nil {
+			return nil, "", fmt.Errorf("slot for %s: %w", mc.Name, err)
+		}
+		summary := fmt.Sprintf("aborted while queued for %s: %v", mc.Name, context.Cause(ctx))
+		if ferr := reg.Finish(queuedID, "", string(harness.StatusFailed), summary, "",
+			time.Since(waitStart), 0, 0, 0); ferr != nil {
+			warn(ferr.Error())
+		}
+		return nil, queuedID, nil
+	}
+	return release, queuedID, nil
+}
+
 // Run runs one task to completion. Cancelling ctx aborts the worker and
 // records it failed rather than leaving it running unobserved. prompt is
 // what the worker is actually sent (task plus harness-injected context
@@ -68,9 +114,32 @@ func Run(ctx context.Context, h harness.WorkerHarness, reg *registry.Registry, m
 	if prompt == "" {
 		prompt = task
 	}
+
+	// Concurrency cap: hold one of the model's slots for the whole run.
+	// When all are busy the worker is registered as queued first, so the
+	// TUI shows it waiting rather than the delegate call looking hung.
+	release, queuedID, err := takeSlot(ctx, reg, mc, task, dir, warn)
+	if err != nil {
+		oc.Err = err
+		return oc
+	}
+	if release == nil { // gave up waiting (timeout/interrupt): recorded as failed
+		oc.WorkerID = queuedID
+		oc.Res = harness.Result{WorkerID: queuedID, Status: harness.StatusFailed,
+			Summary: fmt.Sprintf("aborted while queued for %s: %v", mc.Name, context.Cause(ctx))}
+		return oc
+	}
+	defer release()
+
 	start := time.Now()
 	session, err := h.Spawn(ctx, prompt, mc)
 	if err != nil {
+		if queuedID != "" {
+			// Close the queued row: it never became a worker.
+			if ferr := reg.Finish(queuedID, "", string(harness.StatusFailed), "spawn failed: "+err.Error(), "", 0, 0, 0, 0); ferr != nil {
+				warn(ferr.Error())
+			}
+		}
 		oc.Err = err
 		return oc
 	}
@@ -78,7 +147,12 @@ func Run(ctx context.Context, h harness.WorkerHarness, reg *registry.Registry, m
 	if p, ok := h.(pider); ok {
 		pid = p.PID(session)
 	}
-	oc.WorkerID, err = reg.Allocate(session, mc.Name, task, dir, pid)
+	if queuedID != "" {
+		oc.WorkerID = queuedID
+		err = reg.AllocateAs(queuedID, session, mc.Name, task, dir, pid)
+	} else {
+		oc.WorkerID, err = reg.Allocate(session, mc.Name, task, dir, pid)
+	}
 	if err != nil {
 		oc.Err = err
 		return oc

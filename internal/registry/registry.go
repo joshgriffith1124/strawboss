@@ -1,8 +1,9 @@
 // Package registry tracks workers across processes. Every delegate
 // invocation is its own short-lived process (spawned by the supervisor's
 // Bash tool), so the registry is an append-only JSONL event log on disk:
-// delegate appends spawned/finished events, the TUI replays the file to
-// know every worker past and present, and state survives restarts for free.
+// delegate appends queued/spawned/finished events, the TUI replays the file
+// to know every worker past and present (queued ones included, waiting for
+// a free concurrency slot), and state survives restarts for free.
 package registry
 
 import (
@@ -20,13 +21,13 @@ import (
 // Event is one line of workers.jsonl.
 type Event struct {
 	TS      time.Time `json:"ts"`
-	Type    string    `json:"type"` // "spawned" | "finished"
+	Type    string    `json:"type"` // "queued" | "spawned" | "finished"
 	Worker  string    `json:"worker"`
 	Session string    `json:"session"`
 	// Run scopes workers to one supervisor run so the TUI doesn't replay
 	// other runs' history (set from $STRAWBOSS_RUN by delegate).
 	Run string `json:"run,omitempty"`
-	// spawned fields
+	// queued + spawned fields
 	Model string `json:"model,omitempty"`
 	Task  string `json:"task,omitempty"`
 	Dir   string `json:"dir,omitempty"`
@@ -87,18 +88,11 @@ func (r *Registry) append(ev Event) error {
 func (r *Registry) Allocate(session, model, task, dir string, pid int) (string, error) {
 	var id string
 	err := r.withLock(func() error {
-		events, err := r.Load()
+		next, err := r.nextID()
 		if err != nil {
 			return err
 		}
-		max := 0
-		for _, ev := range events {
-			n, err := strconv.Atoi(strings.TrimPrefix(ev.Worker, "w"))
-			if err == nil && n > max {
-				max = n
-			}
-		}
-		id = fmt.Sprintf("w%d", max+1)
+		id = next
 		return r.append(Event{
 			TS: time.Now(), Type: "spawned", Worker: id, Run: r.Run,
 			Session: session, Model: model, Task: task, Dir: dir, PID: pid,
@@ -108,6 +102,60 @@ func (r *Registry) Allocate(session, model, task, dir string, pid int) (string, 
 		return "", err
 	}
 	return id, nil
+}
+
+// nextID returns the next worker id (w1, w2, …) by scanning the event log
+// for the highest id — queued workers count, so ids are shared between
+// Queue and Allocate. Callers must already hold the lock.
+func (r *Registry) nextID() (string, error) {
+	events, err := r.Load()
+	if err != nil {
+		return "", err
+	}
+	max := 0
+	for _, ev := range events {
+		n, err := strconv.Atoi(strings.TrimPrefix(ev.Worker, "w"))
+		if err == nil && n > max {
+			max = n
+		}
+	}
+	return fmt.Sprintf("w%d", max+1), nil
+}
+
+// Queue reserves the next worker id and records a queued event: the worker
+// may not start yet because its model is at its max_concurrent cap and must
+// wait for a free slot. The queued event lets the TUI show the worker
+// waiting; when a slot opens, AllocateAs records the spawned event under
+// the same id.
+func (r *Registry) Queue(model, task, dir string) (string, error) {
+	var id string
+	err := r.withLock(func() error {
+		next, err := r.nextID()
+		if err != nil {
+			return err
+		}
+		id = next
+		return r.append(Event{
+			TS: time.Now(), Type: "queued", Worker: id, Run: r.Run,
+			Model: model, Task: task, Dir: dir,
+		})
+	})
+	if err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// AllocateAs records the spawned event for an id that Queue already
+// assigned (no new id — the queued worker keeps its place in the sequence).
+// pid is 0 when the harness has no per-worker subprocess.
+func (r *Registry) AllocateAs(id, session, model, task, dir string, pid int) error {
+	return r.withLock(func() error {
+		return r.append(Event{
+			TS: time.Now(), Type: "spawned", Worker: id, Run: r.Run,
+			Session: session, Model: model, Task: task, Dir: dir, PID: pid,
+		})
+	})
 }
 
 // Finish records a worker's terminal state.
@@ -151,12 +199,14 @@ func (r *Registry) Load() ([]Event, error) {
 
 // Worker is the reduced current state of one worker.
 type Worker struct {
-	ID       string
-	Session  string
-	Model    string
-	Task     string
-	Dir      string
-	Status   string // "running" until a finished event lands
+	ID      string
+	Session string
+	Model   string
+	Task    string
+	Dir     string
+	// Status is "queued" while the worker waits for a concurrency slot,
+	// "running" once spawned, and the finished event's status after that.
+	Status   string
 	Summary  string
 	LogPath  string
 	Started  time.Time
@@ -167,15 +217,36 @@ type Worker struct {
 	OutputTokens    int
 }
 
-// Reduce folds the event log into per-worker state, in spawn order. A
-// spawned worker with no finished event reports as "running" — the TUI can
-// reconcile against the harness for workers orphaned by a crash.
+// Reduce folds the event log into per-worker state, in first-event order.
+// A "queued" event (the model is at its max_concurrent cap, so the worker
+// waits for a free slot) creates the worker with status "queued" and
+// Started left zero; a later "spawned" event for that id updates the same
+// entry in place instead of adding a second one. A worker with no finished
+// event reports as "running" (or "queued" if it never spawned) — the TUI
+// can reconcile against the harness for workers orphaned by a crash.
 func Reduce(events []Event) []Worker {
 	byID := map[string]*Worker{}
 	var order []string
 	for _, ev := range events {
 		switch ev.Type {
+		case "queued":
+			byID[ev.Worker] = &Worker{
+				ID: ev.Worker, Model: ev.Model, Task: ev.Task,
+				Dir: ev.Dir, Status: "queued",
+			}
+			order = append(order, ev.Worker)
 		case "spawned":
+			if w, ok := byID[ev.Worker]; ok {
+				// Spawned after being queued: the slot opened. Keep the
+				// same entry instead of adding a duplicate.
+				w.Session = ev.Session
+				w.Model = ev.Model
+				w.Task = ev.Task
+				w.Dir = ev.Dir
+				w.Status = "running"
+				w.Started = ev.TS
+				break
+			}
 			byID[ev.Worker] = &Worker{
 				ID: ev.Worker, Session: ev.Session, Model: ev.Model,
 				Task: ev.Task, Dir: ev.Dir, Status: "running", Started: ev.TS,

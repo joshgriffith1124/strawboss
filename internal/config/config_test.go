@@ -181,6 +181,22 @@ model = "qwen2.5-7b"
 	}
 }
 
+func TestLoadModelsMaxConcurrent(t *testing.T) {
+	good := "[models.x]\nendpoint = \"http://h:1\"\nmodel = \"m\"\nmax_concurrent = 2\n\n[models.y]\nendpoint = \"http://h:1\"\nmodel = \"m\"\n"
+	models, err := LoadModels(writeFile(t, "models.toml", good))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if models[0].MaxConcurrent != 2 || models[1].MaxConcurrent != 0 {
+		t.Errorf("max_concurrent = %d, %d; want 2, 0 (unset = unlimited)", models[0].MaxConcurrent, models[1].MaxConcurrent)
+	}
+	bad := "[models.x]\nendpoint = \"http://h:1\"\nmodel = \"m\"\nmax_concurrent = -1\n"
+	if _, err := LoadModels(writeFile(t, "bad.toml", bad)); err == nil ||
+		!strings.Contains(err.Error(), "max_concurrent") {
+		t.Errorf("negative max_concurrent: err = %v", err)
+	}
+}
+
 func TestLoadModelsTiers(t *testing.T) {
 	tests := []struct {
 		name    string

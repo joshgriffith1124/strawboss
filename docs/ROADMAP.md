@@ -41,7 +41,7 @@ tested at the end (same rule as milestones). Struck items are done.
     rate and median time per model and per auto-score band, from
     workers.jsonl; the same figures in the Models pane. The data item
     10's weight tuning needs.
-16. **Per-model concurrency cap** — optional `max_concurrent` in
+16. ~~Per-model concurrency cap~~ — optional `max_concurrent` in
     models.toml; tasks over the cap wait as "queued" in the worker table
     instead of thrashing one GPU (IDEA.md failure point 4).
 17. **Verify gate** — a per-project `verify` command (or `--verify`) run

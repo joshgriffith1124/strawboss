@@ -2,6 +2,7 @@ package live
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -150,6 +151,79 @@ func TestRegistryWatcher(t *testing.T) {
 	}
 	if o.unfinished[w1] {
 		t.Error("w1 should be finished")
+	}
+}
+
+// TestRegistryWatcherQueued: a worker waiting for a concurrency slot logs
+// a queued event before its spawned event. The row opens as queued (task
+// recorded for kill/retry, but not unfinished and no tailer — there is no
+// session yet), then flips to running and done as the same id spawns and
+// finishes.
+func TestRegistryWatcherQueued(t *testing.T) {
+	stateDir := t.TempDir()
+	o := New(&supervisor.Driver{}, nil, stateDir)
+	o.RunID = "run-q"
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go o.watchRegistry(ctx)
+
+	// Write events straight to workers.jsonl: the registry API for queued
+	// is not available in this build.
+	regPath := filepath.Join(stateDir, "workers.jsonl")
+	addEvent := func(t *testing.T, ev registry.Event) {
+		t.Helper()
+		f, err := os.OpenFile(regPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.NewEncoder(f).Encode(ev); err != nil {
+			t.Fatal(err)
+		}
+		_ = f.Close()
+	}
+
+	addEvent(t, registry.Event{TS: time.Now(), Type: "queued", Worker: "w1", Run: "run-q",
+		Model: "qwen-coder", Task: "queued task", Dir: "/repo"})
+	drainUntil(t, o.Feed(), 5*time.Second, func(m tea.Msg) bool {
+		u, ok := m.(ui.WorkerUpsertMsg)
+		return ok && u.ID == "w1" && u.Status == "queued"
+	})
+	// Queued: task/model/dir recorded for kill/retry, but the worker is
+	// not open yet — no unfinished entry, no tailer.
+	o.mu.Lock()
+	if o.unfinished["w1"] {
+		t.Error("w1 tracked as unfinished while queued")
+	}
+	if o.tailing["w1"] {
+		t.Error("w1 tailer started while queued")
+	}
+	if o.workerModel["w1"] != "qwen-coder" || o.workerTask["w1"] != "queued task" || o.workerDir["w1"] != "/repo" {
+		t.Errorf("queued state = model %q task %q dir %q",
+			o.workerModel["w1"], o.workerTask["w1"], o.workerDir["w1"])
+	}
+	o.mu.Unlock()
+
+	// The slot frees: the same id spawns and the row flips to running.
+	addEvent(t, registry.Event{TS: time.Now(), Type: "spawned", Worker: "w1", Run: "run-q",
+		Session: "ses_q", Model: "qwen-coder", Task: "queued task", Dir: "/repo"})
+	drainUntil(t, o.Feed(), 5*time.Second, func(m tea.Msg) bool {
+		u, ok := m.(ui.WorkerUpsertMsg)
+		return ok && u.ID == "w1" && u.Status == "running"
+	})
+
+	addEvent(t, registry.Event{TS: time.Now(), Type: "finished", Worker: "w1", Run: "run-q",
+		Session: "ses_q", Status: "done", Summary: "ok"})
+	drainUntil(t, o.Feed(), 5*time.Second, func(m tea.Msg) bool {
+		u, ok := m.(ui.WorkerUpsertMsg)
+		return ok && u.ID == "w1" && u.Status == "done"
+	})
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.unfinished["w1"] {
+		t.Error("w1 should be finished")
+	}
+	if o.sessionToWorker["ses_q"] != "w1" {
+		t.Errorf("session mapping = %v", o.sessionToWorker)
 	}
 }
 

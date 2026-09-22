@@ -75,6 +75,19 @@ func (o *Orchestrator) applyRegistryEvent(ctx context.Context, ev registry.Event
 		return // another run's worker — not this session's story
 	}
 	switch ev.Type {
+	case "queued":
+		// Waiting for a concurrency slot: no session yet, so no
+		// unfinished entry and no tailer — but record the task so
+		// kill/retry can find it, and open the row.
+		o.mu.Lock()
+		o.workerModel[ev.Worker] = ev.Model
+		o.workerDir[ev.Worker] = ev.Dir
+		o.workerTask[ev.Worker] = ev.Task
+		o.mu.Unlock()
+		o.emit(ctx, ui.WorkerUpsertMsg{
+			ID: ev.Worker, Model: ev.Model, Task: ev.Task, Dir: ev.Dir,
+			Status: "queued",
+		})
 	case "spawned":
 		o.mu.Lock()
 		o.sessionToWorker[ev.Session] = ev.Worker

@@ -23,6 +23,10 @@
 #   harness = "dsh"
 #   tier = 1
 #   description = "fast and small: single-function edits, renames, test stubs, shell chores"
+#   max_concurrent = 2        # optional, any entry: at most 2 workers at once
+#                             # on this model; more wait as "queued". For a
+#                             # server with few parallel slots (llama.cpp
+#                             # --parallel, one GPU) where overlap thrashes.
 #
 #   [models.qwen-dsh]
 #   ...

@@ -1204,3 +1204,25 @@ the tier's description); a tier-1 model with many RESCUED and few DONE
 is burning a round trip per task. The Models pane shows the same figure
 per model for the current run ("ok 7/9"); an idle model with a track
 record keeps its own row instead of folding into the idle line.
+
+### Per-model concurrency cap (2026-09-22)
+
+`max_concurrent = N` on a models.toml entry caps how many workers run on
+it at once. The cap has to hold across processes — the supervisor can
+issue parallel delegate calls, escalation starts a second worker from
+inside one, and the TUI retries through its own path — so it is N lock
+files under `<state>/slots/`, one kernel flock per running worker
+(`internal/slots`). The kernel drops a flock when its process dies, so a
+crashed or killed delegate can never leak a slot; nothing needs cleaning.
+
+It lives in `runner.Run`, the one path every worker takes. A worker that
+finds every slot busy is registered first as `queued` (a new registry
+event under its real id; the later `spawned` event upgrades the same row),
+so the worker table shows it waiting instead of the delegate call looking
+hung. If the delegate's timeout or an interrupt ends the wait, the queued
+row closes as failed ("aborted while queued") and does not escalate —
+escalation only follows real attempts. The wait counts against the
+delegate's `--timeout`.
+
+Not done: routing does not yet prefer a same-tier sibling with a free slot
+over a saturated model; a saturated pick simply queues.

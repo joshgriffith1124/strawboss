@@ -58,6 +58,11 @@ type ModelConfig struct {
 	// can carry. It is the supervisor's only basis for choosing a tier, so
 	// keep it concrete ("single-function edits, renames, test stubs").
 	Description string `toml:"description"`
+	// MaxConcurrent caps how many workers run on this model at once,
+	// across every delegate process and TUI retry; the rest wait as
+	// "queued" until a slot frees. For a single-GPU server whose parallel
+	// requests thrash rather than overlap. 0 = unlimited.
+	MaxConcurrent int `toml:"max_concurrent"`
 }
 
 // Tiered reports whether models use capability tiers (any entry sets one).
@@ -249,6 +254,9 @@ func LoadModels(path string) ([]ModelConfig, error) {
 		}
 		if mc.Tier < 0 {
 			return nil, fmt.Errorf("model %q: tier %d must be 1 or higher", name, mc.Tier)
+		}
+		if mc.MaxConcurrent < 0 {
+			return nil, fmt.Errorf("model %q: max_concurrent %d must be 0 (unlimited) or more", name, mc.MaxConcurrent)
 		}
 		if strings.ContainsAny(mc.Description, "\r\n") {
 			return nil, fmt.Errorf("model %q: description must be a single line", name)

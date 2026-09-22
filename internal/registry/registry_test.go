@@ -134,3 +134,197 @@ func TestReduceFinishedWithoutSpawn(t *testing.T) {
 		t.Errorf("workers = %+v", workers)
 	}
 }
+
+func TestQueueAlone(t *testing.T) {
+	r := &Registry{Path: filepath.Join(t.TempDir(), "workers.jsonl")}
+	id, err := r.Queue("qwen-small", "docstrings", "/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != "w1" {
+		t.Errorf("Queue id = %s, want w1", id)
+	}
+	events, err := r.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	workers := Reduce(events)
+	if len(workers) != 1 {
+		t.Fatalf("got %d workers, want 1: %+v", len(workers), workers)
+	}
+	w := workers[0]
+	if w.ID != "w1" || w.Status != "queued" {
+		t.Errorf("worker = %+v, want queued w1", w)
+	}
+	if w.Model != "qwen-small" || w.Task != "docstrings" || w.Dir != "/repo" {
+		t.Errorf("worker = %+v", w)
+	}
+	if w.Session != "" || !w.Started.IsZero() {
+		t.Errorf("worker = %+v, want empty session and zero Started", w)
+	}
+}
+
+func TestQueueThenAllocateAsThenFinish(t *testing.T) {
+	r := &Registry{Path: filepath.Join(t.TempDir(), "workers.jsonl"), Run: "run-q"}
+	// w1's model is at its max_concurrent cap, so it waits queued while w2
+	// allocates directly; when a slot opens, w1 spawns under its queued id.
+	qid, err := r.Queue("qwen-coder", "build the thing", "/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w2, _ := r.Allocate("ses_2", "qwen-small", "docstrings", "/repo", 0); w2 != "w2" {
+		t.Fatalf("Allocate after Queue = %s, want w2", w2)
+	}
+	if err := r.AllocateAs(qid, "ses_1", "qwen-coder", "build the thing", "/repo", 4242); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Finish(qid, "ses_1", "done", "built; tests pass", "/logs/ses_1.jsonl", 95*time.Second, 12000, 0, 800); err != nil {
+		t.Fatal(err)
+	}
+
+	events, err := r.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 4 {
+		t.Fatalf("got %d events, want 4 (queued, spawned, spawned, finished)", len(events))
+	}
+	for _, ev := range events {
+		if ev.Run != "run-q" {
+			t.Errorf("event %s/%s run = %q, want run-q", ev.Type, ev.Worker, ev.Run)
+		}
+	}
+	var spawnedTS time.Time
+	for _, ev := range events {
+		if ev.Type == "spawned" && ev.Worker == qid {
+			spawnedTS = ev.TS
+		}
+	}
+	workers := Reduce(events)
+	if len(workers) != 2 {
+		t.Fatalf("got %d workers, want 2: %+v", len(workers), workers)
+	}
+	w1, w2 := workers[0], workers[1]
+	if w1.ID != qid || w1.Status != "done" || w1.Session != "ses_1" {
+		t.Errorf("w1 = %+v", w1)
+	}
+	if !w1.Started.Equal(spawnedTS) {
+		t.Errorf("w1 Started = %v, want the spawned event's TS %v", w1.Started, spawnedTS)
+	}
+	if w1.InputTokens != 12000 || w1.OutputTokens != 800 || w1.LogPath != "/logs/ses_1.jsonl" {
+		t.Errorf("w1 = %+v", w1)
+	}
+	if w2.ID != "w2" || w2.Status != "running" {
+		t.Errorf("w2 = %+v", w2)
+	}
+}
+
+func TestQueueAllocateShareIDSequence(t *testing.T) {
+	r := &Registry{Path: filepath.Join(t.TempDir(), "workers.jsonl")}
+	ops := []struct {
+		kind string // "allocate" or "queue"
+		want string
+	}{
+		{"allocate", "w1"},
+		{"queue", "w2"},
+		{"allocate", "w3"},
+		{"queue", "w4"},
+	}
+	for _, op := range ops {
+		var got string
+		var err error
+		switch op.kind {
+		case "allocate":
+			got, err = r.Allocate("s", "m", "t", "/", 0)
+		case "queue":
+			got, err = r.Queue("m", "t", "/")
+		}
+		if err != nil {
+			t.Fatalf("%s: %v", op.kind, err)
+		}
+		if got != op.want {
+			t.Errorf("%s returned %s, want %s", op.kind, got, op.want)
+		}
+	}
+}
+
+func TestQueuedFinishedWithoutSpawning(t *testing.T) {
+	r := &Registry{Path: filepath.Join(t.TempDir(), "workers.jsonl")}
+	id, err := r.Queue("qwen-coder", "build the thing", "/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The run is aborted before any slot opens.
+	if err := r.Finish(id, "", "failed", "run aborted before a slot opened", "/logs/run.log", time.Minute, 0, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	events, err := r.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	workers := Reduce(events)
+	if len(workers) != 1 {
+		t.Fatalf("got %d workers, want 1: %+v", len(workers), workers)
+	}
+	if workers[0].ID != id || workers[0].Status != "failed" {
+		t.Errorf("worker = %+v", workers[0])
+	}
+	if !workers[0].Started.IsZero() {
+		t.Errorf("Started = %v, want zero (never spawned)", workers[0].Started)
+	}
+}
+
+func TestReduceQueued(t *testing.T) {
+	ts := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name   string
+		events []Event
+		want   []Worker
+	}{
+		{
+			name: "queued then spawned updates in place",
+			events: []Event{
+				{TS: ts, Type: "queued", Worker: "w1", Model: "m-queued", Task: "t-queued", Dir: "/q"},
+				{TS: ts.Add(time.Minute), Type: "spawned", Worker: "w1", Session: "s1", Model: "m", Task: "t", Dir: "/"},
+			},
+			want: []Worker{
+				{ID: "w1", Session: "s1", Model: "m", Task: "t", Dir: "/", Status: "running", Started: ts.Add(time.Minute)},
+			},
+		},
+		{
+			name: "order follows the first event per worker",
+			events: []Event{
+				{TS: ts, Type: "queued", Worker: "w1", Model: "m", Task: "t", Dir: "/"},
+				{TS: ts, Type: "spawned", Worker: "w2", Session: "s2", Model: "m", Task: "t", Dir: "/"},
+				{TS: ts.Add(time.Minute), Type: "spawned", Worker: "w1", Session: "s1", Model: "m", Task: "t", Dir: "/"},
+			},
+			want: []Worker{
+				{ID: "w1", Session: "s1", Model: "m", Task: "t", Dir: "/", Status: "running", Started: ts.Add(time.Minute)},
+				{ID: "w2", Session: "s2", Model: "m", Task: "t", Dir: "/", Status: "running", Started: ts},
+			},
+		},
+		{
+			name: "unqueued worker unchanged",
+			events: []Event{
+				{TS: ts, Type: "spawned", Worker: "w1", Session: "s1", Model: "m", Task: "t", Dir: "/"},
+				{TS: ts.Add(time.Minute), Type: "finished", Worker: "w1", Status: "done", Summary: "ok"},
+			},
+			want: []Worker{
+				{ID: "w1", Session: "s1", Model: "m", Task: "t", Dir: "/", Status: "done", Summary: "ok", Started: ts, Finished: ts.Add(time.Minute)},
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Reduce(tc.events)
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %d workers, want %d: %+v", len(got), len(tc.want), got)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("worker[%d] = %+v, want %+v", i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}

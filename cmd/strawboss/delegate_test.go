@@ -13,10 +13,12 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/joshgriffith1124/strawboss/internal/config"
 	"github.com/joshgriffith1124/strawboss/internal/live"
 	"github.com/joshgriffith1124/strawboss/internal/registry"
+	"github.com/joshgriffith1124/strawboss/internal/slots"
 )
 
 // fakeOpencode serves the minimal API surface delegate exercises. mode
@@ -492,6 +494,117 @@ func TestDelegateRefusesRepeatedFailedTask(t *testing.T) {
 	out.Reset()
 	if err := runDelegate(append(args, "--task", "a different task"), &out); err != nil {
 		t.Fatalf("different task refused: %v\n%s", err, out.String())
+	}
+}
+
+// setupCapped is setup with max_concurrent = 1 on qwen-coder, so the test
+// itself can hold the model's only slot and force the delegate's worker to
+// queue.
+func setupCapped(t *testing.T, f *fakeOpencode) (stateDir string, baseArgs []string) {
+	t.Helper()
+	srv := httptest.NewServer(f.handler())
+	t.Cleanup(srv.Close)
+	stateDir = t.TempDir()
+	models := filepath.Join(stateDir, "models.toml")
+	toml := "[models.qwen-coder]\nendpoint = \"" + srv.URL + "\"\nmodel = \"spark-a/qwen3.8-27b\"\nmax_concurrent = 1\n"
+	if err := os.WriteFile(models, []byte(toml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return stateDir, []string{"--state-dir", stateDir, "--dir", t.TempDir(), "--model", "qwen-coder"}
+}
+
+// TestDelegateQueuesAtCap: with the model's only slot held, the worker is
+// registered as queued, then spawns on the same id once the slot frees.
+func TestDelegateQueuesAtCap(t *testing.T) {
+	f := &fakeOpencode{mode: "done"}
+	stateDir, args := setupCapped(t, f)
+
+	// Hold the model's only slot so the delegate's worker must queue.
+	release, ok, err := slots.TryAcquire(filepath.Join(stateDir, "slots"), "qwen-coder", 1)
+	if err != nil {
+		t.Fatalf("slot acquire: %v", err)
+	}
+	if !ok {
+		t.Fatal("model's only slot not available for the test itself")
+	}
+	oldPoll := slots.PollEvery
+	slots.PollEvery = 20 * time.Millisecond
+	t.Cleanup(func() { slots.PollEvery = oldPoll })
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		release()
+	}()
+
+	var out strings.Builder
+	if err := runDelegate(append(args, "--task", "build the thing"), &out); err != nil {
+		t.Fatalf("err = %v, out = %s", err, out.String())
+	}
+	if !strings.HasPrefix(out.String(), "w1 done ") {
+		t.Errorf("output = %q", out.String())
+	}
+
+	reg := &registry.Registry{Path: filepath.Join(stateDir, "workers.jsonl")}
+	events, err := reg.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	queuedIdx, spawnedIdx := -1, -1
+	for i, ev := range events {
+		if ev.Worker != "w1" {
+			continue
+		}
+		if ev.Type == "queued" && queuedIdx < 0 {
+			queuedIdx = i
+		}
+		if ev.Type == "spawned" && spawnedIdx < 0 {
+			spawnedIdx = i
+		}
+	}
+	if queuedIdx < 0 || spawnedIdx < 0 || queuedIdx >= spawnedIdx {
+		t.Fatalf("want queued event for w1 before its spawned event: %+v", events)
+	}
+	workers := registry.Reduce(events)
+	if len(workers) != 1 || workers[0].ID != "w1" || workers[0].Status != "done" {
+		t.Errorf("workers = %+v", workers)
+	}
+}
+
+// TestDelegateQueuedTimeout: the slot never frees, so the worker times out
+// while still queued — no session is created, and the queued row is closed
+// as failed.
+func TestDelegateQueuedTimeout(t *testing.T) {
+	f := &fakeOpencode{mode: "done"}
+	stateDir, args := setupCapped(t, f)
+
+	// Hold the model's only slot for the whole test.
+	release, ok, err := slots.TryAcquire(filepath.Join(stateDir, "slots"), "qwen-coder", 1)
+	if err != nil {
+		t.Fatalf("slot acquire: %v", err)
+	}
+	if !ok {
+		t.Fatal("model's only slot not available for the test itself")
+	}
+	t.Cleanup(release)
+	oldPoll := slots.PollEvery
+	slots.PollEvery = 20 * time.Millisecond
+	t.Cleanup(func() { slots.PollEvery = oldPoll })
+
+	var out strings.Builder
+	err = runDelegate(append(args, "--timeout", "300ms", "--task", "build the thing"), &out)
+	if err == nil {
+		t.Fatalf("want error, out = %s", out.String())
+	}
+	if !strings.Contains(out.String(), "aborted while queued") {
+		t.Errorf("output = %q", out.String())
+	}
+
+	events, _ := (&registry.Registry{Path: filepath.Join(stateDir, "workers.jsonl")}).Load()
+	workers := registry.Reduce(events)
+	if len(workers) != 1 || workers[0].Status != "failed" {
+		t.Errorf("workers = %+v", workers)
+	}
+	if f.created.Load() != 0 {
+		t.Errorf("sessions created = %d, want 0 (worker never spawned)", f.created.Load())
 	}
 }
 

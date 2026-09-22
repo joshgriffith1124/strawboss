@@ -44,7 +44,7 @@ tested at the end (same rule as milestones). Struck items are done.
 16. ~~Per-model concurrency cap~~ — optional `max_concurrent` in
     models.toml; tasks over the cap wait as "queued" in the worker table
     instead of thrashing one GPU (IDEA.md failure point 4).
-17. **Verify gate** — a per-project `verify` command (or `--verify`) run
+17. ~~Verify gate~~ — a per-project `verify` command (or `--verify`) run
     after each worker; a failure marks the worker failed, escalates, and
     returns a terse excerpt. Workers claim success; the supervisor cannot
     run tests to check.

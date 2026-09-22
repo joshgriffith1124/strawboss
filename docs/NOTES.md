@@ -1226,3 +1226,28 @@ delegate's `--timeout`.
 
 Not done: routing does not yet prefer a same-tier sibling with a free slot
 over a saturated model; a saturated pick simply queues.
+
+### Verify gate (2026-09-22)
+
+The trust gap in the whole topology: a small local model says "done, tests
+pass", and the supervisor — denied builds and tests by design — can only
+believe it. Now a project names a check (`.strawboss.toml`: `verify =
+"…"`; DELEGATION.md "Verify") and delegate runs it, via the existing
+`decorate` hook so the verdict lands before the result is recorded: the
+registry, TUI and supervisor all see the verified status, and a failed
+check escalates like any failure. The escalated attempt's prompt carries
+the failing lines — the stronger model starts from the evidence instead
+of re-running the check to find it.
+
+Shared directory, several workers: a per-worker check would judge worker A
+on worker B's half-written file. There the check runs once after all of
+them; it can't attribute the break, so worker statuses stand and the call
+exits non-zero. Per-worker checks need `--worktree` or a single task.
+
+Choices: `sh -c` in the worker's directory with its own process group
+(killed whole on timeout — test runners fork); output capped to its last
+64 KiB and condensed to ≤ 6 lines / 400 bytes for the supervisor (failures
+print last, so the tail is kept). A broken `.strawboss.toml` fails the
+call loudly rather than skipping the check, which would present
+unverified work as verified. Not covered: TUI retries (`r`/`R`) do not
+run the check yet.

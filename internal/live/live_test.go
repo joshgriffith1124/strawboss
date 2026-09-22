@@ -299,6 +299,8 @@ func TestBuildSystemPromptTiered(t *testing.T) {
 			// Routing and availability are delegate's job; the prompt must
 			// say so or the supervisor reroutes by hand.
 			"--model auto", "sticky", "nearest available model",
+			// Verify results are delegate's; the supervisor must trust them.
+			"verify FAILED",
 		} {
 			if !strings.Contains(p, want) {
 				t.Errorf("prompt missing %q", want)

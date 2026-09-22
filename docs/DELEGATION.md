@@ -54,6 +54,32 @@ one bracketed line ahead of the summary:
 [escalated from fast-local, which failed: …]
 ```
 
+## Verify: checking a worker's claim
+
+Workers report their own success, and the supervisor may not run builds or
+tests. So a project can name a check in `.strawboss.toml` at its root (looked
+up from `--dir` upward, stopping at the git root):
+
+```toml
+verify = "go test ./..."
+verify_timeout = "10m"   # optional, default 5m
+```
+
+`--verify "<cmd>"` overrides it for one call; `--verify off` skips it.
+
+- **Per worker** when each worker has a directory to itself (`--worktree`, or a
+  single task): the check runs after the worker reports done and before the
+  result is recorded. A failure turns the worker `failed` (registry, TUI and
+  supervisor agree), escalates like any failure, and the escalated attempt's
+  prompt carries the failing lines.
+- **Once, after all workers** when several share one directory: each would
+  otherwise be judged on the others' half-finished edits. It can't say which
+  worker broke the build, so statuses stand and the call exits non-zero.
+
+The supervisor reads one line — `[verified: `go test ./...` passed in 12s]` —
+or `[verify FAILED: … exit 1 after 8s]` plus the last few output lines
+(≤ 400 bytes).
+
 ## What the supervisor sees (the terse-result contract)
 
 stdout is the ONLY thing that enters supervisor context. Two parts, ≤ ~250 tokens:

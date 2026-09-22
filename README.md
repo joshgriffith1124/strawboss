@@ -119,6 +119,12 @@ fast model on a workstation that comes and goes is safe to list.
 `examples/models.toml` has a worked pair; `docs/DELEGATION.md` has the
 routing rules.
 
+**Verify.** Put `verify = "go test ./..."` (or your build/lint/test
+command) in a `.strawboss.toml` at the project root and delegate runs it
+after workers finish: a worker whose check fails is reported failed and
+escalated with the failing lines, so the supervisor stops taking a small
+model's "done" on faith. `strawboss stats` shows how each model is doing.
+
 ### Working on a remote machine
 
 Run strawboss *on* the box that holds the code — not locally against it.

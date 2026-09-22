@@ -22,6 +22,7 @@ import (
 	"github.com/joshgriffith1124/strawboss/internal/repomap"
 	"github.com/joshgriffith1124/strawboss/internal/router"
 	"github.com/joshgriffith1124/strawboss/internal/runner"
+	"github.com/joshgriffith1124/strawboss/internal/verify"
 	"github.com/joshgriffith1124/strawboss/internal/worktree"
 )
 
@@ -91,6 +92,7 @@ func runDelegate(args []string, stdout io.Writer) error {
 	timeout := fs.Duration("timeout", 20*time.Minute, "abort workers after this long")
 	stateDir := fs.String("state-dir", "", "state directory (default ~/.strawboss)")
 	modelsPath := fs.String("models", "", "models.toml path (default <state-dir>/models.toml)")
+	verifyFlag := fs.String("verify", "", "check command run after each worker, overriding the project's "+verify.FileName+" verify; \"off\" skips the check")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -126,6 +128,10 @@ func runDelegate(args []string, stdout io.Writer) error {
 	models, err := config.LoadModels(*modelsPath)
 	if err != nil {
 		return err
+	}
+	check, err := verifySpec(*dir, *verifyFlag)
+	if err != nil {
+		return fmt.Errorf("delegate: %w", err)
 	}
 	routes, err := routeTasks(models, tasks, pins, *modelsPath, live.Available)
 	if err != nil {
@@ -196,6 +202,15 @@ func runDelegate(args []string, stdout io.Writer) error {
 		repoMap = repomap.Build(*dir, 0)
 	}
 
+	// Verify gate. Per worker when each worker has a directory to itself
+	// (a worktree, or the only task in the call): the check then judges
+	// exactly that worker's changes, and a failure escalates like any
+	// other. Parallel workers sharing one directory would each be judged
+	// on the others' half-finished edits, so there the check runs once,
+	// after all of them.
+	perWorker := check.Command != "" && (wts != nil || len(tasks) == 1)
+	batchCheck := check.Command != "" && !perWorker
+
 	outcomes := make([]runner.Outcome, len(tasks))
 	var wg sync.WaitGroup
 	for i, task := range tasks {
@@ -215,11 +230,31 @@ func runDelegate(args []string, stdout io.Writer) error {
 			continue
 		}
 		workerDir := *dir
-		var decorate func(*harness.Result)
+		var finalize func(*harness.Result)
 		if wts != nil {
 			workerDir = wts[i].path
 			wt := wts[i]
-			decorate = func(res *harness.Result) { finalizeWorktree(res, *dir, wt.path, wt.branch, task) }
+			finalize = func(res *harness.Result) { finalizeWorktree(res, *dir, wt.path, wt.branch, task) }
+		}
+		// verifyFail holds the excerpt of this task's last failed check, so
+		// an escalated attempt is told what broke instead of rediscovering
+		// it. Only this task's goroutine touches it.
+		verifyFail := ""
+		decorate := func(res *harness.Result) {
+			if perWorker && res.Status == harness.StatusDone {
+				r := verify.Run(ctx, workerDir, check)
+				res.Summary += "\n" + verifyNote(check, r)
+				if !r.OK {
+					res.Status = harness.StatusFailed
+					verifyFail = verify.Excerpt(r.Output, 12, 1500)
+					if verifyFail == "" { // a silent failure is still a failure to pass on
+						verifyFail = fmt.Sprintf("(the check printed nothing; exit code %d)", r.ExitCode)
+					}
+				}
+			}
+			if finalize != nil {
+				finalize(res) // commit after the check: the branch note must be last
+			}
 		}
 		wg.Add(1)
 		go func() {
@@ -246,8 +281,14 @@ func runDelegate(args []string, stdout io.Writer) error {
 				up := func(m config.ModelConfig) bool { ok, _ := live.Available(ctx, m); return ok }
 				if next, ok := router.Next(models, mc.Name, up); ok {
 					warn("escalating failed task to " + next.Name)
+					retryPrompt := prompt
+					if verifyFail != "" {
+						retryPrompt += "\n\nA previous attempt at this task left the project failing its check (`" +
+							check.Command + "`). Its changes are still in the working tree — fix them or redo the task so the check passes:\n" +
+							verifyFail
+					}
 					outcomes[i] = runEscalated(ctx, outcomes[i], next, mc.Name,
-						prompt, task, workerDir, *stateDir, reg, warn, decorate)
+						retryPrompt, task, workerDir, *stateDir, reg, warn, decorate)
 				}
 			}
 			// The routing note rides on the supervisor-facing summary only:
@@ -281,10 +322,62 @@ func runDelegate(args []string, stdout io.Writer) error {
 			failed++
 		}
 	}
+	// Shared-directory batch: one check over everyone's combined changes.
+	// It cannot say which worker broke it, so worker statuses stand and the
+	// call as a whole fails.
+	batchFailed := false
+	if batchCheck && failed < len(tasks) {
+		vctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		r := verify.Run(vctx, *dir, check)
+		cancel()
+		fmt.Fprintf(stdout, "%s (after all %d workers — it cannot tell which one broke it)\n",
+			verifyNote(check, r), len(tasks))
+		batchFailed = !r.OK
+	}
 	if failed > 0 {
 		return fmt.Errorf("%d of %d workers failed", failed, len(tasks))
 	}
+	if batchFailed {
+		return errors.New("verify check failed after the workers finished")
+	}
 	return nil
+}
+
+// verifySpec resolves the check for a call: --verify wins ("off" disables),
+// else the project's .strawboss.toml. A broken settings file is an error —
+// silently skipping the check would pass off unverified work as verified.
+func verifySpec(dir, flagValue string) (verify.Spec, error) {
+	switch flagValue {
+	case "off":
+		return verify.Spec{}, nil
+	case "":
+		return verify.Find(dir)
+	}
+	spec, err := verify.Find(dir)
+	if err != nil {
+		spec = verify.Spec{} // the flag replaces the file; its timeout is lost with it
+	}
+	spec.Command, spec.Source = flagValue, "--verify"
+	return spec, nil
+}
+
+// verifyNote is the one bracketed line the supervisor reads about a check,
+// plus the failing tail when it failed. The excerpt is small on purpose:
+// the terse-result budget is ~250 tokens per worker.
+func verifyNote(spec verify.Spec, r verify.Result) string {
+	d := r.Duration.Round(time.Second)
+	switch {
+	case r.OK:
+		return fmt.Sprintf("[verified: `%s` passed in %s]", spec.Command, d)
+	case r.TimedOut:
+		return fmt.Sprintf("[verify TIMED OUT after %s: `%s` — counted as failed]", d, spec.Command)
+	default:
+		note := fmt.Sprintf("[verify FAILED: `%s` exit %d after %s]", spec.Command, r.ExitCode, d)
+		if ex := verify.Excerpt(r.Output, 6, 400); ex != "" {
+			note += "\n" + ex
+		}
+		return note
+	}
 }
 
 // succeeded reports whether an outcome is a completed, non-failed worker.

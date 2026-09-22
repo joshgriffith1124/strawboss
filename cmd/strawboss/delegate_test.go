@@ -891,3 +891,171 @@ func TestRouteTasks(t *testing.T) {
 		t.Errorf("probes = %d, want 1 (memoized per model)", probes)
 	}
 }
+
+// TestDelegateVerifyPasses: a passing --verify check keeps the done status
+// and appends the verified note to the terse result.
+func TestDelegateVerifyPasses(t *testing.T) {
+	f := &fakeOpencode{mode: "done"}
+	_, args := setup(t, f)
+
+	var out strings.Builder
+	err := runDelegate(append(args, "--verify", "true", "--task", "build the thing"), &out)
+	if err != nil {
+		t.Fatalf("err = %v, out = %s", err, out.String())
+	}
+	got := out.String()
+	for _, want := range []string{"w1 done ", "[verified: `true` passed"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestDelegateVerifyFailsWorker: a failed check on a single-task run flips
+// the done worker to failed (per-worker judging), with the check's output
+// excerpted into the terse result and the registry.
+func TestDelegateVerifyFailsWorker(t *testing.T) {
+	f := &fakeOpencode{mode: "done"}
+	stateDir, args := setup(t, f)
+
+	var out strings.Builder
+	err := runDelegate(append(args, "--verify", "echo nope-from-check; exit 1",
+		"--escalate=false", "--task", "build the thing"), &out)
+	if err == nil {
+		t.Fatalf("want error, out = %s", out.String())
+	}
+	got := out.String()
+	for _, want := range []string{
+		"w1 failed ",
+		"[verify FAILED: `echo nope-from-check; exit 1` exit 1",
+		"nope-from-check",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output missing %q:\n%s", want, got)
+		}
+	}
+	events, _ := (&registry.Registry{Path: filepath.Join(stateDir, "workers.jsonl")}).Load()
+	workers := registry.Reduce(events)
+	if len(workers) != 1 || workers[0].Status != "failed" {
+		t.Errorf("workers = %+v", workers)
+	}
+}
+
+// TestDelegateVerifyEscalates: a check that fails the first time and passes
+// the second drives cheap→strong escalation; the escalated worker is told
+// that a previous attempt left the project failing its check.
+func TestDelegateVerifyEscalates(t *testing.T) {
+	cheap := &fakeOpencode{mode: "done"}
+	strong := &fakeOpencode{mode: "done"}
+	srvCheap := httptest.NewServer(cheap.handler())
+	srvStrong := httptest.NewServer(strong.handler())
+	t.Cleanup(srvCheap.Close)
+	t.Cleanup(srvStrong.Close)
+	stateDir := t.TempDir()
+	toml := "[models.cheap]\nendpoint = \"" + srvCheap.URL + "\"\nmodel = \"p/cheap\"\n" +
+		"[models.strong]\nendpoint = \"" + srvStrong.URL + "\"\nmodel = \"p/strong\"\n"
+	if err := os.WriteFile(filepath.Join(stateDir, "models.toml"), []byte(toml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Fails while .count is 0 (first run), passes once it is 1: the
+	// counter file lives in --dir, which is where the check runs.
+	dir := t.TempDir()
+	check := "n=$(cat .count 2>/dev/null || echo 0); echo $((n+1)) > .count; [ \"$n\" -ge 1 ]"
+	args := []string{"--state-dir", stateDir, "--dir", dir, "--model", "cheap",
+		"--verify", check, "--task", "fix the thing"}
+
+	var out strings.Builder
+	if err := runDelegate(args, &out); err != nil {
+		t.Fatalf("err = %v, out = %s", err, out.String())
+	}
+	got := out.String()
+	for _, want := range []string{"escalated from cheap", "[verified:"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output missing %q:\n%s", want, got)
+		}
+	}
+	body, _ := strong.lastPrompt.Load().(string)
+	if !strings.Contains(body, "failing its check") {
+		t.Errorf("escalated prompt missing the verify-failure context: %q", body)
+	}
+}
+
+// TestDelegateVerifyFromProjectFile: with no --verify flag the project's
+// .strawboss.toml supplies the check; --verify off disables it entirely.
+func TestDelegateVerifyFromProjectFile(t *testing.T) {
+	f := &fakeOpencode{mode: "done"}
+	_, args := setup(t, f)
+	dir := t.TempDir()
+	for i, a := range args {
+		if a == "--dir" {
+			args[i+1] = dir
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".strawboss.toml"), []byte("verify = \"exit 1\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var out strings.Builder
+	err := runDelegate(append(args, "--escalate=false", "--task", "build the thing"), &out)
+	if err == nil {
+		t.Fatalf("want error, out = %s", out.String())
+	}
+	if !strings.Contains(out.String(), "[verify FAILED: `exit 1`") {
+		t.Errorf("output = %q", out.String())
+	}
+
+	// --verify off skips the project file's check.
+	out.Reset()
+	if err := runDelegate(append(args, "--verify", "off", "--escalate=false", "--task", "build it again"), &out); err != nil {
+		t.Fatalf("verify off: err = %v, out = %s", err, out.String())
+	}
+	if strings.Contains(out.String(), "verify") {
+		t.Errorf("verify off still mentioned the check: %q", out.String())
+	}
+}
+
+// TestDelegateVerifyBatch: parallel tasks share one directory, so the check
+// runs once after all of them; a failure cannot blame a worker, so their
+// statuses stand and the call as a whole fails.
+func TestDelegateVerifyBatch(t *testing.T) {
+	f := &fakeOpencode{mode: "done"}
+	_, args := setup(t, f)
+
+	var out strings.Builder
+	err := runDelegate(append(args, "--verify", "exit 1",
+		"--task", "task alpha", "--task", "task beta"), &out)
+	if err == nil {
+		t.Fatalf("want error, out = %s", out.String())
+	}
+	got := out.String()
+	for _, want := range []string{"w1 done", "w2 done", "after all 2 workers"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestDelegateVerifyBadProjectFile: a broken .strawboss.toml is an error
+// before anything spawns — silently skipping the check would pass off
+// unverified work as verified.
+func TestDelegateVerifyBadProjectFile(t *testing.T) {
+	f := &fakeOpencode{mode: "done"}
+	_, args := setup(t, f)
+	dir := t.TempDir()
+	for i, a := range args {
+		if a == "--dir" {
+			args[i+1] = dir
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".strawboss.toml"), []byte("bogus = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	err := runDelegate(append(args, "--task", "build the thing"), &out)
+	if err == nil || !strings.Contains(err.Error(), "unknown key") {
+		t.Fatalf("err = %v, out = %s", err, out.String())
+	}
+	if n := f.created.Load(); n != 0 {
+		t.Errorf("sessions created = %d, want 0", n)
+	}
+}

@@ -440,7 +440,12 @@ func TestSidePanelEconomyAndModels(t *testing.T) {
 	if !strings.Contains(models, "not loaded") || !strings.Contains(models, "deepseek-dsh") {
 		t.Errorf("not-loaded model hidden:\n%s", models)
 	}
-	if !strings.Contains(models, "qwen-coder, qwen-dsh") {
+	// qwen-dsh finished a worker this run, so it keeps its own row with
+	// its track record; qwen-coder has none and folds into the idle line.
+	if !strings.Contains(models, "ok 1/1") || strings.Contains(models, "qwen-coder, qwen-dsh") {
+		t.Errorf("idle model with a track record folded away:\n%s", models)
+	}
+	if !strings.Contains(models, "qwen-coder") {
 		t.Errorf("idle models not named:\n%s", models)
 	}
 
@@ -449,6 +454,35 @@ func TestSidePanelEconomyAndModels(t *testing.T) {
 	models = m.viewModelsPanel(38)
 	if !strings.Contains(models, "3 models") && !strings.Contains(models, "deepseek-dsh") {
 		t.Errorf("all-idle line missing:\n%s", models)
+	}
+}
+
+func TestModelsPanelShowsSuccess(t *testing.T) {
+	m := New(make(chan tea.Msg))
+	m = apply(t, m,
+		tea.WindowSizeMsg{Width: 120, Height: 40},
+		// "fast" has finished workers this run; "slow" has none. (An idle
+		// "fast" would show the count too — its own row, not the idle line.)
+		ModelStatMsg{Name: "fast", Active: 1, Note: "vllm"},
+		ModelStatMsg{Name: "slow", Active: 1, Note: "vllm"},
+		WorkerUpsertMsg{ID: "w1", Model: "fast", Task: "a", Status: "done"},
+		WorkerUpsertMsg{ID: "w2", Model: "fast", Task: "b", Status: "done"},
+		WorkerUpsertMsg{ID: "w3", Model: "fast", Task: "c", Status: "failed"},
+		WorkerUpsertMsg{ID: "w4", Model: "fast", Task: "d", Status: "running"},
+		WorkerUpsertMsg{ID: "w5", Model: "slow", Task: "e", Status: "running"},
+	)
+	models := m.viewModelsPanel(38)
+	if !strings.Contains(models, "ok 2/3") {
+		t.Errorf("success count missing on fast row:\n%s", models)
+	}
+	// A model with no finished workers must not show the "ok " tag.
+	for _, line := range strings.Split(models, "\n") {
+		if strings.Contains(line, "slow") && strings.Contains(line, "ok ") {
+			t.Errorf("slow row shows a success tag:\n%s", line)
+		}
+	}
+	if n := strings.Count(models, " · ok "); n != 1 {
+		t.Errorf("expected exactly one success tag, got %d:\n%s", n, models)
 	}
 }
 

@@ -37,7 +37,7 @@ tested at the end (same rule as milestones). Struck items are done.
     delegate re-reads it per call; the gap crashed the TUI on 2026-09-21
     (NOTES.md "The crash it caused"). Watch the file and swap the model
     set safely so the Models pane and the supervisor's view follow edits.
-15. **Model scorecard** — `strawboss stats`: success rate, escalation
+15. ~~Model scorecard~~ — `strawboss stats`: success rate, escalation
     rate and median time per model and per auto-score band, from
     workers.jsonl; the same figures in the Models pane. The data item
     10's weight tuning needs.

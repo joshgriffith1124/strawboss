@@ -1185,3 +1185,22 @@ and delegate already routes and checks availability on its own, so a
 stale roster only means the supervisor won't name a new model by hand
 until then (`--model auto` reaches it at once). A `system_prompt`
 override in config.toml is never regenerated.
+
+### Model scorecard (2026-09-22)
+
+`strawboss stats [--run id] [--since 72h]` rolls workers.jsonl up per
+model: tasks, done, failed, OK%, median time of done workers, and
+RESCUED — failures on that model whose identical task, later in the same
+run, finished done on a different model (escalation paying off). A second
+table cross-tabs success by auto-score band. The band is recomputed from
+the task text with `router.Score`, which is deterministic, so history from
+before routing existed scores too and nothing new is recorded; the flip
+side is that retuning the weights re-bands old tasks, which is what you
+want when judging new weights against old outcomes.
+
+Reading it: a low OK% for the tier-1 model in a band means auto-routing
+sends that weight too low (raise the weights that fire there, or narrow
+the tier's description); a tier-1 model with many RESCUED and few DONE
+is burning a round trip per task. The Models pane shows the same figure
+per model for the current run ("ok 7/9"); an idle model with a track
+record keeps its own row instead of folding into the idle line.

@@ -394,6 +394,24 @@ func (m Model) viewModelsPanel(w int) string {
 	var lines []string
 	var idleNames []string
 	for _, ms := range m.models {
+		// This run's finished workers on the model (done/failed; running
+		// and queued don't count yet). Shown dim, tacked on after the
+		// stat — the row's quiet channel for anything secondary. A track
+		// record is something to say, so an idle model with one keeps its
+		// own row instead of folding into the idle line.
+		doneN, finN := 0, 0
+		for _, wk := range m.workers {
+			if wk.Model != ms.Name {
+				continue
+			}
+			switch wk.Status {
+			case "done":
+				doneN++
+				finN++
+			case "failed":
+				finN++
+			}
+		}
 		val := sFaint.Render("idle")
 		switch {
 		case ms.Note == "endpoint unreachable":
@@ -409,9 +427,12 @@ func (m Model) viewModelsPanel(w int) string {
 			if ms.Active > 0 {
 				val = sTealB.Render(fmt.Sprintf("%d▶ ", ms.Active)) + val
 			}
-		default:
+		case finN == 0:
 			idleNames = append(idleNames, ms.Name)
 			continue
+		}
+		if finN > 0 {
+			val += sDim.Render(fmt.Sprintf(" · ok %d/%d", doneN, finN))
 		}
 		lines = append(lines, kv(w, truncPlain(ms.Name, w-16), val))
 	}

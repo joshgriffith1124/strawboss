@@ -20,6 +20,27 @@ func Resolve(models []config.ModelConfig, want config.ModelConfig, avail func(co
 	return want, false
 }
 
+// PreferFree re-routes a saturated pick to the first available same-tier
+// model with a free slot, instead of letting the task queue on a model whose
+// slots are all busy. got is returned unchanged when it still has a free
+// slot (or free is nil), when the list is untiered, or when no sibling is
+// both available and free — the task then queues on got as before.
+func PreferFree(models []config.ModelConfig, got config.ModelConfig,
+	avail func(config.ModelConfig) bool, free func(config.ModelConfig) bool) config.ModelConfig {
+	if free == nil || free(got) {
+		return got
+	}
+	if !config.Tiered(models) {
+		return got
+	}
+	for _, m := range models {
+		if m.Name != got.Name && m.Tier == got.Tier && available(avail, m) && free(m) {
+			return m
+		}
+	}
+	return got
+}
+
 // Next returns the model a task that FAILED on cur escalates to, skipping
 // unavailable models. ok is false when there is nowhere to go: a same-tier
 // retry would hit the same capability wall, and an untiered list has nothing

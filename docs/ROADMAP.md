@@ -62,10 +62,11 @@ tested at the end (same rule as milestones). Struck items are done.
     refs/strawboss/, which touches nothing) and add a TUI key on the
     worker row that restores it — refusing if later workers changed the
     same files.
-22. **Route to a free slot** — a model at its `max_concurrent` cap
-    queues new work even when a same-tier sibling is idle. Resolve should
-    prefer an available sibling with a free slot (slots.Busy) before
-    queueing on a saturated pick.
+22. ~~Route to a free slot~~ — a model at its `max_concurrent` cap
+    queued new work even when a same-tier sibling was idle; routeTasks now
+    hands the task to an available same-tier sibling with a free slot
+    (router.PreferFree, counting slots.Busy plus this call's own tasks)
+    before queueing on a saturated pick.
 18. **Model-neutral repo** — the code already works with any number of
     models (everything reads models.toml), but examples, tests, fixtures,
     the mockup, the replay demo and NOTES name one setup (qwen-coder,

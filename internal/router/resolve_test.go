@@ -21,6 +21,16 @@ func model(name string, tier int) config.ModelConfig {
 	return config.ModelConfig{Name: name, Tier: tier}
 }
 
+// freeNames builds a has-a-free-slot check from the set of model names that
+// have one; everything else counts as saturated.
+func freeNames(names ...string) func(config.ModelConfig) bool {
+	free := make(map[string]bool, len(names))
+	for _, n := range names {
+		free[n] = true
+	}
+	return func(m config.ModelConfig) bool { return free[m.Name] }
+}
+
 func TestResolve(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -118,6 +128,73 @@ func TestResolve(t *testing.T) {
 			}
 			if ok != tc.ok {
 				t.Errorf("Resolve ok = %v, want %v", ok, tc.ok)
+			}
+		})
+	}
+}
+
+func TestPreferFree(t *testing.T) {
+	cases := []struct {
+		name     string
+		models   []config.ModelConfig
+		got      config.ModelConfig
+		avail    func(config.ModelConfig) bool
+		free     func(config.ModelConfig) bool
+		wantName string
+	}{
+		{
+			name:     "saturated pick with a free sibling switches",
+			models:   []config.ModelConfig{model("spark-a", 2), model("spark-b", 2)},
+			got:      model("spark-a", 2),
+			avail:    down(),
+			free:     freeNames("spark-b"),
+			wantName: "spark-b",
+		},
+		{
+			name:     "no free sibling keeps got",
+			models:   []config.ModelConfig{model("spark-a", 2), model("spark-b", 2)},
+			got:      model("spark-a", 2),
+			avail:    down(),
+			free:     freeNames(),
+			wantName: "spark-a",
+		},
+		{
+			name:     "a free model on a different tier is never chosen",
+			models:   []config.ModelConfig{model("fast", 1), model("spark-a", 2)},
+			got:      model("spark-a", 2),
+			avail:    down(),
+			free:     freeNames("fast"),
+			wantName: "spark-a",
+		},
+		{
+			name:     "an unavailable sibling is skipped",
+			models:   []config.ModelConfig{model("spark-a", 2), model("spark-b", 2), model("spark-c", 2)},
+			got:      model("spark-a", 2),
+			avail:    down("spark-b"),
+			free:     freeNames("spark-b", "spark-c"),
+			wantName: "spark-c",
+		},
+		{
+			name:     "nil free returns got",
+			models:   []config.ModelConfig{model("spark-a", 2), model("spark-b", 2)},
+			got:      model("spark-a", 2),
+			avail:    down(),
+			free:     nil,
+			wantName: "spark-a",
+		},
+		{
+			name:     "untiered list returns got",
+			models:   []config.ModelConfig{model("a", 0), model("b", 0)},
+			got:      model("a", 0),
+			avail:    down(),
+			free:     freeNames("b"),
+			wantName: "a",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := PreferFree(tc.models, tc.got, tc.avail, tc.free); got.Name != tc.wantName {
+				t.Errorf("PreferFree name = %q, want %q", got.Name, tc.wantName)
 			}
 		})
 	}

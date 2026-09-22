@@ -860,7 +860,7 @@ func TestRouteTasks(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			routes, err := routeTasks(models, []string{tt.task}, tt.pins, "models.toml", availFn(tt.down...))
+			routes, err := routeTasks(models, []string{tt.task}, tt.pins, "models.toml", availFn(tt.down...), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -876,7 +876,7 @@ func TestRouteTasks(t *testing.T) {
 		})
 	}
 
-	if _, err := routeTasks(models, []string{light}, []modelPin{{"nope", 0}}, "models.toml", availFn()); err == nil ||
+	if _, err := routeTasks(models, []string{light}, []modelPin{{"nope", 0}}, "models.toml", availFn(), nil); err == nil ||
 		!strings.Contains(err.Error(), `no model "nope"`) {
 		t.Errorf("unknown model: err = %v", err)
 	}
@@ -884,12 +884,62 @@ func TestRouteTasks(t *testing.T) {
 	// Each model is probed at most once per call, however many tasks.
 	probes := 0
 	counting := func(context.Context, config.ModelConfig) (bool, string) { probes++; return true, "" }
-	if _, err := routeTasks(models, []string{light, light, light}, nil, "models.toml", counting); err != nil {
+	if _, err := routeTasks(models, []string{light, light, light}, nil, "models.toml", counting, nil); err != nil {
 		t.Fatal(err)
 	}
 	if probes != 1 {
 		t.Errorf("probes = %d, want 1 (memoized per model)", probes)
 	}
+}
+
+// TestRouteTasksFreeSlot: a pick at its max_concurrent cap routes to the
+// first free same-tier sibling instead of queueing; tasks inside the same
+// call count against the cap too.
+func TestRouteTasksFreeSlot(t *testing.T) {
+	availFn := func(_ context.Context, mc config.ModelConfig) (bool, string) { return true, "" }
+
+	t.Run("saturated pinned model routes to a free sibling", func(t *testing.T) {
+		models := []config.ModelConfig{
+			{Name: "a", Tier: 1, MaxConcurrent: 1},
+			{Name: "b", Tier: 1},
+		}
+		busy := func(m config.ModelConfig) int {
+			if m.Name == "a" {
+				return 1
+			}
+			return 0
+		}
+		routes, err := routeTasks(models, []string{"task"}, []modelPin{{"a", 0}}, "models.toml", availFn, busy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if routes[0].mc.Name != "b" {
+			t.Errorf("model = %q, want b", routes[0].mc.Name)
+		}
+		if !strings.Contains(routes[0].note, "slots full") {
+			t.Errorf("note = %q, want it containing slots full", routes[0].note)
+		}
+	})
+
+	t.Run("tasks in the same call count against the cap", func(t *testing.T) {
+		models := []config.ModelConfig{
+			{Name: "a", Tier: 1, MaxConcurrent: 2},
+			{Name: "b", Tier: 1},
+		}
+		routes, err := routeTasks(models, []string{"t1", "t2", "t3"}, []modelPin{{"a", 0}}, "models.toml", availFn, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if routes[0].mc.Name != "a" || routes[1].mc.Name != "a" {
+			t.Errorf("first two = %q, %q, want a, a", routes[0].mc.Name, routes[1].mc.Name)
+		}
+		if routes[2].mc.Name != "b" {
+			t.Errorf("third = %q, want b", routes[2].mc.Name)
+		}
+		if !strings.Contains(routes[2].note, "slots full") {
+			t.Errorf("third note = %q, want it containing slots full", routes[2].note)
+		}
+	})
 }
 
 // TestDelegateVerifyPasses: a passing --verify check keeps the done status

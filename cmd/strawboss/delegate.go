@@ -22,6 +22,7 @@ import (
 	"github.com/joshgriffith1124/strawboss/internal/repomap"
 	"github.com/joshgriffith1124/strawboss/internal/router"
 	"github.com/joshgriffith1124/strawboss/internal/runner"
+	"github.com/joshgriffith1124/strawboss/internal/slots"
 	"github.com/joshgriffith1124/strawboss/internal/verify"
 	"github.com/joshgriffith1124/strawboss/internal/worktree"
 )
@@ -133,7 +134,10 @@ func runDelegate(args []string, stdout io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("delegate: %w", err)
 	}
-	routes, err := routeTasks(models, tasks, pins, *modelsPath, live.Available)
+	routes, err := routeTasks(models, tasks, pins, *modelsPath, live.Available,
+		func(m config.ModelConfig) int {
+			return slots.Busy(filepath.Join(*stateDir, "slots"), m.Name, m.MaxConcurrent)
+		})
 	if err != nil {
 		return err
 	}
@@ -402,11 +406,15 @@ type route struct {
 // task wants the model it names; an auto task wants whatever tier its
 // weight maps to (router.Pick). Either way the want is then resolved
 // against availability, so a task aimed at a model that is down or not
-// loaded runs on the nearest live one instead of failing on arrival. Each
-// model is probed at most once per call. When nothing is available the
-// task keeps its want and surfaces the real error.
+// loaded runs on the nearest live one instead of failing on arrival. When
+// the pick is at its max_concurrent cap, a free same-tier sibling takes the
+// task instead of making it queue. Each model is probed at most once per
+// call. When nothing is available the task keeps its want and surfaces the
+// real error. busy reports, per model, how many of its slots are held by
+// other processes (nil counts zero).
 func routeTasks(models []config.ModelConfig, tasks []string, pins []modelPin, modelsPath string,
-	available func(context.Context, config.ModelConfig) (bool, string)) ([]route, error) {
+	available func(context.Context, config.ModelConfig) (bool, string),
+	busy func(config.ModelConfig) int) ([]route, error) {
 	type probe struct {
 		ok  bool
 		why string
@@ -419,6 +427,21 @@ func routeTasks(models []config.ModelConfig, tasks []string, pins []modelPin, mo
 			probes[mc.Name] = p
 		}
 		return p
+	}
+	availFn := func(m config.ModelConfig) bool { return check(m).ok }
+
+	// planned counts the tasks THIS call already routed to each model, so
+	// the cap applies to them too (busy covers other processes only).
+	planned := map[string]int{}
+	free := func(m config.ModelConfig) bool {
+		if m.MaxConcurrent <= 0 {
+			return true
+		}
+		b := 0
+		if busy != nil {
+			b = busy(m)
+		}
+		return b+planned[m.Name] < m.MaxConcurrent
 	}
 
 	routes := make([]route, len(tasks))
@@ -445,10 +468,17 @@ func routeTasks(models []config.ModelConfig, tasks []string, pins []modelPin, mo
 				return nil, fmt.Errorf("delegate: no model %q in %s", name, modelsPath)
 			}
 		}
-		got, ok := router.Resolve(models, want, func(m config.ModelConfig) bool { return check(m).ok })
+		got, ok := router.Resolve(models, want, availFn)
 		if ok && got.Name != want.Name {
 			note = "[" + want.Name + " unavailable (" + check(want).why + "); ran on " + got.Name + "]"
 		}
+		if ok {
+			if alt := router.PreferFree(models, got, availFn, free); alt.Name != got.Name {
+				note = "[" + got.Name + " slots full; ran on " + alt.Name + "]"
+				got = alt
+			}
+		}
+		planned[got.Name]++
 		routes[i] = route{mc: got, note: note}
 	}
 	return routes, nil

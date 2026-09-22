@@ -101,6 +101,20 @@ func supervisorAllowedTools(exe string, extra []string) []string {
 		// names and counts, which is why they stay.
 		"Bash(ls:*)", "Bash(wc:*)", "Bash(find:*)",
 		"Bash(git status:*)", "Bash(git log:*)", "Bash(git diff:*)", "Bash(git show:*)",
+		// Bounded writes whose output is a line or two. Without them the
+		// supervisor had to delegate an LLM worker for a one-line commit —
+		// ~300-600 supervisor tokens and 10-30s for what costs ~50 tokens
+		// direct (docs/NOTES.md). Nothing here rewrites history, discards
+		// work or leaves the machine: reset, checkout of paths, clean and
+		// push stay denied.
+		"Bash(git add:*)", "Bash(git commit:*)",
+		"Bash(git switch -c:*)", "Bash(git checkout -b:*)",
+		// strawboss's own read-only answers: short by construction, so the
+		// supervisor asks them instead of delegating a worker to find out.
+		fmt.Sprintf("Bash(%s stats:*)", exe),
+		fmt.Sprintf("Bash(%s costs:*)", exe),
+		fmt.Sprintf("Bash(%s models:*)", exe),
+		fmt.Sprintf("Bash(%s check:*)", exe),
 	}
 	return append(base, extra...)
 }

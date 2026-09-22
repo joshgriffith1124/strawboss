@@ -76,6 +76,28 @@ func TryAcquire(dir, name string, max int) (release func(), ok bool, err error) 
 	return nil, false, nil
 }
 
+// Busy counts how many of name's max slots are held right now, by probing
+// each with a non-blocking lock it releases at once. A snapshot for
+// display only: it can be stale the moment it returns. max <= 0 is 0.
+func Busy(dir, name string, max int) int {
+	busy := 0
+	for i := 0; i < max; i++ {
+		f, err := os.OpenFile(slotPath(dir, name, i), os.O_RDWR, 0)
+		if err != nil {
+			continue // never created: never held
+		}
+		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+			if errors.Is(err, syscall.EWOULDBLOCK) {
+				busy++
+			}
+		} else {
+			_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		}
+		f.Close()
+	}
+	return busy
+}
+
 // Acquire waits for a free slot, polling every PollEvery, until ctx is done
 // (then it returns ctx's error wrapped with context). max <= 0 as above.
 func Acquire(ctx context.Context, dir, name string, max int) (release func(), err error) {

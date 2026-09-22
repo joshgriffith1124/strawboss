@@ -50,15 +50,22 @@ func TestSupervisorAllowedToolsCoversRealDenials(t *testing.T) {
 		"WebFetch", "WebSearch", // 100% denied
 		"Bash(ls:*)", "Bash(wc:*)", "Bash(find:*)",
 		"Bash(git status:*)", "Bash(git log:*)", "Bash(git diff:*)", "Bash(git show:*)",
+		// One-line jobs the supervisor used to pay a worker round trip for.
+		"Bash(git add:*)", "Bash(git commit:*)", "Bash(git switch -c:*)", "Bash(git checkout -b:*)",
+		"Bash(/opt/strawboss stats:*)", "Bash(/opt/strawboss costs:*)",
+		"Bash(/opt/strawboss models:*)", "Bash(/opt/strawboss check:*)",
 	} {
 		if !have[want] {
 			t.Errorf("allowlist missing %q", want)
 		}
 	}
-	// Nothing that writes, executes arbitrary code, or reads file content
-	// past Read's path deny rules got in with them.
+	// Nothing that executes arbitrary code, discards or rewrites work,
+	// leaves the machine, or reads file content past Read's path deny rules
+	// got in with them. The git writes above only add history.
 	for _, unwanted := range []string{"Bash", "Bash(:*)", "Bash(python3:*)", "Bash(rm:*)",
-		"Bash(git push:*)", "Bash(cat:*)", "Bash(head:*)", "Bash(tail:*)"} {
+		"Bash(git push:*)", "Bash(git reset:*)", "Bash(git checkout:*)", "Bash(git clean:*)",
+		"Bash(git rebase:*)", "Bash(git:*)", "Bash(/opt/strawboss:*)",
+		"Bash(cat:*)", "Bash(head:*)", "Bash(tail:*)"} {
 		if have[unwanted] {
 			t.Errorf("allowlist unexpectedly contains %q", unwanted)
 		}

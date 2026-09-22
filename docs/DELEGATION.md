@@ -76,6 +76,13 @@ verify_timeout = "10m"   # optional, default 5m
   otherwise be judged on the others' half-finished edits. It can't say which
   worker broke the build, so statuses stand and the call exits non-zero.
 
+A task that changed nothing (the git tree — HEAD, tracked changes, untracked
+files — matches its state before the task) skips the check silently: a
+read-only "report X" task shouldn't pay for a test suite. Outside a git tree
+the check always runs.
+
+The supervisor can also run the check itself with `strawboss check`.
+
 The supervisor reads one line — `[verified: `go test ./...` passed in 12s]` —
 or `[verify FAILED: … exit 1 after 8s]` plus the last few output lines
 (≤ 400 bytes).

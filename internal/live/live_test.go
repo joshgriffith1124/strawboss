@@ -279,7 +279,11 @@ func TestBuildSystemPrompt(t *testing.T) {
 		"repository map", "retries the task ONCE",
 		// The log path is the human's; reading it is the invariant-3 leak
 		// the deny rule closes, so the prompt must say so.
-		"Never read it yourself"} {
+		"Never read it yourself",
+		// Delegation costs the supervisor tokens and time; one-command jobs
+		// and short edits are its own, and its own commands are named.
+		"Delegation is not free", "Never delegate \"run X and report",
+		"git commit", "/usr/local/bin/strawboss models", "/usr/local/bin/strawboss check"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("prompt missing %q", want)
 		}

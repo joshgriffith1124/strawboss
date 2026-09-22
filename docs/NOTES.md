@@ -1251,3 +1251,37 @@ print last, so the tail is kept). A broken `.strawboss.toml` fails the
 call loudly rather than skipping the check, which would present
 unverified work as verified. Not covered: TUI retries (`r`/`R`) do not
 run the check yet.
+
+### Delegating what it could do itself (2026-09-22)
+
+Josh noticed the supervisor delegating jobs that would cost fewer tokens
+done directly. The history agreed: of the last 150 workers, 10 were
+trivial (under 60 words, done in under 30s, median 9s) — 9 "run X and
+report" and 2 one-line commits. Not bad judgment so much as no choice:
+the allowlist was read-only, so a `git commit`, a `strawboss stats` or an
+endpoint probe could only happen through an LLM worker — ~300–600
+supervisor tokens (task text is output tokens) and 10–30s against ~50
+tokens direct. The prompt also promised cat/head, which were never on the
+allowlist, so trying them burned a denied turn.
+
+Fixed on both sides:
+- **Allowlist**: `git add`, `git commit`, `git switch -c`, `git checkout
+  -b`, and strawboss's own short-answer commands (`stats`, `costs`, and
+  the new `models` and `check`). Only history-adding git writes; reset,
+  path checkout, clean, rebase and push stay denied (tested).
+- **`strawboss models`**: each model's tier, up/DOWN with the reason, and
+  busy slots, probed concurrently — the supervisor's replacement for
+  curl'ing endpoints. **`strawboss check`**: the project's verify command
+  with the same one-line verdict and failing tail delegate uses.
+- **Prompt**: an explicit cost rule — delegation is output tokens plus a
+  result plus 10–60s; do one-command jobs and edits shorter than their
+  description yourself; never delegate "run X and report" for a command
+  you can run. The Bash list now matches the allowlist exactly.
+- **Verify skip**: the same audit showed `make test` running after a
+  read-only report once this repo got a `.strawboss.toml`. delegate now
+  fingerprints the tree (HEAD, `git diff HEAD`, untracked names with
+  size+mtime; `verify.Fingerprint`) before a task and skips the check when
+  it is unchanged after.
+
+Reads under the state dir stay denied: that rule is invariant 3, and a
+crash-log investigation is a fair thing to delegate.

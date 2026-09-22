@@ -941,6 +941,42 @@ func TestDelegateVerifyFailsWorker(t *testing.T) {
 	}
 }
 
+// TestDelegateVerifySkippedWhenUnchanged: the check judges the tree the
+// worker left behind — if the worker changed nothing (read-only task),
+// running the project's check is pure waste. Fingerprint unchanged means
+// the check is skipped entirely: the done status stands and the terse
+// result never mentions the check, even when it would have failed.
+func TestDelegateVerifySkippedWhenUnchanged(t *testing.T) {
+	f := &fakeOpencode{mode: "done"}
+	stateDir, args := setup(t, f)
+	repo := gitRepoDir(t)
+	// setup's --dir is args[3]; override with the git repo.
+	for i, a := range args {
+		if a == "--dir" {
+			args[i+1] = repo
+		}
+	}
+
+	var out strings.Builder
+	err := runDelegate(append(args, "--verify", "exit 1",
+		"--escalate=false", "--task", "read the code and report"), &out)
+	if err != nil {
+		t.Fatalf("err = %v, out = %s", err, out.String())
+	}
+	got := out.String()
+	if !strings.Contains(got, "w1 done ") {
+		t.Errorf("output = %q", got)
+	}
+	if strings.Contains(got, "verify") {
+		t.Errorf("output mentions the skipped check: %q", got)
+	}
+	events, _ := (&registry.Registry{Path: filepath.Join(stateDir, "workers.jsonl")}).Load()
+	workers := registry.Reduce(events)
+	if len(workers) != 1 || workers[0].Status != "done" {
+		t.Errorf("workers = %+v", workers)
+	}
+}
+
 // TestDelegateVerifyEscalates: a check that fails the first time and passes
 // the second drives cheap→strong escalation; the escalated worker is told
 // that a previous attempt left the project failing its check.

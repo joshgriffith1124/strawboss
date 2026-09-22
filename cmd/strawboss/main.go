@@ -39,6 +39,10 @@ func main() {
 		err = runCosts(args, os.Stdout)
 	case "stats":
 		err = runStats(args, os.Stdout)
+	case "models":
+		err = runModels(args, os.Stdout)
+	case "check":
+		err = runCheck(args, os.Stdout)
 	case "version":
 		fmt.Println("strawboss", version)
 	case "-h", "--help", "help":
@@ -62,6 +66,8 @@ func usage(w *os.File) {
   clean      retention sweep: old logs/sessions, merged worktrees
   costs      per-run worker token/time summary from the JSONL history
   stats      per-model success rate and routing scorecard from the JSONL history
+  models     each model's tier, availability and busy slots right now
+  check      run the project's verify command; one line plus a short failing tail
   version    print version
 `)
 }

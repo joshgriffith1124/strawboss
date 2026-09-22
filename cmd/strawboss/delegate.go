@@ -210,6 +210,10 @@ func runDelegate(args []string, stdout io.Writer) error {
 	// after all of them.
 	perWorker := check.Command != "" && (wts != nil || len(tasks) == 1)
 	batchCheck := check.Command != "" && !perWorker
+	batchBase, haveBatchBase := "", false
+	if batchCheck {
+		batchBase, haveBatchBase = verify.Fingerprint(*dir)
+	}
 
 	outcomes := make([]runner.Outcome, len(tasks))
 	var wg sync.WaitGroup
@@ -240,8 +244,25 @@ func runDelegate(args []string, stdout io.Writer) error {
 		// an escalated attempt is told what broke instead of rediscovering
 		// it. Only this task's goroutine touches it.
 		verifyFail := ""
+		// Baseline for "did this task change anything": a worker that only
+		// read or reported leaves the tree as it found it, and running the
+		// project's check after it is minutes of pure waste. Taken before
+		// the first attempt, so an escalated attempt is still checked when
+		// the first one left changes behind. No baseline (not a git tree)
+		// means always check.
+		baseline, haveBaseline := "", false
+		if perWorker {
+			baseline, haveBaseline = verify.Fingerprint(workerDir)
+		}
+		unchanged := func() bool {
+			if !haveBaseline {
+				return false
+			}
+			now, ok := verify.Fingerprint(workerDir)
+			return ok && now == baseline
+		}
 		decorate := func(res *harness.Result) {
-			if perWorker && res.Status == harness.StatusDone {
+			if perWorker && res.Status == harness.StatusDone && !unchanged() {
 				r := verify.Run(ctx, workerDir, check)
 				res.Summary += "\n" + verifyNote(check, r)
 				if !r.OK {
@@ -326,6 +347,11 @@ func runDelegate(args []string, stdout io.Writer) error {
 	// It cannot say which worker broke it, so worker statuses stand and the
 	// call as a whole fails.
 	batchFailed := false
+	if haveBatchBase {
+		if now, ok := verify.Fingerprint(*dir); ok && now == batchBase {
+			batchCheck = false // nobody changed anything: nothing to check
+		}
+	}
 	if batchCheck && failed < len(tasks) {
 		vctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		r := verify.Run(vctx, *dir, check)

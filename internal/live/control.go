@@ -6,7 +6,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/joshgriffith1124/strawboss/internal/config"
 	"github.com/joshgriffith1124/strawboss/internal/registry"
 	"github.com/joshgriffith1124/strawboss/internal/repomap"
 	"github.com/joshgriffith1124/strawboss/internal/runner"
@@ -88,14 +87,7 @@ func (o *Orchestrator) OnRetryWorker(id string) {
 		o.emitAsync(ui.ToastMsg{Text: "retry " + id + ": no task on record"})
 		return
 	}
-	var mc config.ModelConfig
-	found := false
-	for _, m := range o.Models {
-		if m.Name == model {
-			mc, found = m, true
-			break
-		}
-	}
+	mc, found := o.modelConfig(model)
 	if !found {
 		o.emitAsync(ui.ToastMsg{Text: "retry " + id + ": no model config " + model})
 		return

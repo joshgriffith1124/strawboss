@@ -177,10 +177,8 @@ func (o *Orchestrator) tailDshWorker(ctx context.Context, wid, session string) {
 
 // clientFor returns an API client for a worker's model config.
 func (o *Orchestrator) clientFor(model string) *opencode.Client {
-	for _, mc := range o.Models {
-		if mc.Name == model {
-			return &opencode.Client{Base: strings.TrimRight(mc.Endpoint, "/")}
-		}
+	if mc, ok := o.modelConfig(model); ok {
+		return &opencode.Client{Base: strings.TrimRight(mc.Endpoint, "/")}
 	}
 	return nil
 }
@@ -237,7 +235,9 @@ func (o *Orchestrator) pollWorkers(ctx context.Context) {
 		at        time.Time
 	}
 	llmProbes := map[string]*llmProbe{}
-	// Models named by workers but absent from o.Models, each logged once.
+	// Models named by workers but absent from the model set, each logged
+	// once. With hot reload this is now the brief window before the
+	// watcher picks up an edit, or a model removed while its worker runs.
 	unknownModels := map[string]bool{}
 	for {
 		select {
@@ -258,9 +258,10 @@ func (o *Orchestrator) pollWorkers(ctx context.Context) {
 			mc, known := o.modelConfig(s.model)
 			switch {
 			case !known:
-				// models.toml gained this entry after the TUI loaded it (the
-				// delegate command re-reads the file per call; the TUI does
-				// not). There is no endpoint to poll: the row still opens and
+				// models.toml gained this entry after the TUI last loaded it
+				// (delegate re-reads the file per call; the TUI catches up on
+				// its next reload poll), or lost it while the worker ran.
+				// There is no endpoint to poll: the row still opens and
 				// closes from the registry, just without live usage. Treating
 				// it as an opencode worker dereferenced a nil client and took
 				// the whole TUI down (docs/NOTES.md).
@@ -281,7 +282,7 @@ func (o *Orchestrator) pollWorkers(ctx context.Context) {
 		o.mu.Unlock()
 		for _, name := range strangers {
 			o.emit(ctx, ui.RawLogMsg{Source: "app", Line: "worker model " + name +
-				" is not in the models.toml this session loaded — restart strawboss to see its live stats"})
+				" is not in the loaded models.toml — no live stats for its workers until it is"})
 		}
 
 		// The status endpoint is project-scoped: query each endpoint once
@@ -363,8 +364,10 @@ func (o *Orchestrator) pollWorkers(ctx context.Context) {
 		rates.retain(stillOpen)
 
 		// Probe every distinct dsh endpoint, idle or not (throttled by
-		// the cache above).
-		for _, mc := range o.Models {
+		// the cache above). One snapshot for both loops: a reload between
+		// them must not report stats for a set that was never probed.
+		modelSet := o.Models()
+		for _, mc := range modelSet {
 			if mc.Harness != "dsh" {
 				continue
 			}
@@ -376,7 +379,7 @@ func (o *Orchestrator) pollWorkers(ctx context.Context) {
 			llmProbes[base] = &llmProbe{reachable: ok, models: models, at: time.Now()}
 		}
 
-		for _, mc := range o.Models {
+		for _, mc := range modelSet {
 			base := strings.TrimRight(mc.Endpoint, "/")
 			note := mc.Harness
 			ctxWin := 0

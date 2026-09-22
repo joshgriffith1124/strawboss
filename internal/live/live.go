@@ -23,9 +23,19 @@ import (
 
 // Orchestrator runs the live feeds and exposes them as one tea.Msg channel.
 type Orchestrator struct {
-	Driver   *supervisor.Driver
-	Models   []config.ModelConfig
+	Driver *supervisor.Driver
+	// models is the current model set; read it via Models(). It is swapped
+	// whole by the models.toml watcher, so goroutines never see a slice
+	// mid-edit and need no lock to read it.
+	models   atomic.Pointer[[]config.ModelConfig]
 	StateDir string
+	// ModelsPath is the models.toml the watcher follows; empty disables
+	// hot reload (tests, replays).
+	ModelsPath string
+	// PromptFor rebuilds the supervisor system prompt for a new model set;
+	// nil keeps the prompt as configured (a config.toml system_prompt
+	// override is the user's text, not ours to regenerate).
+	PromptFor func([]config.ModelConfig) string
 	// RunID scopes which registry events this UI shows; events stamped
 	// with a different run (or none) belong to other runs and are skipped.
 	RunID string
@@ -71,6 +81,7 @@ type Orchestrator struct {
 	dshOut          map[string]int     // wN → latest output tokens seen by its tailer
 	stream          *supervisor.Stream // the persistent supervisor process, if running
 	servers         []*managedServer   // managed opencode serve children
+	subscribed      map[string]bool    // opencode endpoints with an event subscriber
 
 	// budget guard accumulation (see budget.go)
 	supTotals     supUsageTotals // per-run supervisor ledger (supusage.go)
@@ -89,9 +100,8 @@ type Orchestrator struct {
 
 // New builds an orchestrator; call Run to start the feeds.
 func New(d *supervisor.Driver, models []config.ModelConfig, stateDir string) *Orchestrator {
-	return &Orchestrator{
+	o := &Orchestrator{
 		Driver:          d,
-		Models:          models,
 		StateDir:        stateDir,
 		started:         time.Now(),
 		feed:            make(chan tea.Msg, 64),
@@ -109,7 +119,20 @@ func New(d *supervisor.Driver, models []config.ModelConfig, stateDir string) *Or
 		dshOut:          map[string]int{},
 		toolCmds:        map[string]string{},
 		deniedNotified:  map[string]bool{},
+		subscribed:      map[string]bool{},
 	}
+	o.models.Store(&models)
+	return o
+}
+
+// Models returns the current model set. Callers that walk it more than
+// once in one pass should take it once: a reload between two calls would
+// hand them two different sets.
+func (o *Orchestrator) Models() []config.ModelConfig {
+	if p := o.models.Load(); p != nil {
+		return *p
+	}
+	return nil
 }
 
 // Feed is the channel the UI listens on.
@@ -165,7 +188,25 @@ func (o *Orchestrator) Run(ctx context.Context) {
 	go o.pollWorkers(ctx)
 	go o.ensureServers(ctx)
 	go o.openclawLoop(ctx)
+	go o.watchModels(ctx)
+	o.subscribeNewEndpoints(ctx)
+}
+
+// subscribeNewEndpoints starts an event subscriber for every opencode
+// endpoint that lacks one — at startup, and again after a reload adds
+// one. Subscribers for endpoints a reload removed stay up: they cost one
+// idle connection, and workers already running there still report.
+func (o *Orchestrator) subscribeNewEndpoints(ctx context.Context) {
+	o.mu.Lock()
+	var fresh []string
 	for _, base := range o.endpoints() {
+		if !o.subscribed[base] {
+			o.subscribed[base] = true
+			fresh = append(fresh, base)
+		}
+	}
+	o.mu.Unlock()
+	for _, base := range fresh {
 		go o.subscribeWorkerEvents(ctx, base)
 	}
 }
@@ -176,7 +217,7 @@ func (o *Orchestrator) Run(ctx context.Context) {
 func (o *Orchestrator) endpoints() []string {
 	seen := map[string]bool{}
 	var out []string
-	for _, mc := range o.Models {
+	for _, mc := range o.Models() {
 		if mc.Harness != "" && mc.Harness != "opencode" {
 			continue
 		}
@@ -191,7 +232,7 @@ func (o *Orchestrator) endpoints() []string {
 
 // modelConfig resolves a model config by name.
 func (o *Orchestrator) modelConfig(name string) (config.ModelConfig, bool) {
-	for _, mc := range o.Models {
+	for _, mc := range o.Models() {
 		if mc.Name == name {
 			return mc, true
 		}

@@ -171,6 +171,13 @@ type ModelStatMsg struct {
 	ContextWindow int
 }
 
+// ModelSetMsg names the current model configs after a models.toml reload:
+// Models-pane rows for any other name are dropped (stats for new names
+// arrive as ModelStatMsgs on the next poll).
+type ModelSetMsg struct {
+	Names []string
+}
+
 // RawLogMsg appends to the logs tab.
 type RawLogMsg struct {
 	Source string // "sup", "wrk", "app"

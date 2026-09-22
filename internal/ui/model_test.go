@@ -1186,3 +1186,48 @@ func TestToolResultSqueezesWhitespaceAndTaskFile(t *testing.T) {
 		t.Error("whitespace run survived into the view")
 	}
 }
+
+// TestModelSetMsgPrunesModels: after a models.toml reload (ModelSetMsg),
+// stale rows are dropped, late stats for removed names stay out, and stats
+// for new names in the set land normally.
+func TestModelSetMsgPrunesModels(t *testing.T) {
+	modelNames := func(m Model) []string {
+		var out []string
+		for _, s := range m.models {
+			out = append(out, s.Name)
+		}
+		return out
+	}
+
+	m := New(make(chan tea.Msg))
+	m = apply(t, m,
+		ModelStatMsg{Name: "a"},
+		ModelStatMsg{Name: "b"},
+		ModelStatMsg{Name: "c"},
+	)
+	if len(m.models) != 3 {
+		t.Fatalf("models = %v, want 3 entries", modelNames(m))
+	}
+
+	// Reload removes "b"; rows for names outside the set are dropped,
+	// order otherwise preserved (models are kept name-sorted).
+	m = apply(t, m, ModelSetMsg{Names: []string{"a", "c", "d"}})
+	if got := strings.Join(modelNames(m), ","); got != "a,c" {
+		t.Fatalf("names = %q, want %q", got, "a,c")
+	}
+
+	// Late poll pass reporting a removed model: ignored, no ghost row.
+	m = apply(t, m, ModelStatMsg{Name: "b"})
+	if len(m.models) != 2 {
+		t.Fatalf("removed model re-added: %v", modelNames(m))
+	}
+
+	// A name in the set arrives with stats: added as usual.
+	m = apply(t, m, ModelStatMsg{Name: "d", Active: 1})
+	if len(m.models) != 3 {
+		t.Fatalf("d not added: %v", modelNames(m))
+	}
+	if !m.modelSet["d"] || m.modelSet["b"] {
+		t.Errorf("modelSet = %v", m.modelSet)
+	}
+}

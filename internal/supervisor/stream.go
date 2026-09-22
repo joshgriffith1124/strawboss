@@ -64,8 +64,8 @@ func (d *Driver) StartStream() (*Stream, error) {
 	if len(d.DisallowedTools) > 0 {
 		args = append(args, "--disallowedTools", strings.Join(d.DisallowedTools, ","))
 	}
-	if d.SystemPrompt != "" {
-		args = append(args, "--append-system-prompt", d.SystemPrompt)
+	if sp := d.systemPrompt(); sp != "" {
+		args = append(args, "--append-system-prompt", sp)
 	}
 
 	cmd := exec.Command(bin, args...)

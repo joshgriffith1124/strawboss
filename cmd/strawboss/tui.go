@@ -190,6 +190,10 @@ func buildLive(stateDir, modelsPath string, fresh bool) (ui.Model, func(), error
 	}
 
 	o := live.New(driver, models, stateDir)
+	o.ModelsPath = modelsPath
+	if cfg.Supervisor.SystemPrompt == "" {
+		o.PromptFor = func(ms []config.ModelConfig) string { return live.BuildSystemPrompt(exe, ms) }
+	}
 	o.RunID = runID
 	o.Notify = cfg.Notify
 	o.Budget = cfg.Budget

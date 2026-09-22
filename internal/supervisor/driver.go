@@ -31,7 +31,9 @@ type Driver struct {
 	// a broad grant like Read — path patterns must use the //abs form
 	// (docs/NOTES.md); a plain absolute path silently fails to match.
 	DisallowedTools []string
-	// SystemPrompt is passed as --append-system-prompt when set.
+	// SystemPrompt is passed as --append-system-prompt when set. Set it
+	// before the first spawn; afterwards use SetSystemPrompt, which the
+	// spawn paths read under the lock.
 	SystemPrompt string
 	// Dir is the subprocess working directory. Empty means inherit.
 	Dir string
@@ -84,6 +86,23 @@ func (d *Driver) EnvVar(key string) string {
 		}
 	}
 	return ""
+}
+
+// SetSystemPrompt replaces the prompt for the NEXT spawn. A running
+// supervisor keeps the prompt it started with: restarting it just to
+// swap the prompt would throw away its prompt cache, and invariant 2
+// forbids spending supervisor tokens on observability.
+func (d *Driver) SetSystemPrompt(p string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.SystemPrompt = p
+}
+
+// systemPrompt snapshots SystemPrompt under the lock for a spawn.
+func (d *Driver) systemPrompt() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.SystemPrompt
 }
 
 // env snapshots Env under the lock for a spawn.
@@ -160,8 +179,8 @@ func (d *Driver) Start(prompt string) (*Turn, error) {
 	if len(d.DisallowedTools) > 0 {
 		args = append(args, "--disallowedTools", strings.Join(d.DisallowedTools, ","))
 	}
-	if d.SystemPrompt != "" {
-		args = append(args, "--append-system-prompt", d.SystemPrompt)
+	if sp := d.systemPrompt(); sp != "" {
+		args = append(args, "--append-system-prompt", sp)
 	}
 
 	cmd := exec.Command(bin, args...)

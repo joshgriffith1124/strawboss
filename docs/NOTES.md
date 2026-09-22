@@ -1163,6 +1163,25 @@ delegation would do it — and exactly the failure CLAUDE.md rules out (a
 worker the TUI cannot place is a displayed state, never a crash). Now an
 unknown model is its own case: no endpoint to poll, the row still opens
 and closes from the registry, and the logs tab says once that a restart
-will pick the model up. Not fixed: the TUI still does not hot-reload
-models.toml (`o.Models` is read lock-free from several goroutines;
-making it mutable is its own change).
+will pick the model up.
+
+### Hot reload of models.toml (2026-09-22)
+
+The root cause, closed: the TUI now follows models.toml (`watchModels`,
+internal/live/reload.go — a 3s stat poll, no fsnotify dependency, and
+it survives editors that replace the file). The model set sits behind an
+`atomic.Pointer` swapped whole, so the goroutines that read it lock-free
+never see a half-edited slice; each poll pass takes one snapshot. On a
+change: the Models pane drops removed models (`ui.ModelSetMsg`, which
+also makes late stats for a removed name a no-op instead of a ghost
+row), new opencode endpoints get an event subscriber, and the logs tab
+names what was added or removed. A file that fails to parse keeps the
+previous set and toasts the error.
+
+The supervisor is deliberately NOT restarted: `Driver.SetSystemPrompt`
+stages the regenerated roster for its next spawn. Restarting a live
+supervisor just to swap its prompt would cost the whole prompt cache,
+and delegate already routes and checks availability on its own, so a
+stale roster only means the supervisor won't name a new model by hand
+until then (`--model auto` reaches it at once). A `system_prompt`
+override in config.toml is never regenerated.

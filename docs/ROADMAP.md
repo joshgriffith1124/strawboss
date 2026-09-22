@@ -33,7 +33,7 @@ tested at the end (same rule as milestones). Struck items are done.
     NOTES.md "EDNS"; low priority now that the inference host's IP is a
     DHCP reservation); then
     revert models.toml endpoints from IPs back to hostnames.
-14. **Hot-reload models.toml** — the TUI reads it once at startup while
+14. ~~Hot-reload models.toml~~ — the TUI reads it once at startup while
     delegate re-reads it per call; the gap crashed the TUI on 2026-09-21
     (NOTES.md "The crash it caused"). Watch the file and swap the model
     set safely so the Models pane and the supervisor's view follow edits.

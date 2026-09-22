@@ -275,6 +275,10 @@ type Model struct {
 
 	// models
 	models []modelStat
+	// modelSet is the model names of the latest reload (nil = none yet:
+	// accept every name). Replaced whole, never mutated — Model is copied
+	// by value, so a shared map must stay read-only.
+	modelSet map[string]bool
 
 	deniedSeen map[string]bool // allowlist suggestions already shown
 
@@ -599,6 +603,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, Listen(m.feed)
 
 	case ModelStatMsg:
+		if m.modelSet != nil && !m.modelSet[msg.Name] {
+			// A poll pass that began before a reload reporting a model the
+			// reload removed: re-adding it would leave a ghost row.
+			return m, Listen(m.feed)
+		}
 		found := false
 		for i := range m.models {
 			if m.models[i].Name == msg.Name {
@@ -610,6 +619,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.models = append(m.models, modelStat(msg))
 			sort.Slice(m.models, func(i, j int) bool { return m.models[i].Name < m.models[j].Name })
 		}
+		return m, Listen(m.feed)
+
+	case ModelSetMsg:
+		keep := make(map[string]bool, len(msg.Names))
+		for _, n := range msg.Names {
+			keep[n] = true
+		}
+		kept := m.models[:0:0] // fresh backing array: m is copied by value
+		for _, ms := range m.models {
+			if keep[ms.Name] {
+				kept = append(kept, ms)
+			}
+		}
+		m.models = kept
+		m.modelSet = keep
 		return m, Listen(m.feed)
 
 	case RawLogMsg:

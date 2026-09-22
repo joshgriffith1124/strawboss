@@ -48,6 +48,13 @@ tested at the end (same rule as milestones). Struck items are done.
     after each worker; a failure marks the worker failed, escalates, and
     returns a terse excerpt. Workers claim success; the supervisor cannot
     run tests to check.
+18. **Model-neutral repo** — the code already works with any number of
+    models (everything reads models.toml), but examples, tests, fixtures,
+    the mockup, the replay demo and NOTES name one setup (qwen-coder,
+    qwen-dsh, fast-local, qwen3.8-27b, spark-a, GX10, "the WSL box"). Swap
+    them for role names (small/big) so the public repo describes
+    capability tiers, not the maintainer's hardware. Start with the
+    tiered-models material; the older references are a larger sweep.
 
 Explicitly not planned: a local-TUI/remote-execution split (`--remote
 host:/path`). Everything that touches code is one co-located unit —

@@ -1,0 +1,6 @@
+# Strawboss's own verify gate (docs/DELEGATION.md "Verify"): delegate runs
+# this after a worker finishes and trusts the result over the worker's word.
+# Read-only on purpose — `make check` would gofmt -w the tree under a
+# worker's feet.
+verify = "make test"
+verify_timeout = "10m"

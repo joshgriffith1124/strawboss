@@ -55,6 +55,17 @@ tested at the end (same rule as milestones). Struck items are done.
     strawboss/* branches and then waits for a human with git. List them
     with diff stats, show the diff, merge or discard with one key
     (Conductor/Claude Squad are diff-first; the survey's biggest gap).
+21. **Undo a worker's edits** — most delegations edit the shared working
+    directory, and a worker that fails verify (or just does the wrong
+    thing) leaves its edits behind with no rollback. Snapshot the tree
+    before each non-worktree task (`git stash create` + a ref under
+    refs/strawboss/, which touches nothing) and add a TUI key on the
+    worker row that restores it — refusing if later workers changed the
+    same files.
+22. **Route to a free slot** — a model at its `max_concurrent` cap
+    queues new work even when a same-tier sibling is idle. Resolve should
+    prefer an available sibling with a free slot (slots.Busy) before
+    queueing on a saturated pick.
 18. **Model-neutral repo** — the code already works with any number of
     models (everything reads models.toml), but examples, tests, fixtures,
     the mockup, the replay demo and NOTES name one setup (qwen-coder,

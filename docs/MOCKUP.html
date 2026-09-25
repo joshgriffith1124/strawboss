@@ -33,8 +33,8 @@ body{background:var(--bg);color:var(--text);font-family:ui-monospace,monospace;f
 .pill.run{background:#0e2417;color:var(--green);border:1px solid var(--green);padding:0 calc(1ch - 1px)}
 .pill.ok{background:#0e2417;color:var(--green);border:1px solid var(--green);padding:0 calc(1ch - 1px)}
 .pill.err{background:#2a1214;color:var(--red);border:1px solid var(--red);padding:0 calc(1ch - 1px)}
-/* rows 2-44: 30ch sidebar + 98ch main; 43 rows = 53.75em */
-.body{display:flex;width:128ch;height:53.75em}
+/* rows 2-44: 98ch main + 30ch sidebar on the right; 43 rows = 53.75em */
+.body{display:flex;flex-direction:row-reverse;width:128ch;height:53.75em}
 .side{width:30ch;height:53.75em}
 .main{width:98ch;height:53.75em;position:relative;border:1px solid var(--border);border-radius:6px;background:var(--panel)}
 /* sidebar boxes: AGENTS rows 2-31 (30), TOKEN ECONOMY rows 32-44 (13) */
@@ -242,7 +242,7 @@ body{background:var(--bg);color:var(--text);font-family:ui-monospace,monospace;f
   <li>Supervisor pane is the chat; there is no separate chat tab.</li>
   <li><code>z</code> zooms the focused pane to fill the main area; <code>⇥</code> cycles pane focus.</li>
   <li>Worker panes show running agents first, then most recent finished; max 4 worker panes.</li>
-  <li>Sidebar groups by models.toml entry name + tier, never by host.</li>
+  <li>Sidebar sits on the right; it groups by models.toml entry name + tier, never by host.</li>
 </ul>
 </body>
 </html>

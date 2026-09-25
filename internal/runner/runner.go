@@ -51,6 +51,7 @@ type Outcome struct {
 	Res      harness.Result
 	Duration time.Duration
 	Err      error
+	Added    []string // files the worker created (from before/after snapshots); nil when unknown
 }
 
 // SlotsDir is where concurrency-slot lock files live for a registry: the
@@ -108,8 +109,10 @@ func takeSlot(ctx context.Context, reg *registry.Registry, mc config.ModelConfig
 // that failed — for the caller's log. decorate (may be nil) can amend the
 // result before it is recorded and returned — worktree finalization uses
 // it so the branch note reaches the supervisor, registry, and TUI alike.
-// A worker in a git repo (not a linked worktree) gets before/after snapshots
-// under refs/strawboss/snap/<id>/ so the TUI can undo its edits.
+// A worker in a git repo gets before/after snapshots; the pair is saved under
+// refs/strawboss/snap/<id>/ (so the TUI can undo its edits) only when the
+// dir is not a linked worktree, and the created-file list is reported in
+// Outcome.Added.
 func Run(ctx context.Context, h harness.WorkerHarness, reg *registry.Registry, mc config.ModelConfig, prompt, task, dir string, warn func(string), decorate func(*harness.Result)) (oc Outcome) {
 	if warn == nil {
 		warn = func(string) {}
@@ -134,14 +137,17 @@ func Run(ctx context.Context, h harness.WorkerHarness, reg *registry.Registry, m
 	}
 	defer release()
 
-	// Undo support snapshots for a git repo
-	snap := snapshot.Wanted(dir)
+	// Snapshots for a git repo: taken whenever we're in one (the
+	// stray-file check needs the pair), but saved for undo only when
+	// the dir is not a linked worktree.
+	repo := snapshot.IsRepo(dir)
+	undo := snapshot.Wanted(dir)
 	var before string
-	if snap {
+	if repo {
 		var serr error
 		if before, serr = snapshot.Take(dir); serr != nil {
-			warn("undo snapshot: " + serr.Error())
-			snap = false
+			warn("stray-file check: " + serr.Error())
+			repo, undo = false, false
 		}
 	}
 
@@ -172,10 +178,10 @@ func Run(ctx context.Context, h harness.WorkerHarness, reg *registry.Registry, m
 		return oc
 	}
 
-	if snap {
+	if undo {
 		if serr := snapshot.Save(dir, oc.WorkerID, "before", before); serr != nil {
 			warn("undo snapshot: " + serr.Error())
-			snap = false
+			undo = false
 		}
 	}
 
@@ -199,11 +205,20 @@ func Run(ctx context.Context, h harness.WorkerHarness, reg *registry.Registry, m
 			Summary:  fmt.Sprintf("aborted: %v after %s", context.Cause(ctx), time.Since(start).Round(time.Second)),
 		}
 	}
-	if snap {
+	if repo {
 		if after, serr := snapshot.Take(dir); serr != nil {
-			warn("undo snapshot: " + serr.Error())
-		} else if serr := snapshot.Save(dir, oc.WorkerID, "after", after); serr != nil {
-			warn("undo snapshot: " + serr.Error())
+			warn("stray-file check: " + serr.Error())
+		} else {
+			if undo {
+				if serr := snapshot.Save(dir, oc.WorkerID, "after", after); serr != nil {
+					warn("undo snapshot: " + serr.Error())
+				}
+			}
+			if added, aerr := snapshot.Added(dir, before, after); aerr != nil {
+				warn("stray-file check: " + aerr.Error())
+			} else {
+				oc.Added = added
+			}
 		}
 	}
 	if decorate != nil {

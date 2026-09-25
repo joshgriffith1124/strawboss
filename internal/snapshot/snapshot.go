@@ -104,7 +104,18 @@ func Refs(dir, workerID string) (before, after string, ok bool) {
 
 // Changed lists the repo-relative paths that differ between two snapshots.
 func Changed(dir, a, b string) ([]string, error) {
-	out, err := git(dir, nil, "diff", "--name-only", "--no-renames", "-z", a, b)
+	return diffNames(dir, a, b)
+}
+
+// Added lists the repo-relative paths present in snapshot b but not in a.
+func Added(dir, a, b string) ([]string, error) {
+	return diffNames(dir, a, b, "--diff-filter=A")
+}
+
+func diffNames(dir, a, b string, extra ...string) ([]string, error) {
+	args := append([]string{"diff", "--name-only", "--no-renames"}, extra...)
+	args = append(args, "-z", a, b)
+	out, err := git(dir, nil, args...)
 	if err != nil {
 		return nil, err
 	}

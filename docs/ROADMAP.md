@@ -79,9 +79,9 @@ tested at the end (same rule as milestones). Struck items are done.
     escalates to the other tier-2 entry; when that entry shares the
     endpoint (same pool, 23) the retry just burns another deadline.
     Retry elsewhere or report the timeout with a split-the-task hint.
-26. **Flag stray files** — workers leave debug files behind
+26. ~~Flag stray files~~ — workers leave debug files behind
     (`zz_repro_test.go`, `tmp_debug_test.go`), and one broke the build.
-    The result should list new files outside the task's named files.
+    The result now appends a note listing files the worker created that no task in the call names (path, base name, parent dir, or the file a _test.go covers).
 27. ~~Reap dead workers~~ — a worker whose process dies (power loss,
     crash) never writes its finished event and shows "running" forever.
     At TUI startup, reapDead marks provably dead workers failed ("process

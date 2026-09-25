@@ -323,6 +323,18 @@ func runDelegate(args []string, stdout io.Writer) error {
 	}
 	wg.Wait()
 
+	// Stray-file check: name the files a worker created that no task in
+	// this call mentions, so the supervisor sees leftovers without burning
+	// tokens discovering them itself.
+	for i, oc := range outcomes {
+		if oc.Err != nil {
+			continue
+		}
+		if note := strayNote(strayFiles(oc.Added, tasks)); note != "" {
+			outcomes[i].Res.Summary += "\n" + note
+		}
+	}
+
 	failed := 0
 	for i, oc := range outcomes {
 		if oc.Err != nil {
@@ -531,6 +543,9 @@ func runEscalated(ctx context.Context, first runner.Outcome, next config.ModelCo
 		oc := runner.Run(ctx, h, reg, next, prompt, task, workerDir, warn, decorate)
 		if oc.Err == nil {
 			oc.Res.Summary = "[escalated from " + firstModel + ", which failed: " + firstDesc + "]\n" + oc.Res.Summary
+			// The first attempt's files are still in the tree: the stray
+			// check must see them too.
+			oc.Added = unionAdded(first.Added, oc.Added)
 			return oc
 		}
 		err = oc.Err

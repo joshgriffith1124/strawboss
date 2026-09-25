@@ -104,20 +104,20 @@ func TestTabKeys(t *testing.T) {
 	if m.tab != tabChat {
 		t.Fatalf("start tab = %d", m.tab)
 	}
-	// On the Agents screen, tab toggles pane focus instead of switching tabs.
+	// Tab now always steps forward one tab — on every tab, including the
+	// Agents screen, where it used to toggle pane focus.
 	m = apply(t, m, tea.KeyMsg{Type: tea.KeyTab})
-	if m.tab != tabChat || m.focus != focusWork {
-		t.Errorf("tab=%d focus=%d, want chat/focusWork", m.tab, m.focus)
+	if m.tab != tabDashboard {
+		t.Errorf("tab=%d, want dashboard", m.tab)
 	}
 	m = apply(t, m, tea.KeyMsg{Type: tea.KeyTab})
-	if m.tab != tabChat || m.focus != focusSup {
-		t.Errorf("tab=%d focus=%d, want chat/focusSup", m.tab, m.focus)
+	if m.tab != tabWorktrees {
+		t.Errorf("tab=%d, want worktrees", m.tab)
 	}
-	// Shift+tab still cycles tabs even from the chat screen — with six
-	// tabs it now steps BACK one tab, so from Agents it lands on Logs.
+	// Shift+tab from a non-Agents tab still steps BACK one tab.
 	m = apply(t, m, tea.KeyMsg{Type: tea.KeyShiftTab})
-	if m.tab != tabLogs {
-		t.Errorf("tab = %d, want logs", m.tab)
+	if m.tab != tabDashboard {
+		t.Errorf("tab = %d, want dashboard", m.tab)
 	}
 	// digits work outside the chat tab: 3 is Worktrees now (Logs is 6)
 	m = apply(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("3")})
@@ -132,6 +132,102 @@ func TestTabKeys(t *testing.T) {
 	m = apply(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
 	if m.tab != tabChat || m.input.Value() != "2" {
 		t.Errorf("tab = %d input = %q", m.tab, m.input.Value())
+	}
+}
+
+// TestCyclePane covers shift+tab on the Agents screen: focus walks
+// supervisor → each active (running/queued) worker in spawn order → back to
+// the supervisor, selecting each worker tile as it is focused. Finished
+// workers are never focused. With no active workers it simply toggles
+// focusSup/focusWork.
+func TestCyclePane(t *testing.T) {
+	newAgentsModel := func(t *testing.T, upserts ...WorkerUpsertMsg) Model {
+		t.Helper()
+		m := New(make(chan tea.Msg))
+		msgs := make([]tea.Msg, 0, len(upserts)+1)
+		msgs = append(msgs, tea.WindowSizeMsg{Width: 132, Height: 40})
+		for _, u := range upserts {
+			msgs = append(msgs, u)
+		}
+		m = apply(t, m, msgs...)
+		if m.tab != tabChat || m.focus != focusSup {
+			t.Fatalf("start tab=%d focus=%d, want chat/focusSup", m.tab, m.focus)
+		}
+		return m
+	}
+
+	activeUpserts := []WorkerUpsertMsg{
+		{ID: "w1", Model: "qwen-dsh", Task: "t1", Status: "running"},
+		{ID: "w2", Model: "qwen-coder", Task: "t2", Status: "running"},
+		{ID: "w3", Model: "fast-local", Task: "t3", Status: "done"},
+	}
+
+	tests := []struct {
+		name      string
+		upserts   []WorkerUpsertMsg
+		presses   int
+		wantFocus int
+		wantSelID string // focused worker id; "" = no worker focused
+	}{
+		{"no active workers: first press toggles to worker focus", nil, 1, focusWork, ""},
+		{"no active workers: second press toggles back to supervisor", nil, 2, focusSup, ""},
+		{"two running, one done: first press focuses first running worker in spawn order", activeUpserts, 1, focusWork, "w1"},
+		{"two running, one done: second press focuses second running worker", activeUpserts, 2, focusWork, "w2"},
+		{"two running, one done: third press returns to supervisor", activeUpserts, 3, focusSup, ""},
+		{"two running, one done: fourth press wraps back to first running worker", activeUpserts, 4, focusWork, "w1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newAgentsModel(t, tt.upserts...)
+			for i := 0; i < tt.presses; i++ {
+				m = apply(t, m, tea.KeyMsg{Type: tea.KeyShiftTab})
+			}
+			if m.tab != tabChat {
+				t.Fatalf("tab = %d, want chat", m.tab)
+			}
+			if m.focus != tt.wantFocus {
+				t.Fatalf("focus = %d, want %d", m.focus, tt.wantFocus)
+			}
+			if tt.wantSelID == "" {
+				return
+			}
+			sel := m.selectedWorker()
+			if sel == nil || sel.ID != tt.wantSelID {
+				t.Fatalf("selected = %+v, want %s", sel, tt.wantSelID)
+			}
+		})
+	}
+
+	// The done worker is never focused, no matter how far we cycle.
+	m := newAgentsModel(t, activeUpserts...)
+	for i := 0; i < 4; i++ {
+		m = apply(t, m, tea.KeyMsg{Type: tea.KeyShiftTab})
+		if m.focus == focusWork {
+			sel := m.selectedWorker()
+			if sel != nil && sel.ID == "w3" {
+				t.Fatalf("press %d: done worker w3 was focused", i+1)
+			}
+		}
+	}
+}
+
+// TestTabWhileTypingSwitchesTabs: tab on the Agents screen now steps to the
+// next top-level tab even while typing in the supervisor pane (unless a
+// slash command completes), so typing is left untouched and resumes there.
+func TestTabWhileTypingSwitchesTabs(t *testing.T) {
+	m := demoState(t)
+	m.input.SetValue("hello")
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	if m.tab != tabDashboard {
+		t.Fatalf("tab = %d, want dashboard", m.tab)
+	}
+	if m.input.Value() != "hello" {
+		t.Fatalf("input was rewritten: %q", m.input.Value())
+	}
+	// Shift+tab from a non-Agents tab steps back one.
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyShiftTab})
+	if m.tab != tabChat {
+		t.Fatalf("tab = %d, want chat", m.tab)
 	}
 }
 
@@ -328,10 +424,9 @@ func TestToolLinesWrap(t *testing.T) {
 
 func TestWorkerKillRetryKeys(t *testing.T) {
 	m := demoState(t) // w1 running, w2 queued → display order: w2, w1
-	// Tab toggles focus on the Agents screen; with the worker pane
-	// focused, the digit keys switch tabs.
-	m = apply(t, m, tea.KeyMsg{Type: tea.KeyTab},
-		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
+	// Tab steps to the next top-level tab; the worker-table keys
+	// work there with the default (first-row) selection.
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyTab})
 	if m.tab != tabDashboard {
 		t.Fatalf("tab = %d", m.tab)
 	}
@@ -384,10 +479,9 @@ func TestWorkerKillRetryKeys(t *testing.T) {
 
 func TestWorkerUndoKey(t *testing.T) {
 	m := demoState(t)
-	// Tab toggles focus on the Agents screen; with the worker pane
-	// focused, the digit keys switch tabs.
-	m = apply(t, m, tea.KeyMsg{Type: tea.KeyTab},
-		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
+	// Tab steps to the next top-level tab; undo keys work on the
+	// Tasks screen.
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyTab})
 	if m.tab != tabDashboard {
 		t.Fatalf("tab = %d", m.tab)
 	}
@@ -458,10 +552,8 @@ func TestToastMsgShowsAndExpires(t *testing.T) {
 
 func TestWorkerFilter(t *testing.T) {
 	m := demoState(t)
-	// Tab toggles focus on the Agents screen; with the worker pane
-	// focused, the digit keys switch tabs.
-	m = apply(t, m, tea.KeyMsg{Type: tea.KeyTab},
-		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")}) // dashboard
+	// Tab steps to the Tasks screen, where / opens the filter.
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyTab})
 	m = apply(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
 	if !m.filtering {
 		t.Fatal("/ did not open the filter")
@@ -495,7 +587,13 @@ func TestLogsSourceFilterCycles(t *testing.T) {
 	if m.input.Value() != "3" {
 		t.Fatalf("digit in chat should type: input=%q", m.input.Value())
 	}
-	m = apply(t, m, tea.KeyMsg{Type: tea.KeyShiftTab}) // chat→logs
+	// Shift+tab on the Agents screen cycles pane focus instead of
+	// switching tabs; with focus on a worker, digits switch tabs.
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyShiftTab})
+	if m.tab != tabChat || m.focus != focusWork {
+		t.Fatalf("tab=%d focus=%d, want chat/focusWork", m.tab, m.focus)
+	}
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("6")})
 	if m.tab != tabLogs {
 		t.Fatalf("tab = %d", m.tab)
 	}
@@ -537,8 +635,7 @@ func TestRetryAllFailed(t *testing.T) {
 	m = apply(t, m,
 		WorkerUpsertMsg{ID: "w1", Status: "failed", Summary: "boom"},
 		WorkerUpsertMsg{ID: "w3", Model: "qwen-dsh", Task: "t3", Status: "failed", Summary: "bang"},
-		tea.KeyMsg{Type: tea.KeyTab},
-		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")}) // dashboard
+		tea.KeyMsg{Type: tea.KeyTab}) // dashboard
 	var retried []string
 	m.OnRetryWorker = func(id string) { retried = append(retried, id) }
 
@@ -689,10 +786,8 @@ func TestSessionPicker(t *testing.T) {
 	}
 	m.OnSwitchSession = func(id, run string) { switched = append(switched, id+"/"+run) }
 
-	// Tab toggles focus on the Agents screen; with the worker pane
-	// focused, the digit keys switch tabs.
-	m = apply(t, m, tea.KeyMsg{Type: tea.KeyTab},
-		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")}) // dashboard
+	// Tab steps to the Tasks screen; s opens the session picker there.
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyTab})
 	m = apply(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
 	if !m.picking || len(m.sessions) != 2 {
 		t.Fatalf("picking=%v sessions=%d", m.picking, len(m.sessions))
@@ -866,7 +961,7 @@ func TestTabDigitsSelect(t *testing.T) {
 			m := New(make(chan tea.Msg))
 			m = apply(t, m,
 				tea.WindowSizeMsg{Width: 132, Height: 40},
-				tea.KeyMsg{Type: tea.KeyTab},
+				tea.KeyMsg{Type: tea.KeyShiftTab},
 				tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(tt.key)},
 			)
 			if m.tab != tt.tab {
@@ -1193,9 +1288,8 @@ func TestNewSessionCommandAndKeys(t *testing.T) {
 		t.Fatalf("OnNewSession calls = %d", fresh)
 	}
 
-	// n on the dashboard (tab focuses the worker pane; digits switch tabs).
-	m = apply(t, m, tea.KeyMsg{Type: tea.KeyTab},
-		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
+	// n on the dashboard (tab steps to the Tasks screen).
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyTab})
 	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
 	m = next.(Model)
 	if cmd == nil {
@@ -1473,21 +1567,20 @@ func TestSlashCommandsCompleteAndPassThrough(t *testing.T) {
 		t.Fatalf("after tab: input=%q tab=%d", m.input.Value(), m.tab)
 	}
 	// With arguments typed, there is nothing to complete: no hint, and
-	// Tab keeps its Agents-screen contract — toggling pane focus instead
-	// of completing (or switching tabs).
+	// Tab now switches to the next tab like on every other screen.
 	m.input.SetValue("/loop 5m run one iteration of LOOP.md")
 	if got := m.slashMatches(); got != nil {
 		t.Fatalf("matches with args = %v", got)
 	}
 	m = apply(t, m, tea.KeyMsg{Type: tea.KeyTab})
-	if m.tab != tabChat || m.focus != focusWork {
-		t.Fatalf("tab with args: tab=%d focus=%d, want chat/focusWork (no completion)", m.tab, m.focus)
+	if m.tab != tabDashboard {
+		t.Fatalf("tab with args: tab=%d focus=%d, want dashboard (no completion)", m.tab, m.focus)
 	}
 	if m.input.Value() != "/loop 5m run one iteration of LOOP.md" {
 		t.Fatalf("input was rewritten: %q", m.input.Value())
 	}
-	// Back to the supervisor pane so Enter can send below.
-	m = apply(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	// Back to the Agents screen so Enter can send below.
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyShiftTab})
 	if m.tab != tabChat || m.focus != focusSup {
 		t.Fatalf("tab back: tab=%d focus=%d, want chat/focusSup", m.tab, m.focus)
 	}

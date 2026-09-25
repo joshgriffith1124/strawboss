@@ -919,6 +919,44 @@ func (m *Model) switchTab(t int) {
 	}
 }
 
+// cyclePane moves the Agents-screen focus to the next pane: supervisor →
+// each active worker tile in spawn order → back to the supervisor. With no
+// tiles on screen it toggles between the supervisor and the worker table.
+func (m *Model) cyclePane() {
+	active := m.activeWorkers()
+	if len(active) == 0 {
+		if m.focus == focusSup {
+			m.focus = focusWork
+		} else {
+			m.focus = focusSup
+		}
+		return
+	}
+	next := 0 // index into active of the tile to focus
+	if m.focus == focusWork {
+		next = len(active) // past the last tile: back to the supervisor
+		if sel := m.selectedWorker(); sel != nil {
+			for i, wk := range active {
+				if wk.ID == sel.ID {
+					next = i + 1
+					break
+				}
+			}
+		}
+	}
+	if next >= len(active) {
+		m.focus = focusSup
+		return
+	}
+	m.focus = focusWork
+	for i, wk := range m.visibleWorkers() {
+		if wk.ID == active[next].ID {
+			m.selected = i
+			return
+		}
+	}
+}
+
 func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Typing only while the supervisor pane owns the keyboard: with the
 	// worker focus active, plain keys drive the worker table instead of
@@ -992,6 +1030,8 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.switchTab(tabChat)
 		case "1", "2", "3", "4", "5", "6":
 			m.switchTab(int(msg.String()[0] - '1'))
+		case "tab":
+			m.switchTab((m.tab + 1) % numTabs)
 		case "shift+tab":
 			m.switchTab((m.tab + numTabs - 1) % numTabs)
 		case "up", "k":
@@ -1110,24 +1150,18 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return next, nil
 			}
 		}
-		if m.tab == tabChat {
-			// On the Agents screen, tab toggles the pane focus instead of
-			// switching tabs (shift+tab keeps switching tabs).
-			if m.focus == focusSup {
-				m.focus = focusWork
-			} else {
-				m.focus = focusSup
-			}
-			return m, nil
-		}
 		m.switchTab((m.tab + 1) % numTabs)
 		return m, nil
 	case "shift+tab":
+		if m.tab == tabChat {
+			m.cyclePane()
+			return m, nil
+		}
 		m.switchTab((m.tab + numTabs - 1) % numTabs)
 		return m, nil
-	case "alt+z":
+	case "ctrl+o":
 		// Zoom the focused Agents pane from either focus — checked
-		// before the typing branch so no "z" is typed.
+		// before the typing branch, so it works while typing.
 		if m.tab == tabChat {
 			m.zoomed = !m.zoomed
 		}

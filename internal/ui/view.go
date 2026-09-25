@@ -173,19 +173,19 @@ func (m Model) viewFooter(w int) string {
 	var hints [][2]string
 	switch {
 	case m.reviewing && m.diffText != "":
-		hints = [][2]string{{"↑↓/PgUp/Dn", "scroll"}, {"esc", "back"}, {"1-6", "tabs"}}
+		hints = [][2]string{{"↑↓/PgUp/Dn", "scroll"}, {"esc", "back"}, {"⇥/1-6", "tabs"}}
 	case m.reviewing:
-		hints = [][2]string{{"↑↓", "select"}, {"↵", "diff"}, {"m", "merge"}, {"x", "discard"}, {"r", "refresh"}, {"esc", "close"}, {"1-6", "tabs"}}
+		hints = [][2]string{{"↑↓", "select"}, {"↵", "diff"}, {"m", "merge"}, {"x", "discard"}, {"r", "refresh"}, {"esc", "close"}, {"⇥/1-6", "tabs"}}
 	case m.picking:
 		hints = [][2]string{{"↑↓", "select"}, {"↵", "switch"}, {"n", "new"}, {"esc", "close"}}
 	case m.tab == tabChat:
 		if m.focus == focusWork {
-			hints = [][2]string{{"⇥", "pane"}, {"z", "zoom"}, {"↑↓", "select"}, {"x", "kill"}, {"r", "retry"}, {"u", "undo"}, {"t", "panel"}, {"b", "branches"}, {"1-6", "tabs"}, {"q", "quit"}}
+			hints = [][2]string{{"⇧⇥", "pane"}, {"⇥", "tabs"}, {"z", "zoom"}, {"↑↓", "select"}, {"x", "kill"}, {"r", "retry"}, {"u", "undo"}, {"t", "panel"}, {"b", "branches"}, {"q", "quit"}}
 		} else {
-			hints = [][2]string{{"↵", "send"}, {"alt+v", "image"}, {"⇥", "pane"}, {"alt+z", "zoom"}, {"PgUp/Dn", "scroll"}, {"esc", "interrupt"}, {"ctrl+c", "quit"}}
+			hints = [][2]string{{"↵", "send"}, {"alt+v", "image"}, {"⇧⇥", "pane"}, {"⇥", "tabs"}, {"ctrl+o", "zoom"}, {"PgUp/Dn", "scroll"}, {"esc", "interrupt"}, {"ctrl+c", "quit"}}
 		}
 	case m.tab == tabModels || m.tab == tabAnalytics:
-		hints = [][2]string{{"1-6", "tabs"}, {"shift+tab", "prev"}, {"q", "quit"}}
+		hints = [][2]string{{"⇥/1-6", "tabs"}, {"shift+tab", "prev"}, {"q", "quit"}}
 	case m.tab == tabDashboard:
 		hints = [][2]string{{"↑↓", "select"}, {"/", "filter"}, {"s", "sessions"}, {"b", "branches"}, {"n", "new"}, {"x", "kill"}, {"r", "retry"}, {"R", "retry-failed"}, {"u", "undo"}, {"⇥/1-6", "tabs"}, {"q", "quit"}}
 	default:

@@ -61,6 +61,29 @@ func agentsFixture(t *testing.T, w, h, nWorkers int) Model {
 	return agentsFeed(t, New(nil), msgs...)
 }
 
+// TestAgentsSidebarBorders: at 128x45 the sidebar owns the last 30
+// columns; every body line must end with the sidebar's right border, not
+// the clip ellipsis a too-wide box leaves behind.
+func TestAgentsSidebarBorders(t *testing.T) {
+	m := agentsFixture(t, 128, 45, 5)
+	m.tab = tabChat
+
+	lines := strings.Split(ansiSeq.ReplaceAllString(m.View(), ""), "\n")
+	if len(lines) != 45 {
+		t.Fatalf("View() returned %d lines, want 45", len(lines))
+	}
+	// 1-based lines 3..44 are the body: the top row (line 1) and the
+	// toast row (line 2, armed by the fixture's failed worker) come
+	// first, the footer (line 45) last.
+	borders := map[rune]bool{'│': true, '╮': true, '╯': true, '┐': true, '┘': true}
+	for i, ln := range lines[2:44] {
+		rs := []rune(ln)
+		if last := rs[len(rs)-1]; !borders[last] {
+			t.Errorf("line %d (1-based) ends %q, want a box border (│, ╮, ╯, ┐, ┘): %.40q…", i+3, last, ln)
+		}
+	}
+}
+
 // TestAgentsViewExactShape: the Agents screen must draw exactly h lines,
 // no line wider than w. The top row and every body row (the screen
 // itself, including the agent strip/sidebar and all panes) are padded to

@@ -60,7 +60,7 @@ func (m Model) viewAgents(w, h int) string {
 		// Top band: supervisor pane plus the selected worker's pane,
 		// or just the focused pane when too narrow for both.
 		var top string
-		if mainW < 100 {
+		if mainW < 80 {
 			if m.focus == focusSup {
 				top = m.viewSupPane(mainW, bandAH, true)
 			} else {

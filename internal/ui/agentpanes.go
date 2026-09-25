@@ -29,7 +29,8 @@ func (m Model) viewWorkerPane(wk *workerRow, w, h int, focused bool) string {
 		border = cFocus
 	}
 	if wk == nil {
-		return pane(sDim.Render("no worker selected"), "", []string{sFaint.Render("⇥ then ↑↓ to pick a worker")}, w, h, border)
+		// Same one-cell left margin as the lines below.
+		return pane(sDim.Render("no worker selected"), "", []string{" " + sFaint.Render("⇥ then ↑↓ to pick a worker")}, w, h, border)
 	}
 
 	// Head pill by status; default keeps the queued look before status arrives.
@@ -50,7 +51,10 @@ func (m Model) viewWorkerPane(wk *workerRow, w, h int, focused bool) string {
 	}
 
 	inner := w - 2
-	lines := []string{sDim.Render("> " + truncPlain(firstLine(wk.Task), inner-2))}
+	// One-cell left margin, like viewSupPane: content is budgeted to
+	// inner-1 so the prefix never pushes a line past the right border.
+	marg := inner - 1
+	lines := []string{" " + sDim.Render("> "+truncPlain(firstLine(wk.Task), marg-2))}
 	finished := wk.Status == "done" || wk.Status == "failed"
 	maxEv := h - 4
 	if finished {
@@ -70,13 +74,13 @@ func (m Model) viewWorkerPane(wk *workerRow, w, h int, focused bool) string {
 			if wk.Status == "running" && i == len(evs)-1 {
 				mark = sRun.Render(glyphRun)
 			}
-			lines = append(lines, mark+" "+sDim.Render(truncPlain(ev.text, inner-2)))
+			lines = append(lines, " "+mark+" "+sDim.Render(truncPlain(ev.text, marg-2)))
 		case "error":
-			lines = append(lines, sErr.Render(glyphFail+" "+truncPlain(ev.text, inner-2)))
+			lines = append(lines, " "+sErr.Render(glyphFail+" "+truncPlain(ev.text, marg-2)))
 		case "reasoning":
-			lines = append(lines, sFaint.Render(truncPlain(ev.text, inner)))
+			lines = append(lines, " "+sFaint.Render(truncPlain(ev.text, marg)))
 		default:
-			lines = append(lines, sDim.Render(truncPlain(ev.text, inner)))
+			lines = append(lines, " "+sDim.Render(truncPlain(ev.text, marg)))
 		}
 	}
 	if finished {
@@ -97,11 +101,11 @@ func (m Model) viewWorkerPane(wk *workerRow, w, h int, focused bool) string {
 			style = sErr
 		}
 		suffix := sDim.Render(" · " + dur + " · " + toks)
-		line := style.Render(truncPlain(firstLine(wk.Summary), inner-lipgloss.Width(suffix)))
+		line := style.Render(truncPlain(firstLine(wk.Summary), marg-lipgloss.Width(suffix)))
 		if line == "" {
 			line = " "
 		}
-		lines = append(lines, line+suffix)
+		lines = append(lines, " "+line+suffix)
 	}
 	return pane(head, right, lines, w, h, border)
 }

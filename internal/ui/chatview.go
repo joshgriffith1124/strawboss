@@ -360,7 +360,16 @@ func (m Model) viewTokensPanel(w int) string {
 		lines = append(lines, kv(w, "plan window",
 			sText.Render(fmt.Sprintf("5h %.0f%% · 7d %.0f%%", m.fiveHour*100, m.sevenDay*100))))
 	}
-	return panel("Tokens · plan vs free local", lines, w, cSupBorder, cAmber)
+	// panel() embeds " TITLE " in the top border; when the title is
+	// wider than w-5 that border row overflows w and the whole box is
+	// drawn over-wide. Truncate the plain title so the panel stays
+	// exactly w cells wide (at the dashboard's 38-column panel it
+	// fits whole and renders unchanged).
+	title := "Tokens · plan vs free local"
+	if lipgloss.Width(title) > w-5 {
+		title = truncPlain(title, w-5)
+	}
+	return panel(title, lines, w, cSupBorder, cAmber)
 }
 
 func (m Model) viewWorkersMini(w int) string {

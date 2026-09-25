@@ -70,11 +70,11 @@ func TestAgentsViewNeverPanicsAtTinySizes(t *testing.T) {
 	sizes := [][2]int{{0, 0}, {1, 0}, {1, 1}, {5, 3}, {20, 5}, {40, 10}}
 	for _, size := range sizes {
 		for _, nWorkers := range []int{0, 5} {
-			for _, focus := range []int{focusSup, focusWork} {
+			for _, focus := range []int{focusSup, focusWork, focusBottom} {
 				for _, zoomed := range []bool{false, true} {
 					name := fmt.Sprintf("%dx%d/%dworkers/focus=%s/zoomed=%v",
 						size[0], size[1], nWorkers,
-						map[int]string{focusSup: "sup", focusWork: "work"}[focus],
+						map[int]string{focusSup: "sup", focusWork: "work", focusBottom: "bottom"}[focus],
 						zoomed)
 					t.Run(name, func(t *testing.T) {
 						m := agentsFixture(t, size[0], size[1], nWorkers)
@@ -134,7 +134,7 @@ func TestAgentsViewExactShape(t *testing.T) {
 	var cases []shapeCase
 	for _, nWorkers := range []int{0, 5} {
 		for _, size := range [][2]int{{128, 45}, {160, 50}, {110, 35}, {90, 30}} {
-			for _, focus := range []int{focusSup, focusWork} {
+			for _, focus := range []int{focusSup, focusWork, focusBottom} {
 				for _, zoomed := range []bool{false, true} {
 					cases = append(cases, shapeCase{
 						w: size[0], h: size[1],
@@ -147,7 +147,7 @@ func TestAgentsViewExactShape(t *testing.T) {
 	for _, tc := range cases {
 		name := fmt.Sprintf("%dworkers/%dx%d/focus=%s/zoomed=%v",
 			tc.nWorkers, tc.w, tc.h,
-			map[int]string{focusSup: "sup", focusWork: "work"}[tc.focus],
+			map[int]string{focusSup: "sup", focusWork: "work", focusBottom: "bottom"}[tc.focus],
 			tc.zoomed)
 		t.Run(name, func(t *testing.T) {
 			m := agentsFixture(t, tc.w, tc.h, tc.nWorkers)

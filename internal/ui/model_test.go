@@ -136,10 +136,10 @@ func TestTabKeys(t *testing.T) {
 }
 
 // TestCyclePane covers shift+tab on the Agents screen: focus walks
-// supervisor → each active (running/queued) worker in spawn order → back to
-// the supervisor, selecting each worker tile as it is focused. Finished
-// workers are never focused. With no active workers it simply toggles
-// focusSup/focusWork.
+// supervisor → each active (running/queued) worker in spawn order → the
+// bottom panel → back to the supervisor, selecting each worker tile as it
+// is focused. Finished workers are never focused. With no active workers
+// it toggles focusSup/focusBottom.
 func TestCyclePane(t *testing.T) {
 	newAgentsModel := func(t *testing.T, upserts ...WorkerUpsertMsg) Model {
 		t.Helper()
@@ -169,12 +169,14 @@ func TestCyclePane(t *testing.T) {
 		wantFocus int
 		wantSelID string // focused worker id; "" = no worker focused
 	}{
-		{"no active workers: first press toggles to worker focus", nil, 1, focusWork, ""},
-		{"no active workers: second press toggles back to supervisor", nil, 2, focusSup, ""},
+		{"no active workers: first press focuses the bottom panel", nil, 1, focusBottom, ""},
+		{"no active workers: second press returns to supervisor", nil, 2, focusSup, ""},
+		{"no active workers: third press cycles back to the bottom panel", nil, 3, focusBottom, ""},
 		{"two running, one done: first press focuses first running worker in spawn order", activeUpserts, 1, focusWork, "w1"},
 		{"two running, one done: second press focuses second running worker", activeUpserts, 2, focusWork, "w2"},
-		{"two running, one done: third press returns to supervisor", activeUpserts, 3, focusSup, ""},
-		{"two running, one done: fourth press wraps back to first running worker", activeUpserts, 4, focusWork, "w1"},
+		{"two running, one done: third press focuses the bottom panel", activeUpserts, 3, focusBottom, ""},
+		{"two running, one done: fourth press returns to supervisor", activeUpserts, 4, focusSup, ""},
+		{"two running, one done: fifth press wraps back to first running worker", activeUpserts, 5, focusWork, "w1"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -200,7 +202,7 @@ func TestCyclePane(t *testing.T) {
 
 	// The done worker is never focused, no matter how far we cycle.
 	m := newAgentsModel(t, activeUpserts...)
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 5; i++ {
 		m = apply(t, m, tea.KeyMsg{Type: tea.KeyShiftTab})
 		if m.focus == focusWork {
 			sel := m.selectedWorker()
@@ -208,6 +210,112 @@ func TestCyclePane(t *testing.T) {
 				t.Fatalf("press %d: done worker w3 was focused", i+1)
 			}
 		}
+	}
+}
+
+// TestBottomTabKeysInFocusBottom: with the bottom panel focused, left/h
+// step its Tasks/Logs/Metrics tab back and right/l forward, both wrapping
+// around; t still steps it forward. From the worker focus the panel tab
+// is untouched by left/right.
+func TestBottomTabKeysInFocusBottom(t *testing.T) {
+	tests := []struct {
+		name      string
+		startTab  int
+		key       tea.KeyMsg
+		wantFocus int
+		wantTab   int
+	}{
+		{"right steps forward", bottomTasks, tea.KeyMsg{Type: tea.KeyRight}, focusBottom, bottomLogs},
+		{"l steps forward", bottomTasks, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")}, focusBottom, bottomLogs},
+		{"left steps back", bottomLogs, tea.KeyMsg{Type: tea.KeyLeft}, focusBottom, bottomTasks},
+		{"h steps back", bottomMetrics, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")}, focusBottom, bottomLogs},
+		{"right wraps metrics to tasks", bottomMetrics, tea.KeyMsg{Type: tea.KeyRight}, focusBottom, bottomTasks},
+		{"left wraps tasks to metrics", bottomTasks, tea.KeyMsg{Type: tea.KeyLeft}, focusBottom, bottomMetrics},
+		{"t still steps forward", bottomLogs, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")}, focusBottom, bottomMetrics},
+		{"right in worker focus leaves the panel alone", bottomTasks, tea.KeyMsg{Type: tea.KeyRight}, focusWork, bottomTasks},
+		{"left in worker focus leaves the panel alone", bottomMetrics, tea.KeyMsg{Type: tea.KeyLeft}, focusWork, bottomMetrics},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// demoState has w1 running and w2 queued: sup → w1 → w2 →
+			// bottom panel is three shift+tab presses; the worker focus
+			// lands on the first press.
+			m := demoState(t)
+			m.bottomTab = tt.startTab
+			presses := 1
+			if tt.wantFocus == focusBottom {
+				presses = 3
+			}
+			for i := 0; i < presses; i++ {
+				m = apply(t, m, tea.KeyMsg{Type: tea.KeyShiftTab})
+			}
+			if m.focus != tt.wantFocus {
+				t.Fatalf("focus = %d, want %d", m.focus, tt.wantFocus)
+			}
+			m = apply(t, m, tt.key)
+			if m.focus != tt.wantFocus {
+				t.Fatalf("focus moved to %d after %v", m.focus, tt.key)
+			}
+			if m.bottomTab != tt.wantTab {
+				t.Fatalf("bottomTab = %d, want %d", m.bottomTab, tt.wantTab)
+			}
+		})
+	}
+}
+
+// TestKillInFocusBottom: the worker-table keys stay live on the Agents
+// screen with the bottom panel focused (workerKeys is true for any
+// non-supervisor focus): x on the selected running worker emits
+// KillWorkerMsg and reaches the kill hook.
+func TestKillInFocusBottom(t *testing.T) {
+	tests := []struct {
+		name     string
+		upserts  []WorkerUpsertMsg
+		presses  int // shift+tab presses from focusSup to focusBottom
+		wantKill string
+	}{
+		{"solo running worker", []WorkerUpsertMsg{
+			{ID: "w1", Model: "qwen-dsh", Task: "t1", Status: "running"},
+		}, 2, "w1"},
+		{"second running worker stays selected", []WorkerUpsertMsg{
+			{ID: "w1", Model: "qwen-dsh", Task: "t1", Status: "running"},
+			{ID: "w2", Model: "qwen-coder", Task: "t2", Status: "running"},
+		}, 3, "w2"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := New(make(chan tea.Msg))
+			msgs := make([]tea.Msg, 0, len(tt.upserts)+1)
+			msgs = append(msgs, tea.WindowSizeMsg{Width: 132, Height: 40})
+			for _, u := range tt.upserts {
+				msgs = append(msgs, u)
+			}
+			m = apply(t, m, msgs...)
+			var killed string
+			m.OnKillWorker = func(id string) { killed = id }
+			for i := 0; i < tt.presses; i++ {
+				m = apply(t, m, tea.KeyMsg{Type: tea.KeyShiftTab})
+			}
+			if m.focus != focusBottom {
+				t.Fatalf("focus = %d, want focusBottom", m.focus)
+			}
+			if sel := m.selectedWorker(); sel == nil || sel.ID != tt.wantKill || sel.Status != "running" {
+				t.Fatalf("selected = %+v, want running worker %s", sel, tt.wantKill)
+			}
+			next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+			m = next.(Model)
+			if cmd == nil {
+				t.Fatal("x produced no cmd")
+			}
+			km, ok := cmd().(KillWorkerMsg)
+			if !ok || km.ID != tt.wantKill {
+				t.Fatalf("cmd msg = %#v, want KillWorkerMsg{%s}", cmd(), tt.wantKill)
+			}
+			m = apply(t, m, km)
+			if killed != tt.wantKill {
+				t.Errorf("killed = %q, want %q", killed, tt.wantKill)
+			}
+		})
 	}
 }
 
@@ -956,8 +1064,9 @@ func TestTabDigitsSelect(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run("key "+tt.key, func(t *testing.T) {
-			// From the worker focus, where digits switch tabs instead of
-			// typing into the chat input.
+			// From a pane focus (the bottom panel here, no workers),
+			// where digits switch tabs instead of typing into the
+			// chat input.
 			m := New(make(chan tea.Msg))
 			m = apply(t, m,
 				tea.WindowSizeMsg{Width: 132, Height: 40},

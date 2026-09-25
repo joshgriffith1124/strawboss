@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -17,7 +18,12 @@ func (m Model) viewSupPane(w, h int, focused bool) string {
 	for _, ln := range strings.Split(m.viewChatColumn(w-3, h-3), "\n") {
 		lines = append(lines, " "+ln)
 	}
-	return pane(pill("● claude-supervisor ›", cTerm, cSup), sDim.Render(m.supModel), lines, w, h, border)
+	right := sDim.Render(m.supModel)
+	if n := len(m.activeWorkers()); m.hideTiles && n > 0 {
+		// Tiles hidden with ctrl+t: say how many are tucked away.
+		right = sAmber.Render(fmt.Sprintf("%d tiles hidden · ctrl+t", n)) + sFaint.Render(" · ") + right
+	}
+	return pane(pill("● claude-supervisor ›", cTerm, cSup), right, lines, w, h, border)
 }
 
 // viewWorkerPane is one worker's detail pane: the status pill plus worktree in

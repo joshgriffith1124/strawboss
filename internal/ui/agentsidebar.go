@@ -306,5 +306,9 @@ func (m Model) viewBottomPanel(w, h int) string {
 	case bottomMetrics:
 		body = strings.Split(m.viewMetrics(w-2), "\n")
 	}
-	return pane(head, "", padLines(body, h-3), w, h, cBord)
+	border, right := cBord, sFaint.Render("⇧⇥ to focus")
+	if m.focus == focusBottom {
+		border, right = cFocus, sDim.Render("←→ switch")
+	}
+	return pane(head, right, padLines(body, h-3), w, h, border)
 }

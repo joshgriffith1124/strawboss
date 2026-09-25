@@ -146,6 +146,7 @@ func (m Model) workerTableLines(w, maxRows int) []string {
 		}
 		lines = append(lines, " "+sFaint.Render(empty))
 	}
+	selIdx := m.selIndex(rows)
 	for i, wk := range rows {
 		if maxRows > 0 && i >= maxRows {
 			lines = append(lines, " "+sFaint.Render(fmt.Sprintf("… %d more", len(rows)-maxRows)))
@@ -172,7 +173,7 @@ func (m Model) workerTableLines(w, maxRows int) []string {
 			taskStyle = sDim
 		}
 		cursor := " "
-		if i == m.selected {
+		if i == selIdx {
 			cursor = sTealB.Render("▸")
 		}
 		row := fmt.Sprintf("%s%-4s %s %-8s %s %s %8s %8s ",
@@ -182,7 +183,7 @@ func (m Model) workerTableLines(w, maxRows int) []string {
 			taskStyle.Render(fmt.Sprintf("%-*s", w-54, truncPlain(task, w-54))),
 			dur, toks)
 		row = padTo(row, w-2)
-		if i == m.selected {
+		if i == selIdx {
 			row = sSelRow.Render(row)
 		}
 		lines = append(lines, row)

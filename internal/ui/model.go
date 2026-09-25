@@ -35,6 +35,7 @@ var tabNames = [numTabs]string{"Agents", "Tasks", "Worktrees", "Models", "Analyt
 const (
 	focusSup = iota
 	focusWork
+	focusBottom // the bottom Tasks/Logs/Metrics panel
 )
 
 // Agents-screen bottom panel tabs.
@@ -256,8 +257,9 @@ type Model struct {
 
 	width, height int
 	tab           int
-	focus         int  // Agents screen: focusSup or focusWork
+	focus         int  // Agents screen: focusSup, focusWork or focusBottom
 	zoomed        bool // Agents screen: focused pane fills the main area
+	hideTiles     bool // Agents screen: worker tiles hidden (ctrl+t); supervisor gets the width
 	bottomTab     int  // Agents screen: bottomTasks/bottomLogs/bottomMetrics
 	pulse         bool
 	started       time.Time
@@ -311,6 +313,7 @@ type Model struct {
 	workerEvents map[string][]workerEvent
 	workerRates  map[string]workerRate
 	selected     int
+	selID        string // pinned selected worker id ("" = use selected as-is)
 	follow       bool
 	filterInput  textinput.Model
 	filtering    bool   // filter input focused
@@ -724,7 +727,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.workerEvents = map[string][]workerEvent{}
 		m.workerRates = map[string]workerRate{}
 		m.recentResults = nil
-		m.selected = 0
+		m.selected, m.selID = 0, ""
 		m.sessionID = msg.ID
 		if msg.ID == "" {
 			m.chat = append(m.chat, chatItem{kind: "note", when: time.Now(),
@@ -850,10 +853,35 @@ func (m *Model) showToast(text string) {
 // selectedWorker resolves the dashboard selection against display order.
 func (m Model) selectedWorker() *workerRow {
 	rows := m.visibleWorkers()
-	if m.selected >= 0 && m.selected < len(rows) {
-		return &rows[m.selected]
+	if i := m.selIndex(rows); i >= 0 && i < len(rows) {
+		return &rows[i]
 	}
 	return nil
+}
+
+// selIndex is the selected worker's row in rows (the visible list). The
+// selection is anchored to a worker id: the display order shifts as
+// workers start and finish, and a bare index would drift onto another
+// worker. Falls back to the index while no id is pinned or the pinned
+// worker is filtered out.
+func (m Model) selIndex(rows []workerRow) int {
+	if m.selID != "" {
+		for i, wk := range rows {
+			if wk.ID == m.selID {
+				return i
+			}
+		}
+	}
+	return m.selected
+}
+
+// selectRow selects rows[i] and pins its id.
+func (m *Model) selectRow(rows []workerRow, i int) {
+	if i < 0 || i >= len(rows) {
+		return
+	}
+	m.selected = i
+	m.selID = rows[i].ID
 }
 
 // visibleWorkers is display order with the table filter applied: a
@@ -885,7 +913,7 @@ func (m Model) visibleWorkers() []workerRow {
 // are live: on the dashboard, or on the Agents screen with the worker
 // pane focused.
 func (m Model) workerKeys() bool {
-	return m.tab == tabDashboard || (m.tab == tabChat && m.focus == focusWork)
+	return m.tab == tabDashboard || (m.tab == tabChat && m.focus != focusSup)
 }
 
 // switchTab moves to tab t. Leaving Worktrees closes the branch review;
@@ -920,21 +948,20 @@ func (m *Model) switchTab(t int) {
 }
 
 // cyclePane moves the Agents-screen focus to the next pane: supervisor →
-// each active worker tile in spawn order → back to the supervisor. With no
-// tiles on screen it toggles between the supervisor and the worker table.
+// each active worker tile in spawn order → the bottom panel → back to the
+// supervisor.
 func (m *Model) cyclePane() {
-	active := m.activeWorkers()
-	if len(active) == 0 {
-		if m.focus == focusSup {
-			m.focus = focusWork
-		} else {
-			m.focus = focusSup
-		}
+	if m.focus == focusBottom {
+		m.focus = focusSup
 		return
+	}
+	active := m.activeWorkers()
+	if m.hideTiles {
+		active = nil // hidden tiles aren't focus stops
 	}
 	next := 0 // index into active of the tile to focus
 	if m.focus == focusWork {
-		next = len(active) // past the last tile: back to the supervisor
+		next = len(active) // past the last tile: on to the bottom panel
 		if sel := m.selectedWorker(); sel != nil {
 			for i, wk := range active {
 				if wk.ID == sel.ID {
@@ -945,13 +972,14 @@ func (m *Model) cyclePane() {
 		}
 	}
 	if next >= len(active) {
-		m.focus = focusSup
+		m.focus = focusBottom
 		return
 	}
 	m.focus = focusWork
-	for i, wk := range m.visibleWorkers() {
+	rows := m.visibleWorkers()
+	for i, wk := range rows {
 		if wk.ID == active[next].ID {
-			m.selected = i
+			m.selectRow(rows, i)
 			return
 		}
 	}
@@ -1127,7 +1155,7 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "enter":
 			m.filter = strings.TrimSpace(m.filterInput.Value())
 			m.filtering = false
-			m.selected = 0
+			m.selected, m.selID = 0, ""
 			return m, nil
 		case "esc":
 			m.filtering = false
@@ -1159,6 +1187,17 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.switchTab((m.tab + numTabs - 1) % numTabs)
 		return m, nil
+	case "ctrl+t":
+		// Hide/show the worker tiles, from either focus. A focused tile
+		// that disappears hands the keyboard back to the supervisor.
+		if m.tab == tabChat {
+			m.hideTiles = !m.hideTiles
+			if m.hideTiles && m.focus == focusWork {
+				m.focus = focusSup
+				m.zoomed = false
+			}
+		}
+		return m, nil
 	case "ctrl+o":
 		// Zoom the focused Agents pane from either focus — checked
 		// before the typing branch, so it works while typing.
@@ -1180,7 +1219,7 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.filter != "" {
 				m.filter = ""
 				m.filterInput.SetValue("")
-				m.selected = 0
+				m.selected, m.selID = 0, ""
 				return m, nil
 			}
 			m.focus = focusSup
@@ -1189,7 +1228,7 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.tab == tabDashboard && m.filter != "" {
 			m.filter = ""
 			m.filterInput.SetValue("")
-			m.selected = 0
+			m.selected, m.selID = 0, ""
 			return m, nil
 		}
 		m.switchTab(tabChat)
@@ -1263,12 +1302,12 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "1", "2", "3", "4", "5", "6":
 		m.switchTab(int(msg.String()[0] - '1'))
 	case "up", "k":
-		if m.workerKeys() && m.selected > 0 {
-			m.selected--
+		if rows := m.visibleWorkers(); m.workerKeys() && m.selIndex(rows) > 0 {
+			m.selectRow(rows, m.selIndex(rows)-1)
 		}
 	case "down", "j":
-		if m.workerKeys() && m.selected < len(m.visibleWorkers())-1 {
-			m.selected++
+		if rows := m.visibleWorkers(); m.workerKeys() && m.selIndex(rows) < len(rows)-1 {
+			m.selectRow(rows, m.selIndex(rows)+1)
 		}
 	case "/":
 		if m.workerKeys() {
@@ -1277,12 +1316,20 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.filterInput.Focus()
 		}
 	case "z":
-		if m.tab == tabChat && m.focus == focusWork {
+		if m.tab == tabChat && m.focus != focusSup {
 			m.zoomed = !m.zoomed
 		}
 	case "t":
-		if m.tab == tabChat && m.focus == focusWork {
+		if m.tab == tabChat && m.focus != focusSup {
 			m.bottomTab = (m.bottomTab + 1) % numBottomTabs
+		}
+	case "right", "l":
+		if m.tab == tabChat && m.focus == focusBottom {
+			m.bottomTab = (m.bottomTab + 1) % numBottomTabs
+		}
+	case "left", "h":
+		if m.tab == tabChat && m.focus == focusBottom {
+			m.bottomTab = (m.bottomTab + numBottomTabs - 1) % numBottomTabs
 		}
 	case "s":
 		if m.OnListSessions != nil {
@@ -1298,7 +1345,7 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, func() tea.Msg { return NewSessionMsg{} }
 	case "f":
 		if m.tab == tabLogs ||
-			(m.tab == tabChat && m.focus == focusWork && m.bottomTab == bottomLogs) {
+			(m.tab == tabChat && m.focus != focusSup && m.bottomTab == bottomLogs) {
 			// Cycle the logs source filter: all → sup → wrk → app.
 			order := []string{"", "sup", "wrk", "app"}
 			for i, s := range order {

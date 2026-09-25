@@ -34,13 +34,19 @@ func (m Model) viewAgents(w, h int) string {
 	var body string
 	if m.zoomed {
 		// Zoomed: the focused pane alone fills the whole main area.
-		if m.focus == focusSup {
+		switch m.focus {
+		case focusSup:
 			body = m.viewSupPane(mainW, mainH, true)
-		} else {
+		case focusBottom:
+			body = m.viewBottomPanel(mainW, mainH)
+		default:
 			body = m.viewWorkerPane(sel, mainW, mainH, true)
 		}
 	} else {
 		active := m.activeWorkers()
+		if m.hideTiles {
+			active = nil // ctrl+t: the supervisor pane takes the full width
+		}
 		side, extra := active, []workerRow(nil)
 		if len(side) > maxSideTiles {
 			side, extra = active[:maxSideTiles], active[maxSideTiles:]

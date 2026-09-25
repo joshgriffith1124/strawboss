@@ -18,12 +18,46 @@ func (m Model) viewSupPane(w, h int, focused bool) string {
 	for _, ln := range strings.Split(m.viewChatColumn(w-3, h-3), "\n") {
 		lines = append(lines, " "+ln)
 	}
-	right := sDim.Render(m.supModel)
+	head := pill("● claude-supervisor ›", cTerm, cSup)
+	// Header right, most important first; the model name drops when the
+	// pane is too narrow for everything (the sidebar shows it too).
+	var parts []string
 	if n := len(m.activeWorkers()); m.hideTiles && n > 0 {
 		// Tiles hidden with ctrl+t: say how many are tucked away.
-		right = sAmber.Render(fmt.Sprintf("%d tiles hidden · ctrl+t", n)) + sFaint.Render(" · ") + right
+		parts = append(parts, sAmber.Render(fmt.Sprintf("%d tiles hidden · ctrl+t", n)))
 	}
-	return pane(pill("● claude-supervisor ›", cTerm, cSup), right, lines, w, h, border)
+	if ctx := m.supCtxLabel(); ctx != "" {
+		parts = append(parts, ctx)
+	}
+	sep := sFaint.Render(" · ")
+	right := strings.Join(parts, sep)
+	if m.supModel != "" {
+		withModel := sDim.Render(m.supModel)
+		if right != "" {
+			withModel = right + sep + withModel
+		}
+		if lipgloss.Width(head)+lipgloss.Width(withModel)+4 <= w-2 {
+			right = withModel
+		}
+	}
+	return pane(head, right, lines, w, h, border)
+}
+
+// supCtxLabel is the supervisor's context gauge, "ctx 168k/1.0M 17%": red
+// once ctxBloated (every call re-reads it all; /new starts fresh), dim
+// otherwise. Unknown window shows the footprint alone; nothing yet is "".
+func (m Model) supCtxLabel() string {
+	if m.supCtx <= 0 {
+		return ""
+	}
+	label := "ctx " + formatTokens(m.supCtx)
+	if win := m.ctxWindow(); win > 0 {
+		label += fmt.Sprintf("/%s %d%%", formatTokens(win), 100*m.supCtx/win)
+	}
+	if m.ctxBloated() {
+		return sErr.Render(label + " · /new")
+	}
+	return sDim.Render(label)
 }
 
 // viewWorkerPane is one worker's detail pane: the status pill plus worktree in

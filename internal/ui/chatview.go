@@ -8,9 +8,9 @@ import (
 )
 
 // viewChatColumn renders the supervisor chat column: the log lines
-// bottom-anchored, then the input — a faint rule over the input line, two
-// rows in all. It is rendered inside the Agents screen's supervisor pane,
-// whose own border is the box.
+// bottom-anchored, then the input — a faint rule over the wrapped input
+// rows. It is rendered inside the Agents screen's supervisor pane, whose
+// own border is the box.
 func (m Model) viewChatColumn(w, h int) string {
 	// Callers budget this column from the window size (the supervisor
 	// pane subtracts its border and margin), so a tiny window can hand
@@ -24,7 +24,8 @@ func (m Model) viewChatColumn(w, h int) string {
 	if h < 4 {
 		h = 4
 	}
-	inputH := 2
+	inputRows := m.inputLines(w)
+	inputH := 1 + len(inputRows)
 	attach := ""
 	if len(m.pending) > 0 {
 		attach = m.attachmentsLine(w)
@@ -124,12 +125,10 @@ func (m Model) viewChatColumn(w, h int) string {
 	}
 	log := strings.Join(lines, "\n")
 
-	// Two input rows: a faint rule, then the prompt line. The value fills
-	// the column beside the 2-cell "› " prompt plus the cursor's cell,
-	// so the row stays exactly w wide.
-	m.input.Width = w - 3
+	// The input: a faint rule, then the value soft-wrapped over up to
+	// maxInputRows rows.
 	rule := sFaint.Render(strings.Repeat("─", w))
-	inputLine := m.input.View()
+	inputLine := strings.Join(inputRows, "\n")
 
 	if hint != "" {
 		if attach != "" {
@@ -141,6 +140,84 @@ func (m Model) viewChatColumn(w, h int) string {
 		return lipgloss.JoinVertical(lipgloss.Left, log, attach, rule, inputLine)
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, log, rule, inputLine)
+}
+
+// maxInputRows caps how tall the input grows before it scrolls.
+const maxInputRows = 5
+
+// inputLines renders the input value word-wrapped to a w-wide column: the
+// "› " prompt on the first row, continuation rows indented to match, and
+// one cell kept free for the cursor at a row's end. The textinput still
+// does the editing — only its single-line, side-scrolling View is replaced.
+// Past maxInputRows the rows around the cursor are shown.
+func (m Model) inputLines(w int) []string {
+	textW := w - 3
+	if textW < 1 {
+		textW = 1
+	}
+	val := []rune(m.input.Value())
+	pos := m.input.Position()
+
+	// Row start indices: break before a rune that would overflow, at the
+	// last space in the row when there is one.
+	starts := []int{0}
+	cw, lastSpace := 0, -1
+	for i, r := range val {
+		rw := lipgloss.Width(string(r))
+		start := starts[len(starts)-1]
+		if cw+rw > textW && i > start {
+			brk := i
+			if lastSpace > start {
+				brk = lastSpace
+			}
+			starts = append(starts, brk)
+			cw, lastSpace = lipgloss.Width(string(val[brk:i])), -1
+		}
+		cw += rw
+		if r == ' ' {
+			lastSpace = i + 1
+		}
+	}
+
+	curRow := 0
+	for k, s := range starts {
+		if s <= pos {
+			curRow = k
+		}
+	}
+	rows := make([]string, len(starts))
+	for k, s := range starts {
+		end := len(val)
+		if k+1 < len(starts) {
+			end = starts[k+1]
+		}
+		row := string(val[s:end])
+		if k == curRow {
+			under := " "
+			after := ""
+			if pos < end {
+				under = string(val[pos])
+				after = string(val[pos+1 : end])
+			}
+			c := m.input.Cursor
+			c.SetChar(under)
+			row = string(val[s:pos]) + c.View() + after
+		}
+		prompt := "  "
+		if k == 0 {
+			prompt = m.input.Prompt
+		}
+		rows[k] = prompt + row
+	}
+
+	if len(rows) > maxInputRows {
+		first := curRow - maxInputRows + 1
+		if first < 0 {
+			first = 0
+		}
+		rows = rows[first : first+maxInputRows]
+	}
+	return rows
 }
 
 // attachmentsLine is the dim strip above the input box listing the pending

@@ -52,6 +52,7 @@ type Outcome struct {
 	Duration time.Duration
 	Err      error
 	Added    []string // files the worker created (from before/after snapshots); nil when unknown
+	Changed  []string // files the worker touched (created, modified or deleted); nil when unknown
 }
 
 // SlotsDir is where concurrency-slot lock files live for a registry: the
@@ -218,6 +219,11 @@ func Run(ctx context.Context, h harness.WorkerHarness, reg *registry.Registry, m
 				warn("stray-file check: " + aerr.Error())
 			} else {
 				oc.Added = added
+			}
+			if changed, cerr := snapshot.Changed(dir, before, after); cerr != nil {
+				warn("verify attribution: " + cerr.Error())
+			} else {
+				oc.Changed = changed
 			}
 		}
 	}

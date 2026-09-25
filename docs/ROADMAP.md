@@ -70,11 +70,13 @@ tested at the end (same rule as milestones). Struck items are done.
     four parallel tasks across them each slowed past the 20-minute
     deadline. An optional pool name shared by entries gives them one cap,
     so extra tasks queue instead of thrashing.
-24. **Per-worker verify attribution** — parallel workers share the tree
+24. ~~Per-worker verify attribution~~ — parallel workers share the tree
     and the verify check runs once after all of them, so one worker's
     missing piece marks every worker in the batch failed ("5 of 5
-    failed" with finished work inside). Credit a worker whose own touched
-    files build and test, and say which worker broke the check.
+    failed" with finished work inside). A failed batch check now names
+    the workers whose touched files (or packages) the failure output
+    points at, and lists the rest as not implicated; with nothing to
+    match it falls back to the old message.
 25. **Don't retry a timeout on the same hardware** — a tier-2 timeout
     escalates to the other tier-2 entry; when that entry shares the
     endpoint (same pool, 23) the retry just burns another deadline.

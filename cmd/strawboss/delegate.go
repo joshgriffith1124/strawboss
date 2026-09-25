@@ -351,9 +351,12 @@ func runDelegate(args []string, stdout io.Writer) error {
 		}
 	}
 	// Shared-directory batch: one check over everyone's combined changes.
-	// It cannot say which worker broke it, so worker statuses stand and the
-	// call as a whole fails.
+	// Worker statuses stand, but when the check fails the call as a whole
+	// fails and blame attributes it to the workers whose touched files —
+	// or, when nothing matches a file, whose packages — the failure
+	// output points at, crediting the rest as not implicated.
 	batchFailed := false
+	var batchErr error
 	if haveBatchBase {
 		if now, ok := verify.Fingerprint(*dir); ok && now == batchBase {
 			batchCheck = false // nobody changed anything: nothing to check
@@ -363,15 +366,35 @@ func runDelegate(args []string, stdout io.Writer) error {
 		vctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		r := verify.Run(vctx, *dir, check)
 		cancel()
-		fmt.Fprintf(stdout, "%s (after all %d workers — it cannot tell which one broke it)\n",
-			verify.Note(check, r), len(tasks))
 		batchFailed = !r.OK
+		suffix := fmt.Sprintf(" (after all %d workers — it cannot tell which one broke it)", len(tasks))
+		if batchFailed {
+			ids := make([]string, len(tasks))
+			for i, oc := range outcomes {
+				ids[i] = oc.WorkerID
+			}
+			culprits, ok := blame(r.Output, changedOf(outcomes), tasks)
+			if ok {
+				var culpritIDs []string
+				for i := range tasks {
+					if _, isCulprit := culprits[i]; isCulprit {
+						culpritIDs = append(culpritIDs, ids[i])
+					}
+				}
+				batchErr = fmt.Errorf("verify check failed after the workers finished; broken by %s",
+					strings.Join(culpritIDs, ", "))
+				suffix = " " + blameNote(culprits, ids)
+			} else {
+				batchErr = errors.New("verify check failed after the workers finished")
+			}
+		}
+		fmt.Fprintf(stdout, "%s%s\n", verify.Note(check, r), suffix)
 	}
 	if failed > 0 {
 		return fmt.Errorf("%d of %d workers failed", failed, len(tasks))
 	}
-	if batchFailed {
-		return errors.New("verify check failed after the workers finished")
+	if batchErr != nil {
+		return batchErr
 	}
 	return nil
 }
@@ -397,6 +420,19 @@ func verifySpec(dir, flagValue string) (verify.Spec, error) {
 // succeeded reports whether an outcome is a completed, non-failed worker.
 func succeeded(oc runner.Outcome) bool {
 	return oc.Err == nil && oc.Res.Status == harness.StatusDone
+}
+
+// changedOf collects each outcome's touched files for the blame
+// attribution; an outcome that errored has no snapshot pair, so its entry
+// is nil.
+func changedOf(outcomes []runner.Outcome) [][]string {
+	changed := make([][]string, len(outcomes))
+	for i, oc := range outcomes {
+		if oc.Err == nil {
+			changed[i] = oc.Changed
+		}
+	}
+	return changed
 }
 
 // timeoutFor resolves one attempt's deadline: an explicit --timeout
@@ -544,8 +580,9 @@ func runEscalated(ctx context.Context, first runner.Outcome, next config.ModelCo
 		if oc.Err == nil {
 			oc.Res.Summary = "[escalated from " + firstModel + ", which failed: " + firstDesc + "]\n" + oc.Res.Summary
 			// The first attempt's files are still in the tree: the stray
-			// check must see them too.
+			// check and the blame attribution must see them too.
 			oc.Added = unionAdded(first.Added, oc.Added)
+			oc.Changed = unionAdded(first.Changed, oc.Changed)
 			return oc
 		}
 		err = oc.Err

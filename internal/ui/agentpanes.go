@@ -106,7 +106,7 @@ func (m Model) viewWorkerPane(wk *workerRow, w, h int, focused bool) string {
 	}
 	// Transcript: each event's text is wrapped to the pane's inner width
 	// instead of cut to one line — the event's colour and glyph stay on
-	// its first line, continuation lines drop two cells in. Only the
+	// its first line, continuation lines align with its text. Only the
 	// wrapped lines that fit are kept, newest at the bottom as before.
 	evs := m.workerEvents[wk.ID]
 	var wrapped []string
@@ -162,7 +162,7 @@ func (m Model) viewWorkerPane(wk *workerRow, w, h int, focused bool) string {
 // cells: hardWrap chops runs longer than textW, then lipgloss word-wraps
 // the rest (each line comes back padded to exactly textW). The prefix —
 // the event's glyph and a space, when the kind has one — sits on the
-// first line only; continuation lines are indented two cells.
+// first line only; continuation lines hang under the first line's text.
 func wrapEventLines(prefix string, style lipgloss.Style, text string, textW int) []string {
 	if textW < 1 {
 		textW = 1
@@ -177,12 +177,13 @@ func wrapEventLines(prefix string, style lipgloss.Style, text string, textW int)
 	if len(ws) == 0 {
 		ws = []string{""}
 	}
+	hang := " " + strings.Repeat(" ", lipgloss.Width(prefix))
 	out := make([]string, 0, len(ws))
 	for i, ln := range ws {
 		if i == 0 {
 			out = append(out, " "+prefix+ln)
 		} else {
-			out = append(out, "  "+ln)
+			out = append(out, hang+ln)
 		}
 	}
 	return out

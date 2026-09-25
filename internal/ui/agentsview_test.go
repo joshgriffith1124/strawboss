@@ -191,3 +191,138 @@ func TestAgentsViewExactShape(t *testing.T) {
 		})
 	}
 }
+
+// TestAgentsTilesHidden: ctrl+t hides the worker tiles on the Agents
+// screen. The focused tile is always asserted on model state (focus plus
+// selected worker id), never on border colour.
+func TestAgentsTilesHidden(t *testing.T) {
+	base := time.Date(2026, 9, 6, 14, 0, 0, 0, time.UTC)
+
+	t.Run("ctrl+t toggles from the supervisor focus", func(t *testing.T) {
+		m := agentsFixture(t, 132, 40, 5)
+		m = agentsFeed(t, m, tea.KeyMsg{Type: tea.KeyCtrlT})
+		if !m.hideTiles {
+			t.Fatal("ctrl+t did not hide the tiles")
+		}
+		if m.focus != focusSup {
+			t.Fatalf("focus = %d, want focusSup after toggling from the supervisor", m.focus)
+		}
+		m = agentsFeed(t, m, tea.KeyMsg{Type: tea.KeyCtrlT})
+		if m.hideTiles {
+			t.Fatal("second ctrl+t did not reveal the tiles")
+		}
+	})
+
+	t.Run("ctrl+t hands a focused tile's keyboard back to the supervisor", func(t *testing.T) {
+		m := agentsFixture(t, 132, 40, 5)
+		m = agentsFeed(t, m, tea.KeyMsg{Type: tea.KeyShiftTab}) // w1's tile
+		m = agentsFeed(t, m, tea.KeyMsg{Type: tea.KeyShiftTab}) // w2's tile
+		if m.focus != focusWork || m.selectedWorker() == nil || m.selectedWorker().ID != "w2" {
+			t.Fatalf("focus=%d sel=%+v, want focusWork/w2 before hiding", m.focus, m.selectedWorker())
+		}
+		m.zoomed = true
+		m = agentsFeed(t, m, tea.KeyMsg{Type: tea.KeyCtrlT})
+		if !m.hideTiles || m.focus != focusSup || m.zoomed {
+			t.Fatalf("hideTiles=%v focus=%d zoomed=%v, want hidden/focusSup/unzoomed",
+				m.hideTiles, m.focus, m.zoomed)
+		}
+	})
+
+	t.Run("ctrl+t only toggles on the Agents screen", func(t *testing.T) {
+		m := agentsFixture(t, 132, 40, 5)
+		m.tab = tabDashboard
+		m = agentsFeed(t, m, tea.KeyMsg{Type: tea.KeyCtrlT})
+		if m.hideTiles {
+			t.Fatal("ctrl+t hid the tiles off the Agents screen")
+		}
+	})
+
+	t.Run("cyclePane skips hidden tiles", func(t *testing.T) {
+		m := agentsFixture(t, 132, 40, 5)
+		// Tiles shown: the cycle reaches the first active worker tile.
+		m = agentsFeed(t, m, tea.KeyMsg{Type: tea.KeyShiftTab})
+		if m.focus != focusWork || m.selectedWorker() == nil || m.selectedWorker().ID != "w1" {
+			t.Fatalf("focus=%d sel=%+v, want focusWork/w1 with tiles shown",
+				m.focus, m.selectedWorker())
+		}
+		// Hide the tiles (hands off to the supervisor), then cycle: the
+		// hidden tiles must not be focus stops.
+		m = agentsFeed(t, m, tea.KeyMsg{Type: tea.KeyCtrlT})
+		m = agentsFeed(t, m, tea.KeyMsg{Type: tea.KeyShiftTab})
+		if m.focus != focusBottom {
+			t.Fatalf("focus = %d, want focusBottom: hidden tiles are not focus stops", m.focus)
+		}
+		m = agentsFeed(t, m, tea.KeyMsg{Type: tea.KeyShiftTab})
+		if m.focus != focusSup {
+			t.Fatalf("focus = %d, want focusSup after the bottom panel", m.focus)
+		}
+		// Reveal the tiles: the cycle reaches the worker tiles again.
+		m = agentsFeed(t, m, tea.KeyMsg{Type: tea.KeyCtrlT})
+		m = agentsFeed(t, m, tea.KeyMsg{Type: tea.KeyShiftTab})
+		if m.focus != focusWork || m.selectedWorker() == nil || m.selectedWorker().ID != "w1" {
+			t.Fatalf("focus=%d sel=%+v, want focusWork/w1 with tiles revealed",
+				m.focus, m.selectedWorker())
+		}
+	})
+
+	t.Run("tiles hidden label appears in the view", func(t *testing.T) {
+		m := agentsFixture(t, 128, 45, 5)
+		m = agentsFeed(t, m, tea.KeyMsg{Type: tea.KeyCtrlT})
+		if !strings.Contains(m.View(), "tiles hidden") {
+			t.Fatal(`View() missing "tiles hidden" while the tiles are tucked away`)
+		}
+		m = agentsFeed(t, m, tea.KeyMsg{Type: tea.KeyCtrlT})
+		if strings.Contains(m.View(), "tiles hidden") {
+			t.Fatal(`View() still says "tiles hidden" after the tiles are revealed`)
+		}
+	})
+
+	t.Run("tiles hidden keeps the exact frame", func(t *testing.T) {
+		m := agentsFixture(t, 128, 45, 5)
+		m = agentsFeed(t, m, tea.KeyMsg{Type: tea.KeyCtrlT})
+		out := m.View()
+		lines := strings.Split(out, "\n")
+		if len(lines) != 45 {
+			t.Fatalf("View() returned %d lines, want 45\nout:\n%s", len(lines), out)
+		}
+		if w := lipgloss.Width(lines[0]); w != 128 {
+			t.Errorf("top row width %d, want 128: %.80q", w, lines[0])
+		}
+		bodyStart := 1
+		if m.toast != "" {
+			bodyStart++
+		}
+		for i := bodyStart; i < len(lines)-1; i++ {
+			if w := lipgloss.Width(lines[i]); w != 128 {
+				t.Errorf("body line %d width %d, want 128: %.80q", i, w, lines[i])
+			}
+		}
+	})
+
+	t.Run("selection stays on the same worker id when the order shifts", func(t *testing.T) {
+		m := agentsFixture(t, 132, 40, 5)
+		// Live rows: queued first, then running in spawn order — w1 sits
+		// at visible index 1, below the queued w2.
+		m = agentsFeed(t, m, tea.KeyMsg{Type: tea.KeyShiftTab}) // w1's tile
+		if m.focus != focusWork || m.selectedWorker() == nil || m.selectedWorker().ID != "w1" {
+			t.Fatalf("focus=%d sel=%+v, want focusWork/w1", m.focus, m.selectedWorker())
+		}
+		if m.selIndex(m.visibleWorkers()) != 1 {
+			t.Fatalf("w1 at row %d, want 1 before the order shifts", m.selIndex(m.visibleWorkers()))
+		}
+		// w1 finishes: it drops out of the live rows and sinks into the
+		// finished history, so its row number shifts.
+		m = agentsFeed(t, m,
+			WorkerUpsertMsg{ID: "w1", Status: "done", Started: base, Ended: base.Add(10 * time.Minute)})
+		got := m.selIndex(m.visibleWorkers())
+		if m.selectedWorker() == nil || m.selectedWorker().ID != "w1" {
+			t.Fatalf("sel=%+v, want w1: a bare index would have drifted off", m.selectedWorker())
+		}
+		if got == 1 {
+			t.Fatal("w1 did not move: the display order did not shift, so the test would not prove anything")
+		}
+		if m.visibleWorkers()[got].ID != "w1" {
+			t.Fatalf("row %d holds %s, want w1", got, m.visibleWorkers()[got].ID)
+		}
+	})
+}

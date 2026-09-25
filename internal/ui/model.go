@@ -14,13 +14,21 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// Top-level tabs. tabChat renders the Agents screen (supervisor chat pane,
-// worker panes, sidebar, bottom panel); tabDashboard is the Tasks screen.
+// Top-level tabs, in display order (keys 1-6). tabChat renders the Agents
+// screen (supervisor chat pane, worker panes, sidebar, bottom panel);
+// tabDashboard is the Tasks screen; tabWorktrees is branch review.
 const (
 	tabChat = iota
 	tabDashboard
+	tabWorktrees
+	tabModels
+	tabAnalytics
 	tabLogs
+	numTabs
 )
+
+// tabNames are the top-bar labels, indexed by tab constant.
+var tabNames = [numTabs]string{"Agents", "Tasks", "Worktrees", "Models", "Analytics", "Logs"}
 
 // Agents-screen pane focus: the supervisor pane owns typing; the worker
 // focus owns ↑↓ selection and the worker action keys (x r R u).
@@ -241,6 +249,10 @@ type Model struct {
 	OnDiscardBranch func(name string) error
 	// OnUndoWorker reverts a finished worker's edits (`u`); nil in demo mode.
 	OnUndoWorker func(id, dir string) (files []string, err error)
+	// OnScorecard loads the historical per-model scorecard (the `strawboss
+	// stats` table) for the Analytics tab. Called on entering the tab, never
+	// per frame; nil in demo mode.
+	OnScorecard func() []ScoreRow
 
 	width, height int
 	tab           int
@@ -320,6 +332,10 @@ type Model struct {
 	// undoConfirm holds the worker id awaiting a second "u" press; any
 	// other key press disarms it.
 	undoConfirm string
+
+	// scores is the Analytics tab's scorecard, reloaded via OnScorecard
+	// each time the tab is entered.
+	scores []ScoreRow
 
 	// models
 	models []modelStat
@@ -872,6 +888,37 @@ func (m Model) workerKeys() bool {
 	return m.tab == tabDashboard || (m.tab == tabChat && m.focus == focusWork)
 }
 
+// switchTab moves to tab t. Leaving Worktrees closes the branch review;
+// entering it loads the branches (the review owns the keyboard while the
+// tab is up). Entering Analytics reloads the scorecard.
+func (m *Model) switchTab(t int) {
+	if t < 0 || t >= numTabs {
+		return
+	}
+	if m.tab == tabWorktrees && t != tabWorktrees {
+		m.reviewing = false
+		m.diffText = ""
+		m.diffScroll = 0
+		m.brConfirm = ""
+	}
+	m.tab = t
+	switch t {
+	case tabWorktrees:
+		m.branches = nil
+		if m.OnListBranches != nil {
+			m.branches = m.OnListBranches()
+		}
+		m.brIdx = 0
+		m.diffText = ""
+		m.brConfirm = ""
+		m.reviewing = true
+	case tabAnalytics:
+		if m.OnScorecard != nil {
+			m.scores = m.OnScorecard()
+		}
+	}
+}
+
 func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Typing only while the supervisor pane owns the keyboard: with the
 	// worker focus active, plain keys drive the worker table instead of
@@ -942,8 +989,11 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			return m, tea.Quit
 		case "esc", "q", "b":
-			m.reviewing = false
-			m.brConfirm = ""
+			m.switchTab(tabChat)
+		case "1", "2", "3", "4", "5", "6":
+			m.switchTab(int(msg.String()[0] - '1'))
+		case "shift+tab":
+			m.switchTab((m.tab + numTabs - 1) % numTabs)
 		case "up", "k":
 			if m.brIdx > 0 {
 				m.brIdx--
@@ -1070,10 +1120,10 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		m.tab = (m.tab + 1) % 3
+		m.switchTab((m.tab + 1) % numTabs)
 		return m, nil
 	case "shift+tab":
-		m.tab = (m.tab + 2) % 3
+		m.switchTab((m.tab + numTabs - 1) % numTabs)
 		return m, nil
 	case "alt+z":
 		// Zoom the focused Agents pane from either focus — checked
@@ -1108,7 +1158,7 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.selected = 0
 			return m, nil
 		}
-		m.tab = tabChat
+		m.switchTab(tabChat)
 		return m, nil
 	}
 
@@ -1176,12 +1226,8 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q":
 		m.quitting = true
 		return m, tea.Quit
-	case "1":
-		m.tab = tabChat
-	case "2":
-		m.tab = tabDashboard
-	case "3":
-		m.tab = tabLogs
+	case "1", "2", "3", "4", "5", "6":
+		m.switchTab(int(msg.String()[0] - '1'))
 	case "up", "k":
 		if m.workerKeys() && m.selected > 0 {
 			m.selected--
@@ -1213,15 +1259,7 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.showToast("demo replay — no session history")
 		}
 	case "b":
-		if m.OnListBranches == nil {
-			m.showToast("demo replay — no branches")
-			break
-		}
-		m.branches = m.OnListBranches()
-		m.brIdx = 0
-		m.diffText = ""
-		m.brConfirm = ""
-		m.reviewing = true
+		m.switchTab(tabWorktrees)
 	case "n":
 		return m, func() tea.Msg { return NewSessionMsg{} }
 	case "f":

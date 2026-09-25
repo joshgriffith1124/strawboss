@@ -15,6 +15,7 @@ import (
 	"github.com/joshgriffith1124/strawboss/internal/clipboard"
 	"github.com/joshgriffith1124/strawboss/internal/config"
 	"github.com/joshgriffith1124/strawboss/internal/live"
+	"github.com/joshgriffith1124/strawboss/internal/registry"
 	"github.com/joshgriffith1124/strawboss/internal/supervisor"
 	"github.com/joshgriffith1124/strawboss/internal/ui"
 	"github.com/joshgriffith1124/strawboss/internal/ui/replay"
@@ -248,5 +249,22 @@ func buildLive(stateDir, modelsPath string, fresh bool) (ui.Model, func(), error
 	m.OnMergeBranch = o.MergeBranch
 	m.OnDiscardBranch = o.DiscardBranch
 	m.OnUndoWorker = o.UndoWorker
+	// Analytics tab: reload the all-runs per-model scorecard on demand,
+	// the same way `strawboss stats` does. A missing or corrupt registry
+	// is a displayed empty state, never a crash.
+	m.OnScorecard = func() []ui.ScoreRow {
+		reg := &registry.Registry{Path: filepath.Join(stateDir, "workers.jsonl")}
+		events, err := reg.Load()
+		if err != nil {
+			return nil
+		}
+		scores := scorecard(events, "", time.Time{})
+		rows := make([]ui.ScoreRow, 0, len(scores))
+		for _, s := range scores {
+			rows = append(rows, ui.ScoreRow{Model: s.Model, Attempts: s.Attempts,
+				Done: s.Done, Failed: s.Failed, Rescued: s.Rescued, Median: s.Median})
+		}
+		return rows
+	}
 	return m, o.Shutdown, nil
 }

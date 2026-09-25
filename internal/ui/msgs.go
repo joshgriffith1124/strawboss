@@ -172,6 +172,17 @@ type ModelStatMsg struct {
 	ContextWindow int
 }
 
+// ScoreRow is one model's row of the historical scorecard (all runs):
+// finished workers, outcomes, and the median duration of its done workers.
+type ScoreRow struct {
+	Model    string
+	Attempts int
+	Done     int
+	Failed   int
+	Rescued  int // failed here, later finished done on a different model
+	Median   time.Duration
+}
+
 // ModelSetMsg names the current model configs after a models.toml reload:
 // Models-pane rows for any other name are dropped (stats for new names
 // arrive as ModelStatMsgs on the next poll).

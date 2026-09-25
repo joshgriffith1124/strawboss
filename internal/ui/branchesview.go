@@ -9,11 +9,11 @@ import (
 
 // viewBranchPicker lists this project's strawboss/* worker branches
 // awaiting review: two lines each (name + diff stats, then the subject),
-// selected entry highlighted.
+// selected entry highlighted. The pane fills w×h.
 func (m Model) viewBranchPicker(w, h int) string {
-	inner := h - 2
-	if inner < 1 {
-		inner = 1
+	inner := h - 3 // the pane's content rows (header + top/bottom border)
+	if inner < 0 {
+		inner = 0
 	}
 	var lines []string
 	if len(m.branches) == 0 {
@@ -52,16 +52,17 @@ func (m Model) viewBranchPicker(w, h int) string {
 			lines = append(lines, row, subj)
 		}
 	}
-	return panel("Branches · worker work awaiting review", padLines(lines, inner), w, cSupBorder, cAmber)
+	return pane(sDim.Render("WORKTREES · strawboss/* branches"), "", lines, w, h, cSupBorder)
 }
 
 // viewBranchDiff shows the selected branch's diff from diffScroll,
 // git-diff colored: context plain, additions green, deletions red,
-// hunk headers and file headers in the worker teal.
+// hunk headers and file headers in the worker teal. The pane fills
+// w×h, the branch name in the head.
 func (m Model) viewBranchDiff(w, h int) string {
-	inner := h - 2
-	if inner < 1 {
-		inner = 1
+	inner := h - 3 // the pane's content rows (header + top/bottom border)
+	if inner < 0 {
+		inner = 0
 	}
 	lines := strings.Split(m.diffText, "\n")
 	start := m.diffScroll
@@ -93,5 +94,9 @@ func (m Model) viewBranchDiff(w, h int) string {
 	if m.brIdx < len(m.branches) {
 		name = strings.TrimPrefix(m.branches[m.brIdx].Name, "strawboss/")
 	}
-	return panel("Diff · "+name, padLines(out, inner), w, cSupBorder, cAmber)
+	head := "DIFF"
+	if name != "" {
+		head = "DIFF · " + name
+	}
+	return pane(sDim.Render(head), "", out, w, h, cSupBorder)
 }

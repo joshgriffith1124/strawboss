@@ -27,9 +27,11 @@ func apply(t *testing.T, m Model, msgs ...tea.Msg) Model {
 
 func demoState(t *testing.T) Model {
 	t.Helper()
+	// 132 columns: wide enough for the top bar's six full tab labels
+	// AND its right-hand status (the bar drops the status below ~128).
 	m := New(make(chan tea.Msg))
 	m = apply(t, m,
-		tea.WindowSizeMsg{Width: 120, Height: 40},
+		tea.WindowSizeMsg{Width: 132, Height: 40},
 		SupInitMsg{SessionID: "0123456789abcdef", Model: "claude-fable-5", Auth: "subscription", PID: 41772},
 		ModelStatMsg{Name: "qwen-coder", TokSec: 74, Active: 2, Note: "sglang · GX10"},
 		ModelStatMsg{Name: "qwen-small", Note: "sglang · single"},
@@ -111,15 +113,16 @@ func TestTabKeys(t *testing.T) {
 	if m.tab != tabChat || m.focus != focusSup {
 		t.Errorf("tab=%d focus=%d, want chat/focusSup", m.tab, m.focus)
 	}
-	// Shift+tab still cycles tabs even from the chat screen.
+	// Shift+tab still cycles tabs even from the chat screen — with six
+	// tabs it now steps BACK one tab, so from Agents it lands on Logs.
 	m = apply(t, m, tea.KeyMsg{Type: tea.KeyShiftTab})
 	if m.tab != tabLogs {
 		t.Errorf("tab = %d, want logs", m.tab)
 	}
-	// digits work outside the chat tab
+	// digits work outside the chat tab: 3 is Worktrees now (Logs is 6)
 	m = apply(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("3")})
-	if m.tab != tabLogs {
-		t.Errorf("tab = %d, want logs", m.tab)
+	if m.tab != tabWorktrees {
+		t.Errorf("tab = %d, want worktrees", m.tab)
 	}
 	m = apply(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("1")})
 	if m.tab != tabChat {
@@ -206,7 +209,8 @@ func TestViewsRenderKeyContent(t *testing.T) {
 	// queued = 3 agents, no second usage sample yet so the rate is 0.
 	// The token sidebar is the redesigned "TOKEN ECONOMY (session)"
 	// box; the old "Tokens · plan vs free local" side panel is gone.
-	for _, want := range []string{"strawboss", "Agents", "Tasks", "Logs",
+	for _, want := range []string{"strawboss", "Agents", "Tasks", "Worktrees",
+		"Models", "Analytics", "Logs",
 		"TOKEN ECONOMY (session)", "2 models up · 3 agents · 0 tok/s", "qwen-coder",
 		"$0.00", "● ok", "YOU ·", "SUPERVISOR ·",
 		"Build the trade query builder module.", "w1", "5h 4% · 7d 11%"} {
@@ -322,8 +326,10 @@ func TestToolLinesWrap(t *testing.T) {
 
 func TestWorkerKillRetryKeys(t *testing.T) {
 	m := demoState(t) // w1 running, w2 queued → display order: w2, w1
-	// Tab now toggles focus on the Agents screen; shift+tab cycles tabs.
-	m = apply(t, m, tea.KeyMsg{Type: tea.KeyShiftTab}, tea.KeyMsg{Type: tea.KeyShiftTab})
+	// Tab toggles focus on the Agents screen; with the worker pane
+	// focused, the digit keys switch tabs.
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyTab},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
 	if m.tab != tabDashboard {
 		t.Fatalf("tab = %d", m.tab)
 	}
@@ -376,8 +382,10 @@ func TestWorkerKillRetryKeys(t *testing.T) {
 
 func TestWorkerUndoKey(t *testing.T) {
 	m := demoState(t)
-	// Tab now toggles focus on the Agents screen; shift+tab cycles tabs.
-	m = apply(t, m, tea.KeyMsg{Type: tea.KeyShiftTab}, tea.KeyMsg{Type: tea.KeyShiftTab})
+	// Tab toggles focus on the Agents screen; with the worker pane
+	// focused, the digit keys switch tabs.
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyTab},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
 	if m.tab != tabDashboard {
 		t.Fatalf("tab = %d", m.tab)
 	}
@@ -448,8 +456,10 @@ func TestToastMsgShowsAndExpires(t *testing.T) {
 
 func TestWorkerFilter(t *testing.T) {
 	m := demoState(t)
-	// Tab now toggles focus on the Agents screen; shift+tab cycles tabs.
-	m = apply(t, m, tea.KeyMsg{Type: tea.KeyShiftTab}, tea.KeyMsg{Type: tea.KeyShiftTab}) // dashboard
+	// Tab toggles focus on the Agents screen; with the worker pane
+	// focused, the digit keys switch tabs.
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyTab},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")}) // dashboard
 	m = apply(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
 	if !m.filtering {
 		t.Fatal("/ did not open the filter")
@@ -525,8 +535,8 @@ func TestRetryAllFailed(t *testing.T) {
 	m = apply(t, m,
 		WorkerUpsertMsg{ID: "w1", Status: "failed", Summary: "boom"},
 		WorkerUpsertMsg{ID: "w3", Model: "qwen-dsh", Task: "t3", Status: "failed", Summary: "bang"},
-		tea.KeyMsg{Type: tea.KeyShiftTab},
-		tea.KeyMsg{Type: tea.KeyShiftTab})
+		tea.KeyMsg{Type: tea.KeyTab},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")}) // dashboard
 	var retried []string
 	m.OnRetryWorker = func(id string) { retried = append(retried, id) }
 
@@ -654,8 +664,10 @@ func TestSessionPicker(t *testing.T) {
 	}
 	m.OnSwitchSession = func(id, run string) { switched = append(switched, id+"/"+run) }
 
-	// Tab now toggles focus on the Agents screen; shift+tab cycles tabs.
-	m = apply(t, m, tea.KeyMsg{Type: tea.KeyShiftTab}, tea.KeyMsg{Type: tea.KeyShiftTab}) // dashboard
+	// Tab toggles focus on the Agents screen; with the worker pane
+	// focused, the digit keys switch tabs.
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyTab},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")}) // dashboard
 	m = apply(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
 	if !m.picking || len(m.sessions) != 2 {
 		t.Fatalf("picking=%v sessions=%d", m.picking, len(m.sessions))
@@ -689,11 +701,7 @@ func TestSessionPicker(t *testing.T) {
 
 func TestBranchReview(t *testing.T) {
 	m := New(make(chan tea.Msg))
-	m = apply(t, m,
-		tea.WindowSizeMsg{Width: 120, Height: 40},
-		tea.KeyMsg{Type: tea.KeyShiftTab},
-		tea.KeyMsg{Type: tea.KeyShiftTab}, // dashboard
-	)
+	m = apply(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 
 	b1 := "strawboss/w1-trade-query"
 	b2 := "strawboss/w2-docstrings"
@@ -722,11 +730,18 @@ func TestBranchReview(t *testing.T) {
 		return nil
 	}
 
-	m = apply(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b")})
-	if !m.reviewing || len(m.branches) != 2 {
-		t.Fatalf("reviewing=%v branches=%d", m.reviewing, len(m.branches))
+	// b (from any non-typing state) opens the Worktrees tab and loads the
+	// branch list through OnListBranches.
+	m = apply(t, m,
+		tea.KeyMsg{Type: tea.KeyTab},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b")})
+	if m.tab != tabWorktrees || !m.reviewing || len(m.branches) != 2 {
+		t.Fatalf("tab=%d reviewing=%v branches=%d", m.tab, m.reviewing, len(m.branches))
 	}
 	out := m.viewBranchPicker(120, 20)
+	if !strings.Contains(out, "WORKTREES · strawboss/* branches") {
+		t.Errorf("picker missing the pane head:\n%s", out)
+	}
 	for _, want := range []string{"w1-trade-query", "w2-docstrings", "+120", "-40", "scaffold trade query"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("picker missing %q", want)
@@ -783,10 +798,10 @@ func TestBranchReview(t *testing.T) {
 		t.Errorf("discard fired despite selection move: %v", discards)
 	}
 
-	// esc closes the overlay.
+	// esc closes the review and returns to the Agents tab.
 	m = apply(t, m, tea.KeyMsg{Type: tea.KeyEsc})
-	if m.reviewing || m.brConfirm != "" {
-		t.Fatalf("reviewing=%v brConfirm=%q", m.reviewing, m.brConfirm)
+	if m.tab != tabChat || m.reviewing || m.brConfirm != "" {
+		t.Fatalf("tab=%d reviewing=%v brConfirm=%q", m.tab, m.reviewing, m.brConfirm)
 	}
 }
 
@@ -794,12 +809,126 @@ func TestBranchReviewNoHooks(t *testing.T) {
 	m := New(make(chan tea.Msg))
 	m = apply(t, m,
 		tea.WindowSizeMsg{Width: 120, Height: 40},
-		tea.KeyMsg{Type: tea.KeyShiftTab},
-		tea.KeyMsg{Type: tea.KeyShiftTab}, // dashboard
+		tea.KeyMsg{Type: tea.KeyTab},
 		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b")},
 	)
-	if m.reviewing || !strings.Contains(m.toast, "demo replay — no branches") {
-		t.Fatalf("reviewing=%v toast=%q", m.reviewing, m.toast)
+	if m.tab != tabWorktrees || !m.reviewing {
+		t.Fatalf("tab=%d reviewing=%v", m.tab, m.reviewing)
+	}
+	// No branch hook: the tab shows a faint demo notice instead of a list.
+	if !strings.Contains(m.View(), "demo replay — no branches") {
+		t.Errorf("view missing the demo notice:\n%s", m.View())
+	}
+}
+
+// TestTabDigitsSelect: keys 1-6 select the six tabs in display order.
+func TestTabDigitsSelect(t *testing.T) {
+	tests := []struct {
+		key string
+		tab int
+	}{
+		{"1", tabChat},
+		{"2", tabDashboard},
+		{"3", tabWorktrees},
+		{"4", tabModels},
+		{"5", tabAnalytics},
+		{"6", tabLogs},
+	}
+	for _, tt := range tests {
+		t.Run("key "+tt.key, func(t *testing.T) {
+			// From the worker focus, where digits switch tabs instead of
+			// typing into the chat input.
+			m := New(make(chan tea.Msg))
+			m = apply(t, m,
+				tea.WindowSizeMsg{Width: 132, Height: 40},
+				tea.KeyMsg{Type: tea.KeyTab},
+				tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(tt.key)},
+			)
+			if m.tab != tt.tab {
+				t.Fatalf("tab = %d, want %d", m.tab, tt.tab)
+			}
+		})
+	}
+}
+
+// TestBKeyOpensWorktrees: b switches to the Worktrees tab and calls
+// OnListBranches to load the list.
+func TestBKeyOpensWorktrees(t *testing.T) {
+	m := New(make(chan tea.Msg))
+	listCalls := 0
+	m.OnListBranches = func() []BranchInfo {
+		listCalls++
+		return []BranchInfo{{Name: "strawboss/w1-x"}}
+	}
+	m = apply(t, m,
+		tea.WindowSizeMsg{Width: 132, Height: 40},
+		tea.KeyMsg{Type: tea.KeyTab},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b")},
+	)
+	if m.tab != tabWorktrees {
+		t.Fatalf("tab = %d, want worktrees", m.tab)
+	}
+	if !m.reviewing {
+		t.Error("branch review not opened")
+	}
+	if listCalls != 1 || len(m.branches) != 1 {
+		t.Errorf("OnListBranches calls = %d, branches = %d", listCalls, len(m.branches))
+	}
+}
+
+// TestEscFromWorktreesReturnsToChat: esc in the branch review goes back to
+// the Agents tab and closes the review.
+func TestEscFromWorktreesReturnsToChat(t *testing.T) {
+	m := New(make(chan tea.Msg))
+	m.OnListBranches = func() []BranchInfo {
+		return []BranchInfo{{Name: "strawboss/w1-x"}}
+	}
+	m = apply(t, m,
+		tea.WindowSizeMsg{Width: 132, Height: 40},
+		tea.KeyMsg{Type: tea.KeyTab},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b")},
+		tea.KeyMsg{Type: tea.KeyEsc},
+	)
+	if m.tab != tabChat {
+		t.Fatalf("tab = %d, want chat", m.tab)
+	}
+	if m.reviewing {
+		t.Error("reviewing still open after esc")
+	}
+}
+
+// TestAnalyticsKeyLoadsScorecard: entering Analytics (key 5) calls
+// OnScorecard once and stores the rows in m.scores; leaving and
+// re-entering reloads it.
+func TestAnalyticsKeyLoadsScorecard(t *testing.T) {
+	m := New(make(chan tea.Msg))
+	rows := []ScoreRow{{Model: "qwen-coder", Attempts: 4, Done: 3, Failed: 1, Median: 90 * time.Second}}
+	calls := 0
+	m.OnScorecard = func() []ScoreRow {
+		calls++
+		return rows
+	}
+	m = apply(t, m,
+		tea.WindowSizeMsg{Width: 132, Height: 40},
+		tea.KeyMsg{Type: tea.KeyTab},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("5")},
+	)
+	if m.tab != tabAnalytics {
+		t.Fatalf("tab = %d, want analytics", m.tab)
+	}
+	if calls != 1 {
+		t.Fatalf("OnScorecard calls = %d, want 1", calls)
+	}
+	if len(m.scores) != 1 || m.scores[0] != rows[0] {
+		t.Errorf("scores = %+v", m.scores)
+	}
+	// Leaving and re-entering reloads the scorecard.
+	m = apply(t, m,
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("6")},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("5")},
+	)
+	if calls != 2 {
+		t.Errorf("re-entry: OnScorecard calls = %d, want 2", calls)
 	}
 }
 
@@ -1037,8 +1166,9 @@ func TestNewSessionCommandAndKeys(t *testing.T) {
 		t.Fatalf("OnNewSession calls = %d", fresh)
 	}
 
-	// n on the dashboard (shift+tab cycles tabs; plain tab toggles focus).
-	m = apply(t, m, tea.KeyMsg{Type: tea.KeyShiftTab}, tea.KeyMsg{Type: tea.KeyShiftTab})
+	// n on the dashboard (tab focuses the worker pane; digits switch tabs).
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyTab},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
 	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
 	m = next.(Model)
 	if cmd == nil {

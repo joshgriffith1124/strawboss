@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -32,6 +33,10 @@ func (m Model) View() string {
 
 	var body string
 	switch {
+	case m.tab == tabWorktrees && m.OnListBranches == nil:
+		// Demo replay: the tab is up but no branch hook is wired, so the
+		// review has nothing to list — a faint notice instead.
+		body = m.viewWorktreesDemo(w, contentH)
 	case m.reviewing && m.diffText != "":
 		body = m.viewBranchDiff(w, contentH)
 	case m.reviewing:
@@ -42,6 +47,10 @@ func (m Model) View() string {
 		body = m.viewAgents(w, contentH)
 	case m.tab == tabDashboard:
 		body = m.viewDashboard(w, contentH)
+	case m.tab == tabModels:
+		body = m.viewModelsTab(w, contentH)
+	case m.tab == tabAnalytics:
+		body = m.viewAnalyticsTab(w, contentH)
 	case m.tab == tabLogs:
 		body = m.viewLogs(w, contentH)
 	}
@@ -55,14 +64,37 @@ func (m Model) View() string {
 	return strings.Join(parts, "\n")
 }
 
-// viewTopTabs is the merged top row: logo left, numbered tabs in the
-// middle, run telemetry right. The old top bar's session/pid text is gone
-// — the Agents screen owns the supervisor's identity.
+// viewTopTabs is the merged top row: logo left, the six numbered tabs in
+// the middle, run telemetry right. When the row is too narrow the
+// right-hand status drops first, then the labels shorten to their first
+// three letters; either way the row comes back exactly w cells.
 func (m Model) viewTopTabs(w int) string {
 	left := sBoldT.Render(glyphLogo + " strawboss")
-	mid := m.viewTabCells()
 	right := m.viewTopRight()
+	full := m.viewTabCells(false)
 
+	lw, mw, rw := lipgloss.Width(left), lipgloss.Width(full), lipgloss.Width(right)
+	switch {
+	case w >= lw+mw+rw+4:
+		return m.topRow(w, left, full, right)
+	case w >= lw+mw+3:
+		return m.topRow(w, left, full, "")
+	default:
+		return m.topRow(w, left, m.viewTabCells(true), "")
+	}
+}
+
+// topRow lays the top-row parts across exactly w cells: left at the left
+// edge, right right-aligned with a two-cell margin (when present), the
+// leftover space sitting between left and mid.
+func (m Model) topRow(w int, left, mid, right string) string {
+	if right == "" {
+		gap := w - lipgloss.Width(left) - lipgloss.Width(mid)
+		if gap < 1 {
+			return padTo(left+mid, w)
+		}
+		return left + strings.Repeat(" ", gap) + mid
+	}
 	gap := w - lipgloss.Width(left) - lipgloss.Width(mid) - lipgloss.Width(right) - 2
 	if gap < 2 {
 		return padTo(left+" "+mid+" "+right, w)
@@ -70,13 +102,17 @@ func (m Model) viewTopTabs(w int) string {
 	return left + strings.Repeat(" ", gap/2+gap%2) + mid + strings.Repeat(" ", gap/2) + right + "  "
 }
 
-// viewTabCells renders "1 Agents  2 Tasks  3 Logs"; the active tab is the
-// sTabOn pill (1-cell padding), numbers are faint in every tab.
-func (m Model) viewTabCells() string {
-	names := []string{"Agents", "Tasks", "Logs"}
+// viewTabCells renders all six tabs from tabNames ("1 Agents  2 Tasks …");
+// the active tab is the sTabOn pill (1-cell padding), numbers stay faint
+// in every tab. short cuts each label to its first three letters — the
+// narrow-row fallback.
+func (m Model) viewTabCells(short bool) string {
 	var cells []string
-	for i, name := range names {
-		n := sFaint.Render(fmt.Sprintf("%d", i+1))
+	for i, name := range tabNames {
+		if short && len(name) > 3 {
+			name = name[:3]
+		}
+		n := sFaint.Render(strconv.Itoa(i + 1))
 		if i == m.tab {
 			cells = append(cells, sTabOn.Render(" "+n+" "+name+" "))
 		} else {
@@ -122,26 +158,35 @@ func (m Model) viewTopRight() string {
 	return strings.Join(rightParts, sFaint.Render(" · "))
 }
 
+// viewWorktreesDemo is the Worktrees tab with no branch hook wired
+// (demo replay): a faint notice, in a pane that still fills w×h.
+func (m Model) viewWorktreesDemo(w, h int) string {
+	return pane(sDim.Render("WORKTREES · strawboss/* branches"), "",
+		[]string{" " + sFaint.Render("demo replay — no branches")}, w, h, cSupBorder)
+}
+
 // viewFooter is the status bar: worker status left, key hints, clock right.
 func (m Model) viewFooter(w int) string {
 	var hints [][2]string
 	switch {
 	case m.reviewing && m.diffText != "":
-		hints = [][2]string{{"↑↓/PgUp/Dn", "scroll"}, {"esc", "back"}}
+		hints = [][2]string{{"↑↓/PgUp/Dn", "scroll"}, {"esc", "back"}, {"1-6", "tabs"}}
 	case m.reviewing:
-		hints = [][2]string{{"↑↓", "select"}, {"↵", "diff"}, {"m", "merge"}, {"x", "discard"}, {"r", "refresh"}, {"esc", "close"}}
+		hints = [][2]string{{"↑↓", "select"}, {"↵", "diff"}, {"m", "merge"}, {"x", "discard"}, {"r", "refresh"}, {"esc", "close"}, {"1-6", "tabs"}}
 	case m.picking:
 		hints = [][2]string{{"↑↓", "select"}, {"↵", "switch"}, {"n", "new"}, {"esc", "close"}}
 	case m.tab == tabChat:
 		if m.focus == focusWork {
-			hints = [][2]string{{"⇥", "pane"}, {"z", "zoom"}, {"↑↓", "select"}, {"x", "kill"}, {"r", "retry"}, {"u", "undo"}, {"t", "panel"}, {"b", "branches"}, {"1-3", "tabs"}, {"q", "quit"}}
+			hints = [][2]string{{"⇥", "pane"}, {"z", "zoom"}, {"↑↓", "select"}, {"x", "kill"}, {"r", "retry"}, {"u", "undo"}, {"t", "panel"}, {"b", "branches"}, {"1-6", "tabs"}, {"q", "quit"}}
 		} else {
 			hints = [][2]string{{"↵", "send"}, {"alt+v", "image"}, {"⇥", "pane"}, {"alt+z", "zoom"}, {"PgUp/Dn", "scroll"}, {"esc", "interrupt"}, {"ctrl+c", "quit"}}
 		}
+	case m.tab == tabModels || m.tab == tabAnalytics:
+		hints = [][2]string{{"1-6", "tabs"}, {"shift+tab", "prev"}, {"q", "quit"}}
 	case m.tab == tabDashboard:
-		hints = [][2]string{{"↑↓", "select"}, {"/", "filter"}, {"s", "sessions"}, {"b", "branches"}, {"n", "new"}, {"x", "kill"}, {"r", "retry"}, {"R", "retry-failed"}, {"u", "undo"}, {"⇥/1-3", "tabs"}, {"q", "quit"}}
+		hints = [][2]string{{"↑↓", "select"}, {"/", "filter"}, {"s", "sessions"}, {"b", "branches"}, {"n", "new"}, {"x", "kill"}, {"r", "retry"}, {"R", "retry-failed"}, {"u", "undo"}, {"⇥/1-6", "tabs"}, {"q", "quit"}}
 	default:
-		hints = [][2]string{{"f", "filter"}, {"s", "sessions"}, {"n", "new"}, {"⇥/1-3", "tabs"}, {"q", "quit"}}
+		hints = [][2]string{{"f", "filter"}, {"s", "sessions"}, {"n", "new"}, {"⇥/1-6", "tabs"}, {"q", "quit"}}
 	}
 	var parts []string
 	failed := 0

@@ -3,6 +3,7 @@ package supervisor
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +15,14 @@ import (
 	"syscall"
 	"time"
 )
+
+// Image is a raw image attachment for a user message: Data holds the
+// encoded bytes as pasted, and MediaType is its MIME type, e.g.
+// "image/png".
+type Image struct {
+	MediaType string
+	Data      []byte
+}
 
 // Stream is a persistent supervisor process: one `claude -p` with
 // --input-format stream-json, alive across turns. User messages are
@@ -151,19 +160,54 @@ func (s *Stream) Alive() bool {
 	}
 }
 
-// Send injects a user message. Works any time, including while a turn is
-// running (the CLI delivers it into the turn).
-func (s *Stream) Send(text string) error {
+// userMessage builds the user-message JSON line written to stdin: one
+// content block per image first, then the text block (omitted when text
+// is empty). Refuses to build an empty message.
+func userMessage(text string, images []Image) ([]byte, error) {
+	var content []map[string]any
+	for _, img := range images {
+		content = append(content, map[string]any{
+			"type": "image",
+			"source": map[string]any{
+				"type":       "base64",
+				"media_type": img.MediaType,
+				"data":       base64.StdEncoding.EncodeToString(img.Data),
+			},
+		})
+	}
+	if strings.TrimSpace(text) != "" {
+		content = append(content, map[string]any{"type": "text", "text": text})
+	}
+	if len(content) == 0 {
+		return nil, fmt.Errorf("user message has no text or images")
+	}
 	msg := map[string]any{
 		"type": "user",
 		"message": map[string]any{
 			"role":    "user",
-			"content": []map[string]string{{"type": "text", "text": text}},
+			"content": content,
 		},
 	}
 	b, err := json.Marshal(msg)
 	if err != nil {
-		return fmt.Errorf("encoding user message: %w", err)
+		return nil, fmt.Errorf("encoding user message: %w", err)
+	}
+	return b, nil
+}
+
+// Send injects a plain-text user message. Works any time, including while
+// a turn is running (the CLI delivers it into the turn).
+func (s *Stream) Send(text string) error {
+	return s.SendContent(text, nil)
+}
+
+// SendContent injects a user message with optional pasted images: one
+// image block per image, then the text block. Works any time, including
+// while a turn is running (the CLI delivers it into the turn).
+func (s *Stream) SendContent(text string, images []Image) error {
+	b, err := userMessage(text, images)
+	if err != nil {
+		return err
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()

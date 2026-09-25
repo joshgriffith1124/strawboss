@@ -242,7 +242,7 @@ func (o *Orchestrator) openclawLoop(ctx context.Context) {
 			}
 			o.remoteActive.Store(true)
 			o.emitAsync(ui.SupUserMsg{Text: "[" + o.openclawChannel() + "] " + text, Time: time.Now()})
-			o.enqueuePrompt("[message from the user via " + o.openclawChannel() + " — they are away from the terminal; keep the reply brief] " + text)
+			o.enqueuePrompt(prompt{text: "[message from the user via " + o.openclawChannel() + " — they are away from the terminal; keep the reply brief] " + text})
 		}
 	}
 }

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -225,9 +226,36 @@ type SessionSwitchedMsg struct{ ID string }
 // equivalent of restarting with --new, for shedding a bloated context.
 type NewSessionMsg struct{}
 
+// Image is a pasted image attached to a prompt.
+type Image struct {
+	MediaType     string
+	Data          []byte
+	Width, Height int
+}
+
 // SendPromptMsg is emitted BY the UI when the user submits input; the
 // program driver (demo or live) subscribes and acts.
-type SendPromptMsg struct{ Text string }
+type SendPromptMsg struct {
+	Text   string
+	Images []Image
+}
+
+// ImagePastedMsg is emitted by the paste cmd (ctrl+v / alt+v in chat) with
+// the captured + fitted clipboard image, or the error from the clipboard
+// read/fit. Arrives from outside the Update loop — never read the
+// clipboard synchronously inside Update.
+//
+// Key is the key that asked for it: a ctrl+v that found no image
+// (ErrNoImage) falls back to the input's own text paste.
+type ImagePastedMsg struct {
+	Image Image
+	Err   error
+	Key   string
+}
+
+// ErrNoImage is what OnPasteImage returns (wrapped or not) when the
+// clipboard holds no image.
+var ErrNoImage = errors.New("no image on the clipboard")
 
 // InterruptMsg is emitted by the UI on esc.
 type InterruptMsg struct{}

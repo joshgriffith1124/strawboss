@@ -66,6 +66,10 @@ results](docs/screenshot-dashboard.png)
 - Live worker table with streaming transcripts, per-worker tok/s
   sparklines, context-window usage, kill (`x`) / retry (`r`) / retry-all
   (`R`), undo a worker's edits (`u`, press twice), filtering (`/`)
+- Paste images into the supervisor chat (`alt+v`, or `ctrl+v` where the
+  terminal passes it through) — screenshots go in as image blocks, like
+  the Claude Code TUI. Reads the clipboard via PowerShell on WSL,
+  `osascript` on macOS, `wl-paste` or `xclip` on Linux
 - Token economy: plan vs. free-local split, notional API value, real
   plan-window gauges (5h/7d) parsed from the stream
 - Two worker harnesses: opencode server sessions and DeepSeek Harness

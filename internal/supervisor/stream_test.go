@@ -1,6 +1,7 @@
 package supervisor
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -180,5 +181,87 @@ func TestStreamResumeArgs(t *testing.T) {
 		if !strings.Contains(string(args), want) {
 			t.Errorf("args missing %q:\n%s", want, args)
 		}
+	}
+}
+
+// TestUserMessageImageThenText: SendContent writes ONE json line whose
+// content array is image blocks first, then the text block.
+func TestUserMessageImageThenText(t *testing.T) {
+	b, err := userMessage("look", []Image{{MediaType: "image/png", Data: []byte{1, 2, 3}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "\n") {
+		t.Fatalf("userMessage should be a single line: %q", b)
+	}
+	var msg map[string]any
+	if err := json.Unmarshal(b, &msg); err != nil {
+		t.Fatalf("invalid json: %v\n%s", err, b)
+	}
+	if msg["type"] != "user" {
+		t.Fatalf("type = %v", msg["type"])
+	}
+	content, ok := msg["message"].(map[string]any)["content"].([]any)
+	if !ok {
+		t.Fatalf("content not []any: %#v", msg)
+	}
+	if len(content) != 2 {
+		t.Fatalf("content blocks = %#v", content)
+	}
+	img := content[0].(map[string]any)
+	if img["type"] != "image" {
+		t.Fatalf("block[0] = %#v", img)
+	}
+	src := img["source"].(map[string]any)
+	if src["type"] != "base64" || src["media_type"] != "image/png" || src["data"] != "AQID" {
+		t.Fatalf("source = %#v", src)
+	}
+	txt := content[1].(map[string]any)
+	if txt["type"] != "text" || txt["text"] != "look" {
+		t.Fatalf("block[1] = %#v", txt)
+	}
+}
+
+// TestUserMessageImagesOnly: empty text still sends the image blocks,
+// and the text block is omitted entirely.
+func TestUserMessageImagesOnly(t *testing.T) {
+	b, err := userMessage("", []Image{{MediaType: "image/png", Data: []byte{1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var msg map[string]any
+	if err := json.Unmarshal(b, &msg); err != nil {
+		t.Fatalf("invalid json: %v\n%s", err, b)
+	}
+	content := msg["message"].(map[string]any)["content"].([]any)
+	if len(content) != 1 {
+		t.Fatalf("content blocks = %#v", content)
+	}
+	if content[0].(map[string]any)["type"] != "image" {
+		t.Fatalf("block[0] = %#v", content[0])
+	}
+}
+
+// TestUserMessageEmptyRejects: no text and no images is a wire error, not
+// an empty message.
+func TestUserMessageEmptyRejects(t *testing.T) {
+	if _, err := userMessage("", nil); err == nil {
+		t.Fatal("expected error for empty message")
+	}
+	if _, err := userMessage("   ", nil); err == nil {
+		t.Fatal("expected error for whitespace-only text with no images")
+	}
+	// Whitespace-only text with images still sends the image block, no text block.
+	b, err := userMessage("   ", []Image{{MediaType: "image/png", Data: []byte{9}}})
+	if err != nil {
+		t.Fatalf("images with whitespace text: %v", err)
+	}
+	var msg map[string]any
+	if err := json.Unmarshal(b, &msg); err != nil {
+		t.Fatal(err)
+	}
+	content := msg["message"].(map[string]any)["content"].([]any)
+	if len(content) != 1 || content[0].(map[string]any)["type"] != "image" {
+		t.Fatalf("content = %#v", content)
 	}
 }

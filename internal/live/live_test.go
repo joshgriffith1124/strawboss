@@ -64,7 +64,7 @@ func TestSupervisorTurnThroughOrchestrator(t *testing.T) {
 	defer cancel()
 	go o.supervisorLoop(ctx)
 
-	o.OnPrompt("hello")
+	o.OnPrompt("hello", nil)
 	msgs := drainUntil(t, o.Feed(), 10*time.Second, func(m tea.Msg) bool {
 		_, done := m.(ui.SupTurnDoneMsg)
 		return done
@@ -379,7 +379,7 @@ func TestShutdownKillsEverything(t *testing.T) {
 	o.workerModel["w1"] = "m1"
 	o.unfinished["w1"] = true
 	o.mu.Unlock()
-	o.OnPrompt("hello")
+	o.OnPrompt("hello", nil)
 	drainUntil(t, o.Feed(), 10*time.Second, func(m tea.Msg) bool {
 		_, ok := m.(ui.SupInitMsg)
 		return ok
@@ -845,8 +845,8 @@ esac
 	// The injected prompt reaches the supervisor queue…
 	select {
 	case p := <-o.prompts:
-		if !strings.Contains(p, "kill w3 and retry it") || !strings.Contains(p, "via discord") {
-			t.Errorf("prompt = %q", p)
+		if !strings.Contains(p.text, "kill w3 and retry it") || !strings.Contains(p.text, "via discord") {
+			t.Errorf("prompt = %q", p.text)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("no prompt injected")
@@ -874,7 +874,7 @@ esac
 	}
 
 	// Local input ends the remote conversation: no further relays.
-	o.OnPrompt("back at the keyboard")
+	o.OnPrompt("back at the keyboard", nil)
 	<-o.prompts
 	o.observeSup([]tea.Msg{ui.SupTextDoneMsg{Text: "local-only reply"}})
 	time.Sleep(300 * time.Millisecond)
@@ -884,7 +884,7 @@ esac
 	// History was never injected as a command.
 	select {
 	case p := <-o.prompts:
-		t.Errorf("unexpected prompt: %q", p)
+		t.Errorf("unexpected prompt: %+v", p)
 	default:
 	}
 }

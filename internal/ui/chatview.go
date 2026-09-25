@@ -27,6 +27,11 @@ func (m Model) viewChat(w, h int) string {
 
 func (m Model) viewChatColumn(w, h int) string {
 	inputH := 3
+	attach := ""
+	if len(m.pending) > 0 {
+		attach = m.attachmentsLine(w)
+		inputH++
+	}
 	hint := m.slashHint(w)
 	if hint != "" {
 		inputH++
@@ -127,9 +132,29 @@ func (m Model) viewChatColumn(w, h int) string {
 		Width(w - 2).Render(m.input.View())
 
 	if hint != "" {
+		if attach != "" {
+			return lipgloss.JoinVertical(lipgloss.Left, log, hint, attach, inputBox)
+		}
 		return lipgloss.JoinVertical(lipgloss.Left, log, hint, inputBox)
 	}
+	if attach != "" {
+		return lipgloss.JoinVertical(lipgloss.Left, log, attach, inputBox)
+	}
 	return lipgloss.JoinVertical(lipgloss.Left, log, inputBox)
+}
+
+// attachmentsLine is the dim strip above the input box listing the pending
+// pasted images; backspace on an empty input line removes the last one.
+func (m Model) attachmentsLine(w int) string {
+	var parts []string
+	for i, img := range m.pending {
+		parts = append(parts, fmt.Sprintf("[image %d · %d×%d · %d KB]", i+1, img.Width, img.Height, len(img.Data)/1024))
+	}
+	line := sDim.Render("attached: "+strings.Join(parts, " ")) + sFaint.Render("  backspace removes")
+	if lipgloss.Width(line) > w {
+		line = clipTo(line, w)
+	}
+	return line
 }
 
 // slashHint is the one-line completion strip shown above the input while

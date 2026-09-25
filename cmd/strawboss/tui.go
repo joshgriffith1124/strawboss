@@ -2,14 +2,17 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/joshgriffith1124/strawboss/internal/clipboard"
 	"github.com/joshgriffith1124/strawboss/internal/config"
 	"github.com/joshgriffith1124/strawboss/internal/live"
 	"github.com/joshgriffith1124/strawboss/internal/supervisor"
@@ -216,6 +219,25 @@ func buildLive(stateDir, modelsPath string, fresh bool) (ui.Model, func(), error
 	m := ui.New(o.Feed())
 	m.OnPrompt = o.OnPrompt
 	m.OnInterrupt = o.OnInterrupt
+	// Clipboard paste: read + fit off the Update loop; the result comes
+	// back as a ui.ImagePastedMsg. A missing clipboard tool or empty
+	// image becomes a toast, never a crash.
+	m.OnPasteImage = func() (ui.Image, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		data, err := clipboard.ReadImage(ctx)
+		if errors.Is(err, clipboard.ErrNoImage) {
+			return ui.Image{}, ui.ErrNoImage // lets ctrl+v fall back to text paste
+		}
+		if err != nil {
+			return ui.Image{}, err
+		}
+		f, err := clipboard.Fit(data)
+		if err != nil {
+			return ui.Image{}, err
+		}
+		return ui.Image{MediaType: f.MediaType, Data: f.Data, Width: f.Width, Height: f.Height}, nil
+	}
 	m.OnKillWorker = o.OnKillWorker
 	m.OnRetryWorker = o.OnRetryWorker
 	m.OnListSessions = o.ListSessions

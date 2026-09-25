@@ -1339,3 +1339,26 @@ the same directory by a concurrent worker (or by hand) during that window
 count as this worker's and are reverted with it. Parallel tasks that need
 separate rollback should use `--worktree`. Not done: `strawboss clean`
 does not prune snapshot refs yet (they are small: trees share blobs).
+
+## Pasting images into the supervisor (verified 2026-09-25, Claude Code 2.1.281)
+
+`--input-format stream-json` accepts Messages-API image blocks on a user
+line: `{"type":"image","source":{"type":"base64","media_type":"image/png",
+"data":…}}` ahead of the text block. Verified live with a 64×64 solid-blue
+PNG and no file on disk: the model answered "Blue" with no tool use. A
+first attempt looked like a failure ("I couldn't open your attached
+image") — the test PNG was hand-assembled and the model fell back to Reading
+a copy it found in cwd. Build test images with a real encoder.
+
+How it works: `alt+v` (or `ctrl+v` where the terminal passes it through;
+Windows Terminal keeps ctrl+v for its own text paste) reads the clipboard
+off the Update loop — PowerShell `Clipboard.GetImage()` as base64 PNG on
+WSL, `osascript` «class PNGf» on macOS, `wl-paste`/`xclip` by MIME type on
+Linux (`internal/clipboard`). `clipboard.Fit` keeps the long edge ≤ 1568 px
+and the bytes ≤ 3.75 MB (PNG, else JPEG 85/60) with a hand-rolled box
+filter, so no new dependency. Pending images show above the input;
+backspace on an empty line drops the last; enter sends them with the text
+(or alone). A ctrl+v that finds no image falls back to the input's text
+paste. Images cost supervisor tokens (~1.6k for a full-size one) — user
+input, not observability, so invariant 2 is untouched. Drag-and-dropped
+image paths already worked: the supervisor Reads them.

@@ -151,7 +151,7 @@ func TestEnterEmitsPromptAndDemoNote(t *testing.T) {
 func TestPromptHandlerWins(t *testing.T) {
 	m := demoState(t)
 	var got string
-	m.OnPrompt = func(text string) { got = text }
+	m.OnPrompt = func(text string, images []Image) { got = text }
 	m = apply(t, m, SendPromptMsg{Text: "do a thing"})
 	if got != "do a thing" {
 		t.Errorf("handler got %q", got)
@@ -1321,7 +1321,7 @@ func TestStreamingSurvivesModelCopies(t *testing.T) {
 func TestSlashCommandsCompleteAndPassThrough(t *testing.T) {
 	var sent []string
 	m := demoState(t)
-	m.OnPrompt = func(s string) { sent = append(sent, s) }
+	m.OnPrompt = func(s string, images []Image) { sent = append(sent, s) }
 	m = apply(t, m, SupInitMsg{SessionID: "0123456789abcdef", Model: "claude-fable-5", Auth: "subscription",
 		SlashCommands: []string{"compact", "loop", "context"}})
 
@@ -1436,5 +1436,125 @@ func TestModelSetMsgPrunesModels(t *testing.T) {
 	}
 	if !m.modelSet["d"] || m.modelSet["b"] {
 		t.Errorf("modelSet = %v", m.modelSet)
+	}
+}
+
+// TestImagePasteAttachSendRemove: ctrl+v/alt+v trigger a paste cmd that
+// runs OUTSIDE the Update loop; enter sends pending images (even with empty
+// text); backspace on an empty input line drops the last attachment; an
+// erroring paste attaches nothing.
+func TestImagePasteAttachSendRemove(t *testing.T) {
+	m := demoState(t)
+	var gotText string
+	var gotImages []Image
+	m.OnPrompt = func(text string, images []Image) {
+		gotText, gotImages = text, images
+	}
+
+	// Case 1: alt+v attaches a 2x3 image; enter with empty input sends it.
+	m.OnPasteImage = func() (Image, error) {
+		return Image{MediaType: "image/png", Data: make([]byte, 3000), Width: 2, Height: 3}, nil
+	}
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("v"), Alt: true})
+	m = next.(Model)
+	if len(m.pending) != 0 {
+		t.Fatalf("paste hook ran inside Update: pending = %+v", m.pending)
+	}
+	if cmd == nil {
+		t.Fatal("alt+v produced no cmd")
+	}
+	m = apply(t, m, cmd()) // runs the hook off-loop, feeds back ImagePastedMsg
+	if len(m.pending) != 1 || m.pending[0].Width != 2 || m.pending[0].Height != 3 {
+		t.Fatalf("pending = %+v", m.pending)
+	}
+	if !strings.Contains(m.toast, "image attached · 2×3 · 2 KB") {
+		t.Errorf("toast = %q", m.toast)
+	}
+	if !strings.Contains(m.View(), "attached: [image 1 · 2×3 · 2 KB]") {
+		t.Error("attach line missing from chat view")
+	}
+
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatal("enter produced no cmd")
+	}
+	sp, ok := cmd().(SendPromptMsg)
+	if !ok || sp.Text != "" || len(sp.Images) != 1 {
+		t.Fatalf("send = %#v", sp)
+	}
+	m = apply(t, m, sp)
+	if gotText != "" || len(gotImages) != 1 {
+		t.Fatalf("OnPrompt got text=%q images=%d", gotText, len(gotImages))
+	}
+	if len(m.pending) != 0 {
+		t.Errorf("pending not cleared after send: %+v", m.pending)
+	}
+	last := m.chat[len(m.chat)-1]
+	if last.kind != "user" || !strings.HasPrefix(last.text, "[image 2×3] ") {
+		t.Errorf("chat tail = %+v", last)
+	}
+
+	// Case 2: attach via ctrl+v; backspace with text edits the input,
+	// backspace on empty input drops the attachment; enter then sends nothing.
+	m.OnPasteImage = func() (Image, error) {
+		return Image{MediaType: "image/jpeg", Data: make([]byte, 5000), Width: 4, Height: 5}, nil
+	}
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatal("ctrl+v produced no cmd")
+	}
+	m = apply(t, m, cmd())
+	if len(m.pending) != 1 {
+		t.Fatalf("pending = %+v", m.pending)
+	}
+	m = apply(t, m,
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")},
+		tea.KeyMsg{Type: tea.KeyBackspace})
+	if m.input.Value() != "" || len(m.pending) != 1 {
+		t.Fatalf("backspace with text: input=%q pending=%d", m.input.Value(), len(m.pending))
+	}
+	m = apply(t, m, tea.KeyMsg{Type: tea.KeyBackspace})
+	if len(m.pending) != 0 {
+		t.Fatalf("backspace on empty input did not drop attachment: %+v", m.pending)
+	}
+	if !strings.Contains(m.toast, "image removed") {
+		t.Errorf("toast = %q", m.toast)
+	}
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if cmd != nil {
+		t.Fatalf("enter with empty input+no attachments sent something: %#v", cmd())
+	}
+	if len(gotImages) != 1 {
+		t.Errorf("OnPrompt called again: images=%d", len(gotImages))
+	}
+
+	// Case 3: erroring stub attaches nothing, toasts the error.
+	m.OnPasteImage = func() (Image, error) {
+		return Image{}, fmt.Errorf("no clipboard tool found")
+	}
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatal("ctrl+v produced no cmd on error path")
+	}
+	m = apply(t, m, cmd())
+	if len(m.pending) != 0 {
+		t.Fatalf("pending on error: %+v", m.pending)
+	}
+	if !strings.Contains(m.toast, "paste: no clipboard tool found") {
+		t.Errorf("toast = %q", m.toast)
+	}
+
+	// Demo mode (no hook): paste toasts instead of attaching.
+	m2 := New(make(chan tea.Msg))
+	m2 = apply(t, m2, tea.KeyMsg{Type: tea.KeyCtrlV})
+	if !strings.Contains(m2.toast, "demo replay — no clipboard") {
+		t.Errorf("demo toast = %q", m2.toast)
+	}
+	if len(m2.pending) != 0 {
+		t.Errorf("demo pending = %+v", m2.pending)
 	}
 }

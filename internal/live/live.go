@@ -21,6 +21,13 @@ import (
 	"github.com/joshgriffith1124/strawboss/internal/ui"
 )
 
+// prompt is one queued user submission: the typed text plus any pasted
+// images, ready to hand to the supervisor stream as one user message.
+type prompt struct {
+	text   string
+	images []supervisor.Image
+}
+
 // Orchestrator runs the live feeds and exposes them as one tea.Msg channel.
 type Orchestrator struct {
 	Driver *supervisor.Driver
@@ -59,7 +66,7 @@ type Orchestrator struct {
 	remoteActive atomic.Bool
 
 	feed      chan tea.Msg
-	prompts   chan string
+	prompts   chan prompt
 	interrupt chan struct{}
 	rewind    chan struct{} // registry watcher: re-read from the top
 
@@ -105,7 +112,7 @@ func New(d *supervisor.Driver, models []config.ModelConfig, stateDir string) *Or
 		StateDir:        stateDir,
 		started:         time.Now(),
 		feed:            make(chan tea.Msg, 64),
-		prompts:         make(chan string, 4),
+		prompts:         make(chan prompt, 4),
 		interrupt:       make(chan struct{}, 1),
 		rewind:          make(chan struct{}, 1),
 		sessionToWorker: map[string]string{},
@@ -140,14 +147,19 @@ func (o *Orchestrator) Feed() <-chan tea.Msg { return o.feed }
 
 // OnPrompt queues a user prompt for the supervisor (ui hook). Local
 // input ends any remote conversation — replies stop relaying out.
-func (o *Orchestrator) OnPrompt(text string) {
+// Pasted images (if any) ride along as attachments on the same message.
+func (o *Orchestrator) OnPrompt(text string, images []ui.Image) {
 	o.remoteActive.Store(false)
-	o.enqueuePrompt(text)
+	supImages := make([]supervisor.Image, 0, len(images))
+	for _, img := range images {
+		supImages = append(supImages, supervisor.Image{MediaType: img.MediaType, Data: img.Data})
+	}
+	o.enqueuePrompt(prompt{text: text, images: supImages})
 }
 
-func (o *Orchestrator) enqueuePrompt(text string) {
+func (o *Orchestrator) enqueuePrompt(p prompt) {
 	select {
-	case o.prompts <- text:
+	case o.prompts <- p:
 	default:
 		o.emitAsync(ui.RawLogMsg{Source: "app", Line: "prompt queue full — dropped"})
 	}
@@ -321,10 +333,14 @@ func (o *Orchestrator) supervisorLoop(ctx context.Context) {
 			if s := current(); s != nil && s.Alive() {
 				s.Interrupt() // cancels the turn in place; the process stays up
 			}
-		case prompt := <-o.prompts:
+		case p := <-o.prompts:
+			label := p.text
+			if label == "" && len(p.images) > 0 {
+				label = "[image]" // images-only prompt still labels the session
+			}
 			o.mu.Lock()
 			if o.lastPrompt == "" {
-				o.lastPrompt = prompt // labels the session in the history
+				o.lastPrompt = label // labels the session in the history
 			}
 			o.mu.Unlock()
 			s := current()
@@ -335,7 +351,7 @@ func (o *Orchestrator) supervisorLoop(ctx context.Context) {
 					continue
 				}
 			}
-			if err := s.Send(prompt); err != nil {
+			if err := s.SendContent(p.text, p.images); err != nil {
 				o.emit(ctx, ui.SupTurnDoneMsg{Err: err.Error()})
 			}
 		}

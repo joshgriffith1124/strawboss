@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -200,8 +201,12 @@ type Model struct {
 
 	// OnPrompt/OnInterrupt connect user input to a live supervisor.
 	// When nil, the UI notes that no supervisor is attached (demo mode).
-	OnPrompt    func(text string)
+	OnPrompt    func(text string, images []Image)
 	OnInterrupt func()
+	// OnPasteImage grabs the next clipboard image (ctrl+v / alt+v in
+	// chat). It runs OUTSIDE the Update loop (returned as a tea.Cmd) and
+	// reports back via ImagePastedMsg; nil in demo mode.
+	OnPasteImage func() (Image, error)
 	// OnKillWorker/OnRetryWorker connect the dashboard's worker actions to
 	// the live orchestrator; nil in demo mode.
 	OnKillWorker  func(id string)
@@ -248,6 +253,9 @@ type Model struct {
 	// message snaps back to the bottom.
 	chatScroll int
 	input      textinput.Model
+	// pending holds images pasted into the chat input; the next prompt
+	// sends them, and backspace on an empty input line drops the last.
+	pending []Image
 
 	// token economy: committed totals (from turn results) plus a live
 	// bucket for the running turn (per-call estimates, replaced by the
@@ -695,11 +703,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case SendPromptMsg:
 		if m.OnPrompt != nil {
-			m.OnPrompt(msg.Text)
+			m.OnPrompt(msg.Text, msg.Images)
 		} else {
 			m.chat = append(m.chat, chatItem{kind: "note", when: time.Now(),
 				text: "demo replay — input isn't wired to a live supervisor"})
 		}
+		return m, nil
+	case ImagePastedMsg:
+		if errors.Is(msg.Err, ErrNoImage) && msg.Key == "ctrl+v" {
+			// Terminals that pass ctrl+v through (rather than pasting
+			// themselves) would otherwise lose plain text paste.
+			var cmd tea.Cmd
+			m.input, cmd = m.input.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
+			return m, cmd
+		}
+		if msg.Err != nil {
+			m.showToast("paste: " + msg.Err.Error())
+			return m, nil
+		}
+		m.pending = append(m.pending, msg.Image)
+		m.showToast(fmt.Sprintf("image attached · %d×%d · %d KB — backspace on an empty line removes it",
+			msg.Image.Width, msg.Image.Height, len(msg.Image.Data)/1024))
 		return m, nil
 	case NewSessionMsg:
 		if m.OnNewSession != nil {
@@ -1027,18 +1051,44 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if typing {
 		switch msg.String() {
+		case "ctrl+v", "alt+v":
+			if m.OnPasteImage == nil {
+				m.showToast("demo replay — no clipboard")
+				return m, nil
+			}
+			// The clipboard read happens off the Update loop; the result
+			// arrives as an ImagePastedMsg.
+			paste, key := m.OnPasteImage, msg.String()
+			return m, func() tea.Msg {
+				img, err := paste()
+				return ImagePastedMsg{Image: img, Err: err, Key: key}
+			}
+		case "backspace":
+			if m.input.Value() == "" && len(m.pending) > 0 {
+				m.pending = m.pending[:len(m.pending)-1]
+				m.showToast("image removed")
+				return m, nil
+			}
 		case "enter":
 			text := normalizeDroppedPaths(strings.TrimSpace(m.input.Value()))
-			if text == "" {
+			if text == "" && len(m.pending) == 0 {
 				return m, nil
 			}
 			m.input.SetValue("")
 			m.chatScroll = 0 // sending re-joins the live tail
 			if text == "/new" {
+				// /new starts a fresh session; pending images are kept.
 				return m, func() tea.Msg { return NewSessionMsg{} }
 			}
-			m.chat = append(m.chat, chatItem{kind: "user", when: time.Now(), text: text})
-			return m, func() tea.Msg { return SendPromptMsg{Text: text} }
+			images := m.pending
+			m.pending = nil
+			prefix := ""
+			for _, img := range images {
+				prefix += fmt.Sprintf("[image %d×%d] ", img.Width, img.Height)
+			}
+			m.chat = append(m.chat, chatItem{kind: "user", when: time.Now(),
+				text: prefix + text})
+			return m, func() tea.Msg { return SendPromptMsg{Text: text, Images: images} }
 		case "pgup":
 			m.chatScroll += m.chatPageStep()
 			return m, nil

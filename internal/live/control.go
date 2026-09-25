@@ -3,7 +3,6 @@ package live
 import (
 	"context"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/joshgriffith1124/strawboss/internal/registry"
@@ -28,6 +27,7 @@ func (o *Orchestrator) OnKillWorker(id string) {
 	session := o.workerSession[id]
 	model := o.workerModel[id]
 	pid := o.workerPID[id]
+	started := o.workerStarted[id]
 	unfinished := o.unfinished[id]
 	o.mu.Unlock()
 
@@ -35,15 +35,28 @@ func (o *Orchestrator) OnKillWorker(id string) {
 		o.emitAsync(ui.ToastMsg{Text: id + " isn't running — nothing to kill"})
 		return
 	}
+	// A worker that died without reporting (power loss, crash) has no one
+	// left to record its end, and after a reboot its pid may belong to an
+	// unrelated process: never signal it — close it out as failed.
+	isDsh := false
+	if mc, ok := o.modelConfig(model); ok && mc.Harness == "dsh" {
+		isDsh = true
+	}
+	if deadBeforeBoot(started) || (isDsh && !workerAlive(pid, started)) {
+		if o.reapOne(id, session) {
+			o.emitAsync(ui.ToastMsg{Text: id + " was already dead — marked failed (process lost)"})
+		}
+		return
+	}
 	// dsh workers are subprocesses owned by their delegate: SIGTERM the
 	// recorded pid; the waiting delegate then records the failure. No pid
 	// on record (pre-upgrade registry rows) is a displayed state.
-	if mc, ok := o.modelConfig(model); ok && mc.Harness == "dsh" {
+	if isDsh {
 		if pid <= 0 {
 			o.emitAsync(ui.ToastMsg{Text: "kill " + id + ": no pid on record"})
 			return
 		}
-		if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
+		if err := killWorker(pid); err != nil {
 			o.emitAsync(ui.ToastMsg{Text: "kill " + id + ": " + err.Error()})
 			return
 		}

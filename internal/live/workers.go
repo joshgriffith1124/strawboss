@@ -96,6 +96,7 @@ func (o *Orchestrator) applyRegistryEvent(ctx context.Context, ev registry.Event
 		o.workerDir[ev.Worker] = ev.Dir
 		o.workerTask[ev.Worker] = ev.Task
 		o.workerPID[ev.Worker] = ev.PID
+		o.workerStarted[ev.Worker] = ev.TS
 		o.unfinished[ev.Worker] = true
 		startTail := false
 		if mc, ok := o.modelConfig(ev.Model); ok && mc.Harness == "dsh" && !o.tailing[ev.Worker] {
@@ -113,12 +114,14 @@ func (o *Orchestrator) applyRegistryEvent(ctx context.Context, ev registry.Event
 	case "finished":
 		o.mu.Lock()
 		delete(o.unfinished, ev.Worker)
+		reaped := o.reaped[ev.Worker]
 		o.mu.Unlock()
 		// One notion of "replayed" for both consumers: history read back
 		// at startup must neither push to a phone nor ring the local
 		// bell. Restarting after a crash otherwise announces every worker
-		// the crash killed as if it were failing right then.
-		replay := !ev.TS.After(o.started)
+		// the crash killed as if it were failing right then. A worker
+		// reaped as dead by x died in the past too.
+		replay := !ev.TS.After(o.started) || reaped
 		if ev.Status == "failed" && !replay {
 			summary := ev.Summary
 			if i := strings.IndexByte(summary, '\n'); i >= 0 {

@@ -77,18 +77,20 @@ type Orchestrator struct {
 	runCtx context.Context
 
 	mu              sync.Mutex
-	sessionToWorker map[string]string  // session id → wN
-	workerSession   map[string]string  // wN → harness session id
-	workerModel     map[string]string  // wN → model config name
-	workerDir       map[string]string  // wN → working directory (for scoped status)
-	workerTask      map[string]string  // wN → task text (for retry)
-	workerPID       map[string]int     // wN → worker subprocess pid (dsh; 0 for opencode)
-	unfinished      map[string]bool    // wN spawned but no finished event yet
-	tailing         map[string]bool    // wN with a session-log tailer running (dsh)
-	dshOut          map[string]int     // wN → latest output tokens seen by its tailer
-	stream          *supervisor.Stream // the persistent supervisor process, if running
-	servers         []*managedServer   // managed opencode serve children
-	subscribed      map[string]bool    // opencode endpoints with an event subscriber
+	sessionToWorker map[string]string    // session id → wN
+	workerSession   map[string]string    // wN → harness session id
+	workerModel     map[string]string    // wN → model config name
+	workerDir       map[string]string    // wN → working directory (for scoped status)
+	workerTask      map[string]string    // wN → task text (for retry)
+	workerPID       map[string]int       // wN → worker subprocess pid (dsh; 0 for opencode)
+	workerStarted   map[string]time.Time // wN → spawn time (reaping: predates the last boot?)
+	unfinished      map[string]bool      // wN spawned but no finished event yet
+	reaped          map[string]bool      // wN closed as dead by x: its finished event replays silent
+	tailing         map[string]bool      // wN with a session-log tailer running (dsh)
+	dshOut          map[string]int       // wN → latest output tokens seen by its tailer
+	stream          *supervisor.Stream   // the persistent supervisor process, if running
+	servers         []*managedServer     // managed opencode serve children
+	subscribed      map[string]bool      // opencode endpoints with an event subscriber
 
 	// budget guard accumulation (see budget.go)
 	supTotals     supUsageTotals // per-run supervisor ledger (supusage.go)
@@ -121,7 +123,9 @@ func New(d *supervisor.Driver, models []config.ModelConfig, stateDir string) *Or
 		workerDir:       map[string]string{},
 		workerTask:      map[string]string{},
 		workerPID:       map[string]int{},
+		workerStarted:   map[string]time.Time{},
 		unfinished:      map[string]bool{},
+		reaped:          map[string]bool{},
 		tailing:         map[string]bool{},
 		dshOut:          map[string]int{},
 		toolCmds:        map[string]string{},
@@ -195,6 +199,7 @@ func (o *Orchestrator) Run(ctx context.Context) {
 	ctx, o.cancel = context.WithCancel(ctx)
 	o.runCtx = ctx
 	o.seedSupUsage()
+	o.reapDead() // before the watcher: close out workers a crash left "running"
 	go o.supervisorLoop(ctx)
 	go o.watchRegistry(ctx)
 	go o.pollWorkers(ctx)

@@ -82,10 +82,11 @@ tested at the end (same rule as milestones). Struck items are done.
 26. **Flag stray files** — workers leave debug files behind
     (`zz_repro_test.go`, `tmp_debug_test.go`), and one broke the build.
     The result should list new files outside the task's named files.
-27. **Reap dead workers** — a worker whose process dies (power loss,
+27. ~~Reap dead workers~~ — a worker whose process dies (power loss,
     crash) never writes its finished event and shows "running" forever.
-    On TUI and delegate startup, mark running workers whose pid is gone
-    as failed ("process lost").
+    At TUI startup, reapDead marks provably dead workers failed ("process
+    lost"); `x` on a dead worker reaps instead of signalling a stale pid
+    (c371bbb). Delegate needs no reap: slot flocks die with the process.
 18. **Model-neutral repo** — the code already works with any number of
     models (everything reads models.toml), but examples, tests, fixtures,
     the mockup, the replay demo and NOTES name one setup (qwen-coder,

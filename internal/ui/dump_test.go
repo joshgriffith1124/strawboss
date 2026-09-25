@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // agentsDumpState builds the same realistic Agents state at any size:
@@ -67,11 +69,10 @@ func agentsDumpState(t *testing.T, w, h int) Model {
 	return apply(t, New(make(chan tea.Msg)), msgs...)
 }
 
-// TestDumpAgents renders the Agents screen at four terminal sizes into
-// files under the directory named by STRAWBOSS_DUMP (ANSI escapes
-// stripped) so layout changes can be eyeballed against docs/MOCKUP.html.
-// Skipped unless the variable points at a directory; it never asserts
-// on the pixels.
+// TestDumpAgents renders the six tabs into files under the directory
+// named by STRAWBOSS_DUMP (ANSI escapes stripped) so layout changes can
+// be eyeballed against docs/MOCKUP.html. Skipped unless the variable
+// points at a directory; it never asserts on the pixels.
 func TestDumpAgents(t *testing.T) {
 	dump := os.Getenv("STRAWBOSS_DUMP")
 	if dump == "" {
@@ -104,4 +105,92 @@ func TestDumpAgents(t *testing.T) {
 	m.tab = tabChat
 	m.zoomed = true
 	write("agents-128x45-zoom.txt", m)
+
+	// Tasks tab: same rich state, a running worker selected so the live
+	// pane and the DETAIL column have content.
+	m = agentsDumpState(t, 128, 45)
+	m.tab = tabDashboard
+	for i, r := range m.visibleWorkers() {
+		if r.ID == "w3" {
+			m.selected = i
+		}
+	}
+	write("tasks-128x45.txt", m)
+
+	// Worktrees demo (no branch hook).
+	m = New(make(chan tea.Msg))
+	m = apply(t, m,
+		tea.WindowSizeMsg{Width: 100, Height: 30},
+		tea.KeyMsg{Type: tea.KeyTab},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b")},
+	)
+	write("worktrees-demo.txt", m)
+
+	// Worktrees with branches + diff open.
+	m = New(make(chan tea.Msg))
+	now := time.Now()
+	m.OnListBranches = func() []BranchInfo {
+		return []BranchInfo{
+			{Name: "strawboss/w1-trade-query", Ahead: 2, Files: 3, Added: 120, Deleted: 40,
+				Subject: "scaffold trade query", When: now.Add(-5 * time.Minute)},
+			{Name: "strawboss/w2-docstrings", Ahead: 1, Files: 1, Added: 30, Deleted: 2,
+				Subject: "docstrings for pkg", When: now.Add(-time.Hour)},
+		}
+	}
+	m.OnBranchDiff = func(name string) (string, error) {
+		return "diff --git a/x.go b/x.go\n@@ -1 +1 @@\n-old line\n+new line for " + name, nil
+	}
+	m = apply(t, m,
+		tea.WindowSizeMsg{Width: 100, Height: 30},
+		tea.KeyMsg{Type: tea.KeyTab},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b")},
+		tea.KeyMsg{Type: tea.KeyDown},
+		tea.KeyMsg{Type: tea.KeyEnter},
+	)
+	write("worktrees-diff.txt", m)
+
+	// Models + Analytics tabs.
+	m = demoState(t)
+	m.OnScorecard = func() []ScoreRow {
+		return []ScoreRow{
+			{Model: "qwen-coder", Attempts: 10, Done: 8, Failed: 1, Rescued: 1, Median: 62 * time.Second},
+			{Model: "fast-local", Attempts: 4, Done: 4, Failed: 0, Median: 45 * time.Second},
+		}
+	}
+	m = apply(t, m,
+		tea.WindowSizeMsg{Width: 128, Height: 40},
+		tea.KeyMsg{Type: tea.KeyTab},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("5")},
+	)
+	write("analytics-128x40.txt", m)
+
+	m = demoState(t)
+	m = apply(t, m,
+		tea.WindowSizeMsg{Width: 128, Height: 40},
+		tea.KeyMsg{Type: tea.KeyTab},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("4")},
+	)
+	write("models-128x40.txt", m)
+}
+
+// TestViewWidthDiscipline enforces the layout contract on every tab:
+// every line of View() is exactly w cells wide at several widths.
+func TestViewWidthDiscipline(t *testing.T) {
+	for _, w := range []int{132, 110, 90, 70, 55, 40} {
+		m := demoState(t)
+		m = apply(t, m, tea.WindowSizeMsg{Width: w, Height: 24})
+		for tab := 0; tab < numTabs; tab++ {
+			m.tab = tab
+			if tab == tabWorktrees && m.OnListBranches == nil {
+				m.reviewing = true
+			}
+			v := ansiSeq.ReplaceAllString(m.View(), "")
+			lines := strings.Split(v, "\n")
+			for i, ln := range lines {
+				if got := lipgloss.Width(ln); got != w {
+					t.Errorf("w=%d tab=%d line %d: width %d: %.60q", w, tab, i, got, ln)
+				}
+			}
+		}
+	}
 }

@@ -229,9 +229,11 @@ func TestViewsRenderKeyContent(t *testing.T) {
 
 	m.tab = tabDashboard
 	dash := m.View()
-	for _, want := range []string{"SUPERVISOR · PLAN", "WORKERS · LOCAL", "TASKS",
-		"scaffold the app", "running", "queued", "SUPERVISOR DETAIL",
-		"subscription", "marginal cost", "cache", "WORKER W2 · QWEN-SMALL"} {
+	// Tasks screen: worker table in the TASKS pane (with its tally) and
+	// the selected worker's live pane beside the DETAIL column. The
+	// supervisor token economy moved to the Analytics tab.
+	for _, want := range []string{"TASKS", "DETAIL",
+		"scaffold the app", "running", "queued", "qwen-small"} {
 		if !strings.Contains(dash, want) {
 			t.Errorf("dashboard view missing %q", want)
 		}
@@ -583,15 +585,22 @@ func TestWorkerDetailShowsThroughputAndContext(t *testing.T) {
 		WorkerUsageMsg{ID: "w1", Input: 40000, Output: 9000, Ctx: 30000},
 	)
 	m.selected = 1 // display order: w2 (queued), w1 (running)
-	out := m.viewDetailSplit(120, 20)
-	for _, want := range []string{"ctx 30.0k", "262.1k", "avg", "started", "log "} {
+	wk := m.selectedWorker()
+	if wk == nil || wk.ID != "w1" {
+		t.Fatalf("selected = %+v", wk)
+	}
+	// Age the run so the lifetime average is what the fact line can
+	// compute (the live rate needs a fresh usage sample).
+	m.now = wk.Started.Add(5 * time.Minute)
+	out := strings.Join(m.workerDetailLines(wk, 120), "\n")
+	for _, want := range []string{"49.0k", "avg 30", "ctx 30.0k", "262.1k", "started", "log "} {
 		if !strings.Contains(out, want) {
 			t.Errorf("detail missing %q:\n%s", want, out)
 		}
 	}
 }
 
-func TestDetailExtrasAndRecentResults(t *testing.T) {
+func TestWorkerDetailFacts(t *testing.T) {
 	m := demoState(t)
 	// Three usage updates with growing output → rate history + steps.
 	for i, out := range []int{1000, 3000, 6000} {
@@ -607,12 +616,11 @@ func TestDetailExtrasAndRecentResults(t *testing.T) {
 		t.Fatalf("hist = %v", m.workerRates["w1"].hist)
 	}
 
-	// Failed worker surfaces its last transcript error above the summary.
+	// A finished worker's facts: the step count, the context footprint,
+	// and the full task all stay visible in the detail column.
 	m = apply(t, m,
 		WorkerEventMsg{ID: "w1", Kind: "error", Text: "bash: tests exploded"},
 		WorkerUpsertMsg{ID: "w1", Status: "failed", Summary: "worker stopped"},
-		SupToolResultMsg{ToolID: "t1", Content: "w1 failed 2m10s · log /l\nworker stopped", IsError: true},
-		SupToolResultMsg{ToolID: "t2", Content: "some Read output that is not a delegation"},
 	)
 	m.selected = 0 // failed w1 sorts after queued w2… find it
 	rows := m.visibleWorkers()
@@ -621,21 +629,38 @@ func TestDetailExtrasAndRecentResults(t *testing.T) {
 			m.selected = i
 		}
 	}
-	out := m.viewDetailSplit(140, 24)
-	for _, want := range []string{"tests exploded", "summary: worker stopped", "step 3",
-		"recent delegation results", "w1 failed 2m10s"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("detail missing %q", want)
-		}
+	wk := m.selectedWorker()
+	if wk == nil || wk.ID != "w1" {
+		t.Fatalf("selected = %+v", wk)
 	}
-	if strings.Contains(out, "not a delegation") {
-		t.Error("non-delegation tool result leaked into recent results")
+	out := strings.Join(m.workerDetailLines(wk, 140), "\n")
+	for _, want := range []string{"step 3", "ctx 5.0k", "scaffold the app"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("detail missing %q:\n%s", want, out)
+		}
 	}
 	if len(m.workerRates["w1"].hist) >= 3 {
 		spark := sparkline(m.workerRates["w1"].hist, 20)
 		if spark == "" {
 			t.Error("sparkline empty despite history")
 		}
+	}
+}
+
+func TestSupervisorDetailRecentResults(t *testing.T) {
+	m := demoState(t)
+	m = apply(t, m,
+		SupToolResultMsg{ToolID: "t1", Content: "w1 failed 2m10s · log /l\nworker stopped", IsError: true},
+		SupToolResultMsg{ToolID: "t2", Content: "some Read output that is not a delegation"},
+	)
+	out := strings.Join(m.supervisorDetailLines(140), "\n")
+	for _, want := range []string{"recent delegation results", "w1 failed 2m10s"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("detail missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "not a delegation") {
+		t.Error("non-delegation tool result leaked into recent results")
 	}
 }
 
@@ -1113,7 +1138,9 @@ func TestSupContextTracksAndWarns(t *testing.T) {
 
 	for name, out := range map[string]string{
 		"chat panel": m.viewTokensPanel(46),
-		"dashboard":  m.viewDashboard(120, 38),
+		// The supervisor's token economy moved from the dashboard's
+		// detail split to the Analytics tab's right pane.
+		"analytics": m.viewAnalyticsTab(120, 38),
 	} {
 		if !strings.Contains(out, "context") || !strings.Contains(out, "490.5k") {
 			t.Errorf("%s missing context footprint", name)

@@ -71,16 +71,19 @@ func (m Model) View() string {
 func (m Model) viewTopTabs(w int) string {
 	left := sBoldT.Render(glyphLogo + " strawboss")
 	right := m.viewTopRight()
-	full := m.viewTabCells(false)
+	full, short := m.viewTabCells(false), m.viewTabCells(true)
 
-	lw, mw, rw := lipgloss.Width(left), lipgloss.Width(full), lipgloss.Width(right)
+	lw, rw := lipgloss.Width(left), lipgloss.Width(right)
+	fw, sw := lipgloss.Width(full), lipgloss.Width(short)
 	switch {
-	case w >= lw+mw+rw+4:
+	case w >= lw+fw+rw+4:
 		return m.topRow(w, left, full, right)
-	case w >= lw+mw+3:
+	case w >= lw+sw+rw+4:
+		return m.topRow(w, left, short, right)
+	case w >= lw+fw+3:
 		return m.topRow(w, left, full, "")
 	default:
-		return m.topRow(w, left, m.viewTabCells(true), "")
+		return m.topRow(w, left, short, "")
 	}
 }
 
@@ -119,7 +122,7 @@ func (m Model) viewTabCells(short bool) string {
 			cells = append(cells, sTabOff.Render(" "+n+" "+name+" "))
 		}
 	}
-	return strings.Join(cells, "  ")
+	return strings.Join(cells, " ")
 }
 
 // viewTopRight is the right side of the merged top row: the remote
@@ -205,7 +208,8 @@ func (m Model) viewFooter(w int) string {
 	}
 	left := strings.Join(parts, "  ")
 	right := sDim.Render(m.now.Local().Format("15:04:05"))
-	gap := w - lipgloss.Width(left) - lipgloss.Width(right) - 2
+	// One leading space plus left + gap + clock must land exactly on w.
+	gap := w - 1 - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
 		return padTo(left, w)
 	}

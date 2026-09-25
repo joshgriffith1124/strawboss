@@ -27,6 +27,10 @@ import (
 	"github.com/joshgriffith1124/strawboss/internal/worktree"
 )
 
+// defaultWorkerTimeout is the per-attempt worker deadline when neither an
+// explicit --timeout flag nor the model's own `timeout` applies.
+const defaultWorkerTimeout = 20 * time.Minute
+
 // runDelegate is the command the supervisor calls to spawn workers. Its
 // stdout is the ONLY thing that enters supervisor context (invariant 3):
 // per worker, one header line and a few-line summary — target ≤ ~250
@@ -90,7 +94,7 @@ func runDelegate(args []string, stdout io.Writer) error {
 	useWorktree := fs.Bool("worktree", false, "run each worker in an isolated git worktree on its own strawboss/* branch")
 	escalate := fs.Bool("escalate", true, "on worker failure, retry the task once on the next model config in models.toml — the next tier up when tiers are set (skipped with --worktree)")
 	useRepoMap := fs.Bool("repomap", true, "prepend a compact repo map (files + top-level symbols) to worker prompts")
-	timeout := fs.Duration("timeout", 20*time.Minute, "abort workers after this long")
+	timeout := fs.Duration("timeout", 0, "abort each worker attempt after this long; an explicit value overrides every model — default 0 uses the model's timeout from models.toml, else 20m")
 	stateDir := fs.String("state-dir", "", "state directory (default ~/.strawboss)")
 	modelsPath := fs.String("models", "", "models.toml path (default <state-dir>/models.toml)")
 	verifyFlag := fs.String("verify", "", "check command run after each worker, overriding the project's "+verify.FileName+" verify; \"off\" skips the check")
@@ -191,12 +195,13 @@ func runDelegate(args []string, stdout io.Writer) error {
 	// inherited here; it scopes these workers to that run.
 	reg := &registry.Registry{Path: filepath.Join(*stateDir, "workers.jsonl"), Run: os.Getenv("STRAWBOSS_RUN")}
 
-	// Timeout and supervisor interrupt (SIGINT/SIGTERM when the Bash call
-	// is killed) both cancel the wait; workers are then aborted rather
-	// than left running unobserved.
-	ctx, cancelTimeout := context.WithTimeout(context.Background(), *timeout)
-	defer cancelTimeout()
-	ctx, cancelSignals := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	// Supervisor interrupt (SIGINT/SIGTERM when the Bash call is killed)
+	// cancels the whole call; the per-attempt worker deadline is set per
+	// attempt inside each worker goroutine, so a batch of slow workers no
+	// longer shares one call-wide clock and an escalation retry gets a
+	// fresh one. Interrupted workers are aborted, not left running
+	// unobserved.
+	ctx, cancelSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancelSignals()
 
 	// One map for the whole call: worktrees are branches of the same
@@ -268,7 +273,12 @@ func runDelegate(args []string, stdout io.Writer) error {
 				outcomes[i] = runner.Outcome{Err: err}
 				return
 			}
-			outcomes[i] = runner.Run(ctx, h, reg, mc, prompt, task, workerDir, warn, decorate)
+			// Per-attempt deadline (flag > model > default), created when
+			// the attempt starts and cancelled when it returns, so a slow
+			// worker spends only its own clock, never the batch's.
+			attemptCtx, cancelAttempt := context.WithTimeout(ctx, timeoutFor(*timeout, mc))
+			outcomes[i] = runner.Run(attemptCtx, h, reg, mc, prompt, task, workerDir, warn, decorate)
+			cancelAttempt()
 			// Cheap-first escalation: a failure on the requested (cheap)
 			// model re-dispatches ONCE to the next config in models.toml
 			// (the next tier up when tiers are set), inside this call — the
@@ -288,8 +298,13 @@ func runDelegate(args []string, stdout io.Writer) error {
 							check.Command + "`). Its changes are still in the working tree — fix them or redo the task so the check passes:\n" +
 							verifyFail
 					}
-					outcomes[i] = runEscalated(ctx, outcomes[i], next, mc.Name,
+					// The retry's clock is also created now: the first
+					// attempt's deadline is already spent, so the retry
+					// model's timeout is measured from here.
+					retryCtx, cancelRetry := context.WithTimeout(ctx, timeoutFor(*timeout, next))
+					outcomes[i] = runEscalated(retryCtx, outcomes[i], next, mc.Name,
 						retryPrompt, task, workerDir, *stateDir, reg, warn, decorate)
+					cancelRetry()
 				}
 			}
 			// The routing note rides on the supervisor-facing summary only:
@@ -370,6 +385,19 @@ func verifySpec(dir, flagValue string) (verify.Spec, error) {
 // succeeded reports whether an outcome is a completed, non-failed worker.
 func succeeded(oc runner.Outcome) bool {
 	return oc.Err == nil && oc.Res.Status == harness.StatusDone
+}
+
+// timeoutFor resolves one attempt's deadline: an explicit --timeout
+// overrides every model, then the model's own `timeout` from models.toml,
+// then the 20m default.
+func timeoutFor(flagTimeout time.Duration, mc config.ModelConfig) time.Duration {
+	if flagTimeout > 0 {
+		return flagTimeout
+	}
+	if mc.Timeout > 0 {
+		return mc.Timeout
+	}
+	return defaultWorkerTimeout
 }
 
 // modelPin is one --model flag: name binds the tasks from index from on,

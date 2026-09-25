@@ -1100,6 +1100,28 @@ func TestDelegateVerifyFromProjectFile(t *testing.T) {
 	}
 }
 
+// TestTimeoutFor: explicit --timeout > model's timeout > default.
+func TestTimeoutFor(t *testing.T) {
+	tests := []struct {
+		name  string
+		flag  time.Duration
+		model config.ModelConfig
+		want  time.Duration
+	}{
+		{"no flag, unset model value: default", 0, config.ModelConfig{}, defaultWorkerTimeout},
+		{"no flag, model value set: model", 0, config.ModelConfig{Timeout: 40 * time.Minute}, 40 * time.Minute},
+		{"flag beats model value", 300 * time.Millisecond, config.ModelConfig{Timeout: 40 * time.Minute}, 300 * time.Millisecond},
+		{"flag with unset model value", time.Minute, config.ModelConfig{}, time.Minute},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := timeoutFor(tt.flag, tt.model); got != tt.want {
+				t.Errorf("timeoutFor(%v, %+v) = %v, want %v", tt.flag, tt.model, got, tt.want)
+			}
+		})
+	}
+}
+
 // TestDelegateVerifyBatch: parallel tasks share one directory, so the check
 // runs once after all of them; a failure cannot blame a worker, so their
 // statuses stand and the call as a whole fails.

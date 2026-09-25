@@ -5,7 +5,7 @@ How the supervisor spawns workers, and what flows back into its context.
 ## The command
 
 ```
-strawboss delegate [--model <name>|auto] --task "<prompt>" [--task "<prompt>"…] [--dir <path>] [--timeout 20m]
+strawboss delegate [--model <name>|auto] --task "<prompt>" [--task "<prompt>"…] [--dir <path>] [--timeout <duration>]
 ```
 
 - `--model` — a named entry in `~/.strawboss/models.toml` (never a hostname),
@@ -19,7 +19,10 @@ strawboss delegate [--model <name>|auto] --task "<prompt>" [--task "<prompt>"…
   2026-08-28.)
 - `--dir` — worker working directory; defaults to the caller's cwd, so when the
   supervisor runs it from the project root, workers work in the project.
-- `--timeout` — expired workers are aborted (not orphaned).
+- `--timeout` — per-worker, per-attempt deadline: an expired worker is
+  aborted (not orphaned). An explicit value overrides every model; the
+  default (0) falls back to the model's `timeout` in `models.toml`, then to
+  20m. Each attempt (first try, escalation retry) gets a fresh clock.
 - `--state-dir` / `--models` — overrides for tests and experiments.
 
 Blocks until every worker finishes and prints one terse result per worker. Exit 0

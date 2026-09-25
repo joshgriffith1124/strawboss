@@ -63,6 +63,8 @@ harness = "dsh"
 #                             # leaks CJK tokens into code — docs/NOTES.md)
 # max_tokens = 49152          # per-request output cap (shared with the
 #                             # model's reasoning); default 49152
+# timeout = "20m"             # per-worker deadline for this model; unset =
+#                             # the delegate default (20m), --timeout wins
 # tools_mode = "native"       # tool transport: native (default) · code
 #                             # (one run_code tool + a ~4k-token generated
 #                             # TypeScript SDK prompt) · both

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func writeFile(t *testing.T, name, content string) string {
@@ -194,6 +195,32 @@ func TestLoadModelsMaxConcurrent(t *testing.T) {
 	if _, err := LoadModels(writeFile(t, "bad.toml", bad)); err == nil ||
 		!strings.Contains(err.Error(), "max_concurrent") {
 		t.Errorf("negative max_concurrent: err = %v", err)
+	}
+}
+
+func TestLoadModelsTimeout(t *testing.T) {
+	good := "[models.x]\nendpoint = \"http://h:1\"\nmodel = \"m\"\ntimeout = \"40m\"\n\n[models.y]\nendpoint = \"http://h:1\"\nmodel = \"m\"\n"
+	models, err := LoadModels(writeFile(t, "models.toml", good))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if models[0].Timeout != 40*time.Minute {
+		t.Errorf("x timeout = %v, want 40m", models[0].Timeout)
+	}
+	if models[1].Timeout != 0 {
+		t.Errorf("y timeout = %v, want 0 (unset = no per-model value)", models[1].Timeout)
+	}
+
+	invalid := "[models.x]\nendpoint = \"http://h:1\"\nmodel = \"m\"\ntimeout = \"nope\"\n"
+	if _, err := LoadModels(writeFile(t, "bad.toml", invalid)); err == nil ||
+		!strings.Contains(err.Error(), `model "x"`) || !strings.Contains(err.Error(), "timeout") {
+		t.Errorf("invalid timeout: err = %v, want it naming model and key", err)
+	}
+
+	negative := "[models.x]\nendpoint = \"http://h:1\"\nmodel = \"m\"\ntimeout = \"-5s\"\n"
+	if _, err := LoadModels(writeFile(t, "neg.toml", negative)); err == nil ||
+		!strings.Contains(err.Error(), `model "x"`) || !strings.Contains(err.Error(), "must not be negative") {
+		t.Errorf("negative timeout: err = %v, want it naming model and key", err)
 	}
 }
 

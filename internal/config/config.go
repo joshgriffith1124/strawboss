@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -63,6 +64,14 @@ type ModelConfig struct {
 	// "queued" until a slot frees. For a single-GPU server whose parallel
 	// requests thrash rather than overlap. 0 = unlimited.
 	MaxConcurrent int `toml:"max_concurrent"`
+	// Timeout, when set, is the per-attempt worker deadline for this
+	// model: each run (first try and an escalation retry alike) gets a
+	// fresh context bounded by it. 0 = unset: the delegate command falls
+	// back to its own default; an explicit --timeout flag overrides it.
+	Timeout time.Duration `toml:"-"`
+	// TimeoutRaw is the on-disk `timeout` value (a Go duration string,
+	// e.g. "40m"); LoadModels parses and validates it into Timeout.
+	TimeoutRaw string `toml:"timeout"`
 }
 
 // Tiered reports whether models use capability tiers (any entry sets one).
@@ -257,6 +266,16 @@ func LoadModels(path string) ([]ModelConfig, error) {
 		}
 		if mc.MaxConcurrent < 0 {
 			return nil, fmt.Errorf("model %q: max_concurrent %d must be 0 (unlimited) or more", name, mc.MaxConcurrent)
+		}
+		if mc.TimeoutRaw != "" {
+			d, err := time.ParseDuration(mc.TimeoutRaw)
+			if err != nil {
+				return nil, fmt.Errorf("model %q: timeout %q: %w", name, mc.TimeoutRaw, err)
+			}
+			if d < 0 {
+				return nil, fmt.Errorf("model %q: timeout %q must not be negative", name, mc.TimeoutRaw)
+			}
+			mc.Timeout = d
 		}
 		if strings.ContainsAny(mc.Description, "\r\n") {
 			return nil, fmt.Errorf("model %q: description must be a single line", name)

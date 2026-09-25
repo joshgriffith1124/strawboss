@@ -59,8 +59,14 @@ func (m Model) viewMetrics(w int) string {
 		if ms.TokSec > 0 {
 			val = fmt.Sprintf("%.0f tok/s", ms.TokSec)
 		}
-		modelLines = append(modelLines,
-			" "+sText.Render(ms.Name)+" "+sDim.Render(val)+" "+sFaint.Render(truncPlain(ms.Note, quarter-lipgloss.Width(ms.Name)-14)))
+		// Budget the note so the name and the stat (the point of the row)
+		// keep their cells; at narrow widths the note drops out entirely
+		// instead of shaving the stat.
+		line := " " + sText.Render(ms.Name) + " " + sDim.Render(val)
+		if noteW := quarter - lipgloss.Width(ms.Name) - lipgloss.Width(val) - 5; noteW > 0 {
+			line += " " + sFaint.Render(truncPlain(ms.Note, noteW))
+		}
+		modelLines = append(modelLines, line)
 	}
 	if len(modelLines) == 0 {
 		modelLines = []string{" " + sFaint.Render("no model stats")}
@@ -88,7 +94,10 @@ func (m Model) viewMetrics(w int) string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, sup, wrk, models, tasks)
 }
 
-func (m Model) viewWorkerTable(w, maxRows int) string {
+// workerTableLines renders the worker table content: header, the filter
+// line when one is active, and the rows — exactly what goes inside the
+// panel today. The Agents screen's bottom Tasks panel reuses these lines.
+func (m Model) workerTableLines(w, maxRows int) []string {
 	head := fmt.Sprintf(" %-4s %-10s %-12s %-*s %8s %8s ",
 		"ID", "STATUS", "MODEL", w-52, "TASK", "TIME", "TOKENS")
 	lines := []string{sDim.Render(truncPlain(head, w-2))}
@@ -147,7 +156,13 @@ func (m Model) viewWorkerTable(w, maxRows int) string {
 		}
 		lines = append(lines, row)
 	}
-	return panel("Workers", lines, w, cBord, cDim)
+	return lines
+}
+
+// viewWorkerTable wraps workerTableLines in the Workers panel; output
+// stays byte-identical to the pre-split rendering.
+func (m Model) viewWorkerTable(w, maxRows int) string {
+	return panel("Workers", m.workerTableLines(w, maxRows), w, cBord, cDim)
 }
 
 func (m Model) viewDetailSplit(w, h int) string {

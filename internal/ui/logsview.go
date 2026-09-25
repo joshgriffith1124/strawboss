@@ -10,11 +10,10 @@ import (
 // scannable in the interleave.
 var wrkPalette = []lipgloss.Style{sTeal, sAmber, sOK, sBrite}
 
-func (m Model) viewLogs(w, h int) string {
-	inner := h - 2
-	if inner < 1 {
-		inner = 1
-	}
+// logLines returns the last n rendered lines of the (filtered) log feed,
+// styled exactly as viewLogs renders them. The Agents screen's bottom
+// Logs panel reuses these lines.
+func (m Model) logLines(w, n int) []string {
 	var filtered []logLine
 	for _, ln := range m.logs {
 		if m.logSrc == "" || ln.src == m.logSrc {
@@ -22,10 +21,10 @@ func (m Model) viewLogs(w, h int) string {
 		}
 	}
 	start := 0
-	if len(filtered) > inner {
-		start = len(filtered) - inner
+	if len(filtered) > n {
+		start = len(filtered) - n
 	}
-	var lines []string
+	lines := make([]string, 0, n)
 	for _, ln := range filtered[start:] {
 		style := sDim
 		if ln.src == "wrk" {
@@ -33,6 +32,15 @@ func (m Model) viewLogs(w, h int) string {
 		}
 		lines = append(lines, " "+style.Render(truncPlain(ln.text, w-4)))
 	}
+	return lines
+}
+
+func (m Model) viewLogs(w, h int) string {
+	inner := h - 2
+	if inner < 1 {
+		inner = 1
+	}
+	lines := m.logLines(w, inner)
 	if len(lines) == 0 {
 		empty := "raw feed lines appear here"
 		if m.logSrc != "" {

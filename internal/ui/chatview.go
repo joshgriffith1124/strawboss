@@ -51,10 +51,10 @@ func (m Model) viewChatColumn(w, h int) string {
 			b.WriteString(sRun.Render("YOU · "+it.when.Local().Format("15:04")) + "\n")
 			b.WriteString(wrap.Render(sBrite.Render(hardWrap(it.text, w-4))) + "\n\n")
 		case "sup":
-			b.WriteString(sAmber.Render("SUPERVISOR · "+it.when.Local().Format("15:04")) + "\n")
+			b.WriteString(sSup.Render("SUPERVISOR · "+it.when.Local().Format("15:04")) + "\n")
 			b.WriteString(wrap.Render(mdInline(hardWrap(it.text, w-4))) + "\n\n")
 		case "tool-out":
-			b.WriteString(toolBlock(sAmber.Render(glyphOut), it.text, 240, sText, w))
+			b.WriteString(toolBlock(sSup.Render(glyphOut), it.text, 240, sText, w))
 		case "tool-in":
 			mark := sOK.Render(glyphDone)
 			if it.isError {
@@ -81,13 +81,13 @@ func (m Model) viewChatColumn(w, h int) string {
 		}
 	}
 	if m.streaming != "" {
-		b.WriteString(sAmber.Render("SUPERVISOR") + "\n")
+		b.WriteString(sSup.Render("SUPERVISOR") + "\n")
 		b.WriteString(wrap.Render(mdInline(hardWrap(m.streaming, w-4))) + "\n")
 	}
 	if m.supStatus != "" {
 		star := glyphStream
 		if m.pulse {
-			star = sAmber.Render(glyphStream)
+			star = sSup.Render(glyphStream)
 		} else {
 			star = sFaint.Render(glyphStream)
 		}

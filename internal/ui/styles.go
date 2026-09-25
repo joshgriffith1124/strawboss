@@ -15,23 +15,26 @@ import (
 
 // Palette from MOCKUP.html's CSS variables.
 var (
-	cTerm  = lipgloss.Color("#12161C")
-	cBord  = lipgloss.Color("#26303B")
-	cText  = lipgloss.Color("#C7D0DA")
-	cDim   = lipgloss.Color("#5C6875")
-	cFaint = lipgloss.Color("#39434F")
-	cAmber = lipgloss.Color("#E2A84B") // supervisor / plan-metered
-	cTeal  = lipgloss.Color("#43C6A8") // workers / local / unmetered
-	cRun   = lipgloss.Color("#59B7E8") // status: running
-	cOK    = lipgloss.Color("#66BE7E") // status: done
-	cErr   = lipgloss.Color("#E0655C") // status: failed
-	cSel   = lipgloss.Color("#1C232C")
-	cBrite = lipgloss.Color("#E8EEF4")
+	cTerm  = lipgloss.Color("#0F141B")
+	cBord  = lipgloss.Color("#2A3441")
+	cText  = lipgloss.Color("#C9D1D9")
+	cDim   = lipgloss.Color("#7D8590")
+	cFaint = lipgloss.Color("#4B5563")
+	cAmber = lipgloss.Color("#D29922") // warnings / queued
+	cTeal  = lipgloss.Color("#3FB950") // workers / local / unmetered
+	cRun   = lipgloss.Color("#58A6FF") // status: running; accent
+	cOK    = lipgloss.Color("#3FB950") // status: done
+	cErr   = lipgloss.Color("#F85149") // status: failed
+	cSel   = lipgloss.Color("#182231")
+	cBrite = lipgloss.Color("#E6EDF3")
+	cSup   = lipgloss.Color("#8B7CF6") // supervisor / plan-metered
+	cFocus = lipgloss.Color("#4F7CFF") // focused pane border
+	cKeyBg = lipgloss.Color("#1B2530")
 
 	// panel border tints from the mock
-	cSupBorder = lipgloss.Color("#4a3c22")
-	cWrkBorder = lipgloss.Color("#1f4a40")
-	cToastBrd  = lipgloss.Color("#5a2c28")
+	cSupBorder = lipgloss.Color("#3B3470")
+	cWrkBorder = lipgloss.Color("#1F3A2A")
+	cToastBrd  = lipgloss.Color("#5A2C28")
 )
 
 var (
@@ -47,26 +50,69 @@ var (
 	sBoldT  = lipgloss.NewStyle().Foreground(cText).Bold(true)
 	sTealB  = lipgloss.NewStyle().Foreground(cTeal).Bold(true)
 	sAmberB = lipgloss.NewStyle().Foreground(cAmber).Bold(true)
+	sSup    = lipgloss.NewStyle().Foreground(cSup)
+	sSupB   = lipgloss.NewStyle().Foreground(cSup).Bold(true)
+	sRunB   = lipgloss.NewStyle().Foreground(cRun).Bold(true)
 
-	sTabOn  = lipgloss.NewStyle().Foreground(cText).Background(cSel).Bold(true)
+	sTabOn  = lipgloss.NewStyle().Foreground(cTerm).Background(cRun).Bold(true)
 	sTabOff = lipgloss.NewStyle().Foreground(cDim)
-	sKeycap = lipgloss.NewStyle().Foreground(cText).Background(cSel).Bold(true)
+	sKeycap = lipgloss.NewStyle().Foreground(cText).Background(cKeyBg).Bold(true)
 	sSelRow = lipgloss.NewStyle().Background(cSel)
 	sToast  = lipgloss.NewStyle().Foreground(cErr).Border(lipgloss.NormalBorder()).BorderForeground(cToastBrd).Padding(0, 1)
 )
 
-// Status glyphs from the mock.
+// Status glyphs from the mock. Box drawing and basic Unicode only — no
+// emoji or icon-font glyphs, so every terminal font renders them.
 const (
 	glyphRun    = "●"
-	glyphDone   = "✔"
-	glyphFail   = "✖"
+	glyphDone   = "✓"
+	glyphFail   = "✗"
 	glyphQueued = "◌"
-	glyphStream = "✻"
+	glyphStream = "●"
 	glyphOut    = "→"
 	glyphIn     = "←"
-	glyphLogo   = "▚"
-	glyphBell   = "🔔"
+	glyphLogo   = "◉"
+	glyphBell   = "▲"
 )
+
+// pill renders a title badge: text on a background colour with 1-cell
+// padding, e.g. " ● claude-supervisor › ".
+func pill(text string, fg, bg lipgloss.TerminalColor) string {
+	return lipgloss.NewStyle().Foreground(fg).Background(bg).Bold(true).Render(" " + text + " ")
+}
+
+// pane draws a rounded box exactly w×h cells: a header row (head left,
+// right right-aligned) then content lines, clipped/padded to the inner
+// width. Extra lines past the box are dropped; missing ones are blank.
+func pane(head, right string, lines []string, w, h int, border lipgloss.TerminalColor) string {
+	if w < 8 {
+		w = 8
+	}
+	if h < 3 {
+		h = 3
+	}
+	inner := w - 2
+	bs := lipgloss.NewStyle().Foreground(border)
+	side := bs.Render("│")
+
+	gap := inner - 2 - lipgloss.Width(head) - lipgloss.Width(right)
+	header := " " + head
+	if gap >= 1 {
+		header += strings.Repeat(" ", gap) + right
+	}
+	rows := make([]string, 0, h)
+	rows = append(rows, bs.Render("╭"+strings.Repeat("─", inner)+"╮"))
+	rows = append(rows, side+padTo(header, inner)+side)
+	for i := 0; i < h-3; i++ {
+		ln := ""
+		if i < len(lines) {
+			ln = lines[i]
+		}
+		rows = append(rows, side+padTo(ln, inner)+side)
+	}
+	rows = append(rows, bs.Render("╰"+strings.Repeat("─", inner)+"╯"))
+	return strings.Join(rows, "\n")
+}
 
 func statusGlyph(status string, pulse bool) string {
 	switch status {

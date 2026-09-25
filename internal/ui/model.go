@@ -14,10 +14,27 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+// Top-level tabs. tabChat renders the Agents screen (supervisor chat pane,
+// worker panes, sidebar, bottom panel); tabDashboard is the Tasks screen.
 const (
 	tabChat = iota
 	tabDashboard
 	tabLogs
+)
+
+// Agents-screen pane focus: the supervisor pane owns typing; the worker
+// focus owns ↑↓ selection and the worker action keys (x r R u).
+const (
+	focusSup = iota
+	focusWork
+)
+
+// Agents-screen bottom panel tabs.
+const (
+	bottomTasks = iota
+	bottomLogs
+	bottomMetrics
+	numBottomTabs
 )
 
 // chatItem is one block in the chat log.
@@ -227,6 +244,9 @@ type Model struct {
 
 	width, height int
 	tab           int
+	focus         int  // Agents screen: focusSup or focusWork
+	zoomed        bool // Agents screen: focused pane fills the main area
+	bottomTab     int  // Agents screen: bottomTasks/bottomLogs/bottomMetrics
 	pulse         bool
 	started       time.Time
 	now           time.Time
@@ -323,7 +343,7 @@ type Model struct {
 // New builds the UI over a feed of typed tea.Msgs.
 func New(feed <-chan tea.Msg) Model {
 	in := textinput.New()
-	in.Prompt = sTealB.Render("› ")
+	in.Prompt = sRunB.Render("› ")
 	in.Placeholder = ""
 	in.Focus()
 	filter := textinput.New()
@@ -845,8 +865,18 @@ func (m Model) visibleWorkers() []workerRow {
 	return out
 }
 
+// workerKeys reports whether the worker-table keys (↑↓/"", x, r, R, u)
+// are live: on the dashboard, or on the Agents screen with the worker
+// pane focused.
+func (m Model) workerKeys() bool {
+	return m.tab == tabDashboard || (m.tab == tabChat && m.focus == focusWork)
+}
+
 func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	typing := m.tab == tabChat
+	// Typing only while the supervisor pane owns the keyboard: with the
+	// worker focus active, plain keys drive the worker table instead of
+	// the chat input.
+	typing := m.tab == tabChat && m.focus == focusSup
 
 	// The session picker owns the keyboard while open.
 	if m.picking {
@@ -1030,14 +1060,47 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return next, nil
 			}
 		}
+		if m.tab == tabChat {
+			// On the Agents screen, tab toggles the pane focus instead of
+			// switching tabs (shift+tab keeps switching tabs).
+			if m.focus == focusSup {
+				m.focus = focusWork
+			} else {
+				m.focus = focusSup
+			}
+			return m, nil
+		}
 		m.tab = (m.tab + 1) % 3
 		return m, nil
 	case "shift+tab":
 		m.tab = (m.tab + 2) % 3
 		return m, nil
+	case "alt+z":
+		// Zoom the focused Agents pane from either focus — checked
+		// before the typing branch so no "z" is typed.
+		if m.tab == tabChat {
+			m.zoomed = !m.zoomed
+		}
+		return m, nil
 	case "esc":
 		if m.tab == tabChat {
-			return m, func() tea.Msg { return InterruptMsg{} }
+			if m.focus == focusSup {
+				return m, func() tea.Msg { return InterruptMsg{} }
+			}
+			// Worker focus unwinds in order: zoom, then filter, then
+			// back to the supervisor pane.
+			if m.zoomed {
+				m.zoomed = false
+				return m, nil
+			}
+			if m.filter != "" {
+				m.filter = ""
+				m.filterInput.SetValue("")
+				m.selected = 0
+				return m, nil
+			}
+			m.focus = focusSup
+			return m, nil
 		}
 		if m.tab == tabDashboard && m.filter != "" {
 			m.filter = ""
@@ -1120,18 +1183,26 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "3":
 		m.tab = tabLogs
 	case "up", "k":
-		if m.tab == tabDashboard && m.selected > 0 {
+		if m.workerKeys() && m.selected > 0 {
 			m.selected--
 		}
 	case "down", "j":
-		if m.tab == tabDashboard && m.selected < len(m.visibleWorkers())-1 {
+		if m.workerKeys() && m.selected < len(m.visibleWorkers())-1 {
 			m.selected++
 		}
 	case "/":
-		if m.tab == tabDashboard {
+		if m.workerKeys() {
 			m.filtering = true
 			m.filterInput.SetValue(m.filter)
 			m.filterInput.Focus()
+		}
+	case "z":
+		if m.tab == tabChat && m.focus == focusWork {
+			m.zoomed = !m.zoomed
+		}
+	case "t":
+		if m.tab == tabChat && m.focus == focusWork {
+			m.bottomTab = (m.bottomTab + 1) % numBottomTabs
 		}
 	case "s":
 		if m.OnListSessions != nil {
@@ -1154,7 +1225,8 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "n":
 		return m, func() tea.Msg { return NewSessionMsg{} }
 	case "f":
-		if m.tab == tabLogs {
+		if m.tab == tabLogs ||
+			(m.tab == tabChat && m.focus == focusWork && m.bottomTab == bottomLogs) {
 			// Cycle the logs source filter: all → sup → wrk → app.
 			order := []string{"", "sup", "wrk", "app"}
 			for i, s := range order {
@@ -1167,7 +1239,7 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.follow = !m.follow
 		}
 	case "x":
-		if m.tab != tabDashboard {
+		if !m.workerKeys() {
 			break
 		}
 		wk := m.selectedWorker()
@@ -1181,7 +1253,7 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		id := wk.ID
 		return m, func() tea.Msg { return KillWorkerMsg{ID: id} }
 	case "r":
-		if m.tab != tabDashboard {
+		if !m.workerKeys() {
 			break
 		}
 		wk := m.selectedWorker()
@@ -1195,7 +1267,7 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		id := wk.ID
 		return m, func() tea.Msg { return RetryWorkerMsg{ID: id} }
 	case "R":
-		if m.tab != tabDashboard {
+		if !m.workerKeys() {
 			break
 		}
 		// Recover-all: retry every FAILED worker in the current (possibly
@@ -1215,7 +1287,7 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.showToast(fmt.Sprintf("retrying %d failed worker(s)", len(cmds)))
 		return m, tea.Batch(cmds...)
 	case "u":
-		if m.tab != tabDashboard {
+		if !m.workerKeys() {
 			break
 		}
 		wk := m.selectedWorker()

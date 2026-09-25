@@ -20,12 +20,14 @@ func (m Model) View() string {
 		h = 30
 	}
 
-	top := m.viewTopbar(w)
-	tabs := m.viewTabs(w)
+	top := m.viewTopTabs(w)
 	foot := m.viewFooter(w)
-	contentH := h - 3 // topbar + tabs + footer
+	contentH := h - 2 // merged top row + footer
 	if m.toast != "" {
 		contentH--
+	}
+	if contentH < 1 {
+		contentH = 1 // degenerate sizes: a one-line body beats a crash
 	}
 
 	var body string
@@ -37,14 +39,14 @@ func (m Model) View() string {
 	case m.picking:
 		body = m.viewSessionPicker(w, contentH)
 	case m.tab == tabChat:
-		body = m.viewChat(w, contentH)
+		body = m.viewAgents(w, contentH)
 	case m.tab == tabDashboard:
 		body = m.viewDashboard(w, contentH)
 	case m.tab == tabLogs:
 		body = m.viewLogs(w, contentH)
 	}
 
-	parts := []string{top, tabs}
+	parts := []string{top}
 	if m.toast != "" {
 		toast := sErr.Render(m.toast)
 		parts = append(parts, padLeftTo(toast, w-2))
@@ -53,22 +55,40 @@ func (m Model) View() string {
 	return strings.Join(parts, "\n")
 }
 
-func (m Model) viewTopbar(w int) string {
-	left := sTeal.Render(glyphLogo+" ") + sBoldT.Render("strawboss")
-	mid := ""
-	if m.sessionID != "" {
-		sid := m.sessionID
-		if len(sid) > 8 {
-			sid = sid[:8] + "…"
-		}
-		pid := ""
-		if m.pid > 0 {
-			pid = fmt.Sprintf("supervisor pid %d · ", m.pid)
-		}
-		mid = sDim.Render(fmt.Sprintf("%s%s · %s auth · session %s", pid, m.supModel, m.auth, sid))
-	} else {
-		mid = sDim.Render(m.auth)
+// viewTopTabs is the merged top row: logo left, numbered tabs in the
+// middle, run telemetry right. The old top bar's session/pid text is gone
+// — the Agents screen owns the supervisor's identity.
+func (m Model) viewTopTabs(w int) string {
+	left := sBoldT.Render(glyphLogo + " strawboss")
+	mid := m.viewTabCells()
+	right := m.viewTopRight()
+
+	gap := w - lipgloss.Width(left) - lipgloss.Width(mid) - lipgloss.Width(right) - 2
+	if gap < 2 {
+		return padTo(left+" "+mid+" "+right, w)
 	}
+	return left + strings.Repeat(" ", gap/2+gap%2) + mid + strings.Repeat(" ", gap/2) + right + "  "
+}
+
+// viewTabCells renders "1 Agents  2 Tasks  3 Logs"; the active tab is the
+// sTabOn pill (1-cell padding), numbers are faint in every tab.
+func (m Model) viewTabCells() string {
+	names := []string{"Agents", "Tasks", "Logs"}
+	var cells []string
+	for i, name := range names {
+		n := sFaint.Render(fmt.Sprintf("%d", i+1))
+		if i == m.tab {
+			cells = append(cells, sTabOn.Render(" "+n+" "+name+" "))
+		} else {
+			cells = append(cells, sTabOff.Render(" "+n+" "+name+" "))
+		}
+	}
+	return strings.Join(cells, "  ")
+}
+
+// viewTopRight is the right side of the merged top row: remote channel,
+// 5h plan-window gauge, run clock, running-worker count.
+func (m Model) viewTopRight() string {
 	var rightParts []string
 	if m.remoteChannel != "" {
 		rightParts = append(rightParts, sTeal.Render("⇄ "+m.remoteChannel))
@@ -81,30 +101,17 @@ func (m Model) viewTopbar(w int) string {
 		rightParts = append(rightParts, gauge)
 	}
 	rightParts = append(rightParts, sDim.Render("run "+formatClock(m.now.Sub(m.started))))
-	right := strings.Join(rightParts, sFaint.Render(" · "))
-
-	gap1 := w - lipgloss.Width(left) - lipgloss.Width(mid) - lipgloss.Width(right) - 2
-	if gap1 < 2 {
-		return padTo(left+" "+mid, w)
-	}
-	return left + strings.Repeat(" ", gap1/2+gap1%2) + mid + strings.Repeat(" ", gap1/2) + right + "  "
-}
-
-func (m Model) viewTabs(w int) string {
-	names := []string{"chat", "dashboard", "logs"}
-	var cells []string
-	for i, name := range names {
-		n := fmt.Sprintf("%d", i+1)
-		if i == m.tab {
-			cells = append(cells, sTabOn.Render(" "+sTeal.Render(n)+" "+name+" "))
-		} else {
-			cells = append(cells, sTabOff.Render(" "+sFaint.Render(n)+" "+name+" "))
+	running := 0
+	for _, wk := range m.workers {
+		if wk.Status == "running" {
+			running++
 		}
 	}
-	row := strings.Join(cells, sFaint.Render("│"))
-	return padTo(row, w-1) + " "
+	rightParts = append(rightParts, sDim.Render(fmt.Sprintf("%d running", running)))
+	return strings.Join(rightParts, sFaint.Render(" · "))
 }
 
+// viewFooter is the status bar: worker status left, key hints, clock right.
 func (m Model) viewFooter(w int) string {
 	var hints [][2]string
 	switch {
@@ -115,18 +122,33 @@ func (m Model) viewFooter(w int) string {
 	case m.picking:
 		hints = [][2]string{{"↑↓", "select"}, {"↵", "switch"}, {"n", "new"}, {"esc", "close"}}
 	case m.tab == tabChat:
-		hints = [][2]string{{"↵", "send"}, {"alt+v", "image"}, {"/new", "new session"}, {"/…", "command"}, {"PgUp/Dn", "scroll"}, {"⇥", "tabs"}, {"esc", "interrupt"}, {"ctrl+c", "quit"}}
+		if m.focus == focusWork {
+			hints = [][2]string{{"⇥", "pane"}, {"z", "zoom"}, {"↑↓", "select"}, {"x", "kill"}, {"r", "retry"}, {"u", "undo"}, {"t", "panel"}, {"b", "branches"}, {"1-3", "tabs"}, {"q", "quit"}}
+		} else {
+			hints = [][2]string{{"↵", "send"}, {"alt+v", "image"}, {"⇥", "pane"}, {"alt+z", "zoom"}, {"PgUp/Dn", "scroll"}, {"esc", "interrupt"}, {"ctrl+c", "quit"}}
+		}
 	case m.tab == tabDashboard:
 		hints = [][2]string{{"↑↓", "select"}, {"/", "filter"}, {"s", "sessions"}, {"b", "branches"}, {"n", "new"}, {"x", "kill"}, {"r", "retry"}, {"R", "retry-failed"}, {"u", "undo"}, {"⇥/1-3", "tabs"}, {"q", "quit"}}
 	default:
 		hints = [][2]string{{"f", "filter"}, {"s", "sessions"}, {"n", "new"}, {"⇥/1-3", "tabs"}, {"q", "quit"}}
 	}
 	var parts []string
+	failed := 0
+	for _, wk := range m.workers {
+		if wk.Status == "failed" {
+			failed++
+		}
+	}
+	if failed > 0 {
+		parts = append(parts, sErr.Render(fmt.Sprintf("%d failed", failed)))
+	} else {
+		parts = append(parts, sOK.Render("● ok"))
+	}
 	for _, h := range hints {
 		parts = append(parts, sKeycap.Render(h[0])+" "+sDim.Render(h[1]))
 	}
 	left := strings.Join(parts, "  ")
-	right := sAmber.Render(glyphBell + " bell on fail")
+	right := sDim.Render(m.now.Local().Format("15:04:05"))
 	gap := w - lipgloss.Width(left) - lipgloss.Width(right) - 2
 	if gap < 1 {
 		return padTo(left, w)

@@ -151,7 +151,7 @@ func (m Model) viewTopRight() string {
 		switch wk.Status {
 		case "running":
 			agents++
-			tokPerSec += m.workerRates[wk.ID].rate
+			tokPerSec += m.liveRate(wk.ID)
 		case "queued":
 			agents++
 		}

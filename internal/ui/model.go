@@ -73,6 +73,23 @@ type workerRow struct {
 	Steps   int // completed model steps (dsh; 0 = unknown)
 }
 
+// Throughput sampling: rates need at least minRateWindow between samples,
+// and a rate older than rateStale no longer counts as live.
+const (
+	minRateWindow = 500 * time.Millisecond
+	rateStale     = 8 * time.Second
+)
+
+// liveRate is a worker's smoothed output tok/s while its samples are
+// fresh, else 0 — a stalled or dead worker must not keep its last rate.
+func (m Model) liveRate(id string) float64 {
+	r, ok := m.workerRates[id]
+	if !ok || m.now.Sub(r.at) >= rateStale {
+		return 0
+	}
+	return r.rate
+}
+
 // workerRate is per-worker throughput derived from usage deltas.
 type workerRate struct {
 	out  int
@@ -622,6 +639,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// worker's own.
 			now := time.Now()
 			r := m.workerRates[msg.ID]
+			// Samples closer than minRateWindow (a startup replay or a
+			// batched burst) would divide real tokens by ~0s: keep the
+			// older anchor so the next sample spans a real interval.
+			if !r.at.IsZero() && now.Sub(r.at) < minRateWindow {
+				w.In, w.Out = msg.Input, msg.Output
+				w.CacheRd = msg.CacheRead
+				if msg.Ctx > 0 {
+					w.Ctx = msg.Ctx
+					w.Steps++
+				}
+				return m, Listen(m.feed)
+			}
 			if !r.at.IsZero() && msg.Output > r.out && now.After(r.at) {
 				inst := float64(msg.Output-r.out) / now.Sub(r.at).Seconds()
 				if r.rate > 0 {

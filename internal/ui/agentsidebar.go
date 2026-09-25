@@ -97,7 +97,7 @@ func (m Model) viewTokenEconomy(w int) []string {
 		if wk.Status != "running" {
 			continue
 		}
-		thr += m.workerRates[wk.ID].rate
+		thr += m.liveRate(wk.ID)
 	}
 
 	return []string{

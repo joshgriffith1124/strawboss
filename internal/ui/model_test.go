@@ -202,9 +202,13 @@ func TestViewsRenderKeyContent(t *testing.T) {
 	m := demoState(t)
 
 	chat := m.View()
+	// Top bar right: two model stats up, supervisor + w1 running + w2
+	// queued = 3 agents, no second usage sample yet so the rate is 0.
+	// The token sidebar is the redesigned "TOKEN ECONOMY (session)"
+	// box; the old "Tokens · plan vs free local" side panel is gone.
 	for _, want := range []string{"strawboss", "Agents", "Tasks", "Logs",
-		"TOKENS", "1 running", "qwen-coder",
-		"plan", "$0.00", "● ok", "YOU ·", "SUPERVISOR ·",
+		"TOKEN ECONOMY (session)", "2 models up · 3 agents · 0 tok/s", "qwen-coder",
+		"$0.00", "● ok", "YOU ·", "SUPERVISOR ·",
 		"Build the trade query builder module.", "w1", "5h 4% · 7d 11%"} {
 		if !strings.Contains(chat, want) {
 			t.Errorf("chat view missing %q", want)
@@ -492,7 +496,7 @@ func TestLogsSourceFilterCycles(t *testing.T) {
 	}
 }
 
-func TestSidePanelEconomyAndModels(t *testing.T) {
+func TestTokensPanelEconomy(t *testing.T) {
 	m := New(make(chan tea.Msg))
 	m = apply(t, m,
 		tea.WindowSizeMsg{Width: 120, Height: 40},
@@ -501,9 +505,6 @@ func TestSidePanelEconomyAndModels(t *testing.T) {
 		SupUsageMsg{Input: 3000, Output: 2000, CacheRead: 300000, Turns: 1},
 		WorkerUpsertMsg{ID: "w1", Model: "qwen-dsh", Task: "t", Status: "done"},
 		WorkerUsageMsg{ID: "w1", Input: 40000, Output: 5000},
-		ModelStatMsg{Name: "deepseek-dsh", Note: "model not loaded"},
-		ModelStatMsg{Name: "qwen-coder", Note: "opencode"},
-		ModelStatMsg{Name: "qwen-dsh", Note: "dsh"},
 	)
 	tokens := m.viewTokensPanel(38)
 	// The headline is fresh tokens (5k), never cache-inflated (305k),
@@ -516,55 +517,6 @@ func TestSidePanelEconomyAndModels(t *testing.T) {
 	}
 	if !strings.Contains(tokens, "plan-equiv") || !strings.Contains(tokens, "leverage") {
 		t.Errorf("cost-weighted split missing:\n%s", tokens)
-	}
-
-	models := m.viewModelsPanel(38)
-	if !strings.Contains(models, "not loaded") || !strings.Contains(models, "deepseek-dsh") {
-		t.Errorf("not-loaded model hidden:\n%s", models)
-	}
-	// qwen-dsh finished a worker this run, so it keeps its own row with
-	// its track record; qwen-coder has none and folds into the idle line.
-	if !strings.Contains(models, "ok 1/1") || strings.Contains(models, "qwen-coder, qwen-dsh") {
-		t.Errorf("idle model with a track record folded away:\n%s", models)
-	}
-	if !strings.Contains(models, "qwen-coder") {
-		t.Errorf("idle models not named:\n%s", models)
-	}
-
-	// All idle → one line naming them (or a count when they don't fit).
-	m = apply(t, m, ModelStatMsg{Name: "deepseek-dsh", Note: "dsh"})
-	models = m.viewModelsPanel(38)
-	if !strings.Contains(models, "3 models") && !strings.Contains(models, "deepseek-dsh") {
-		t.Errorf("all-idle line missing:\n%s", models)
-	}
-}
-
-func TestModelsPanelShowsSuccess(t *testing.T) {
-	m := New(make(chan tea.Msg))
-	m = apply(t, m,
-		tea.WindowSizeMsg{Width: 120, Height: 40},
-		// "fast" has finished workers this run; "slow" has none. (An idle
-		// "fast" would show the count too — its own row, not the idle line.)
-		ModelStatMsg{Name: "fast", Active: 1, Note: "vllm"},
-		ModelStatMsg{Name: "slow", Active: 1, Note: "vllm"},
-		WorkerUpsertMsg{ID: "w1", Model: "fast", Task: "a", Status: "done"},
-		WorkerUpsertMsg{ID: "w2", Model: "fast", Task: "b", Status: "done"},
-		WorkerUpsertMsg{ID: "w3", Model: "fast", Task: "c", Status: "failed"},
-		WorkerUpsertMsg{ID: "w4", Model: "fast", Task: "d", Status: "running"},
-		WorkerUpsertMsg{ID: "w5", Model: "slow", Task: "e", Status: "running"},
-	)
-	models := m.viewModelsPanel(38)
-	if !strings.Contains(models, "ok 2/3") {
-		t.Errorf("success count missing on fast row:\n%s", models)
-	}
-	// A model with no finished workers must not show the "ok " tag.
-	for _, line := range strings.Split(models, "\n") {
-		if strings.Contains(line, "slow") && strings.Contains(line, "ok ") {
-			t.Errorf("slow row shows a success tag:\n%s", line)
-		}
-	}
-	if n := strings.Count(models, " · ok "); n != 1 {
-		t.Errorf("expected exactly one success tag, got %d:\n%s", n, models)
 	}
 }
 
@@ -902,7 +854,7 @@ func TestChatRenderingTamed(t *testing.T) {
 		SupToolResultMsg{ToolID: "tr", Content: long},
 		SupTextDoneMsg{Text: "All **four workers** finished; run `advisor.py report` next.", Time: time.Now()},
 	)
-	out := m.viewChat(120, 40)
+	out := m.viewChatColumn(120, 40)
 	for _, line := range strings.Split(out, "\n") {
 		if lipgloss.Width(line) > 120 {
 			t.Fatalf("line overflows column (%d cols): %.80q", lipgloss.Width(line), line)

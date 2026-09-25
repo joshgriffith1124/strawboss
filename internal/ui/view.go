@@ -86,8 +86,11 @@ func (m Model) viewTabCells() string {
 	return strings.Join(cells, "  ")
 }
 
-// viewTopRight is the right side of the merged top row: remote channel,
-// 5h plan-window gauge, run clock, running-worker count.
+// viewTopRight is the right side of the merged top row: the remote
+// channel (when armed), the 5h plan-window gauge, and the mockup's fleet
+// readout "● N models up · N agents · N tok/s" — agents counts the
+// supervisor plus the live (running/queued) workers; the old run clock
+// and raw running count are gone.
 func (m Model) viewTopRight() string {
 	var rightParts []string
 	if m.remoteChannel != "" {
@@ -100,14 +103,22 @@ func (m Model) viewTopRight() string {
 		}
 		rightParts = append(rightParts, gauge)
 	}
-	rightParts = append(rightParts, sDim.Render("run "+formatClock(m.now.Sub(m.started))))
-	running := 0
+	modelsUp := len(m.models)
+	if modelsUp == 0 && m.modelSet != nil {
+		modelsUp = len(m.modelSet)
+	}
+	agents, tokPerSec := 1, 0.0
 	for _, wk := range m.workers {
-		if wk.Status == "running" {
-			running++
+		switch wk.Status {
+		case "running":
+			agents++
+			tokPerSec += m.workerRates[wk.ID].rate
+		case "queued":
+			agents++
 		}
 	}
-	rightParts = append(rightParts, sDim.Render(fmt.Sprintf("%d running", running)))
+	rightParts = append(rightParts, sOK.Render("●")+" "+
+		sDim.Render(fmt.Sprintf("%d models up · %d agents · %.0f tok/s", modelsUp, agents, tokPerSec)))
 	return strings.Join(rightParts, sFaint.Render(" · "))
 }
 

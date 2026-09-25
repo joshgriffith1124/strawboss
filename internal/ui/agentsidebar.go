@@ -30,22 +30,87 @@ func lr(w int, left, right string) string {
 	return left + strings.Repeat(" ", gap) + right
 }
 
-// viewAgentSidebar is the Agents screen's right rail: the live agent
-// roster (supervisor, then workers grouped by model) above the existing
-// token panel. Exactly h lines, each w cells wide.
+// viewAgentSidebar is the Agents screen's right rail, matching the mockup's
+// two stacked rounded boxes: the live agent roster (supervisor, then workers
+// grouped by model) in the AGENTS pane, the fixed-height TOKEN ECONOMY pane
+// below it. Exactly h lines, each w cells wide.
 func (m Model) viewAgentSidebar(w, h int) string {
-	tokens := m.viewTokensPanel(w)
-	agentsH := h - lipgloss.Height(tokens)
-	if agentsH < 4 {
-		agentsH = 4
+	// Mockup: TOKEN ECONOMY owns a fixed 13 rows (rows 32-44 of 45);
+	// the AGENTS pane takes whatever is left, dropping roster rows from
+	// the bottom when the window can't hold them.
+	tokenH := 13
+	agentsH := h - tokenH
+	if agentsH < 3 {
+		agentsH, tokenH = 3, h-3
 	}
 	inner := w - 2
 	if inner < 1 {
 		inner = 1
 	}
-	lines := m.agentRosterLines(inner, agentsH-2)
-	box := panel(fmt.Sprintf("Agents (%d)", 1+len(m.workers)), padLines(lines, agentsH-2), w, cBord, cSup)
-	return lipgloss.JoinVertical(lipgloss.Left, box, tokens)
+	roster := m.agentRosterLines(inner, agentsH-3)
+	agents := pane(sDim.Render(fmt.Sprintf("AGENTS (%d)", 1+len(m.workers))), "",
+		padLines(roster, agentsH-3), w, agentsH, cBord)
+	economy := pane(sDim.Render("TOKEN ECONOMY (session)"), "",
+		m.viewTokenEconomy(inner), w, tokenH, cBord)
+	return lipgloss.JoinVertical(lipgloss.Left, agents, economy)
+}
+
+// viewTokenEconomy builds the rows of the TOKEN ECONOMY box (mockup right
+// rail, TOKEN ECONOMY (session)). Every row is exactly w cells wide — the
+// box's inner width — and the rounded box itself is drawn by the caller.
+func (m Model) viewTokenEconomy(w int) []string {
+	supIn, supCacheRead, supCacheWrite, supOut := m.supTokens()
+	supFresh := supIn + supCacheWrite + supOut
+
+	local := 0
+	for _, wk := range m.workers {
+		local += wk.In + wk.Out
+	}
+
+	// Offload bar: share of fresh tokens the workers produced locally.
+	share := 0.0
+	if total := local + supFresh; total > 0 {
+		share = float64(local) / float64(total)
+	}
+	cells := int(share*float64(w) + 0.5)
+	if cells > w {
+		cells = w
+	}
+	bar := sOK.Render(strings.Repeat("█", cells)) + sFaint.Render(strings.Repeat("░", w-cells))
+
+	planWindow := "—"
+	if m.fiveHour > 0 || m.sevenDay > 0 {
+		planWindow = fmt.Sprintf("5h %.0f%% · 7d %.0f%%", m.fiveHour*100, m.sevenDay*100)
+	}
+
+	avgResult := "—"
+	if n := len(m.delegationResultTokens); n > 0 {
+		sum := 0
+		for _, t := range m.delegationResultTokens {
+			sum += t
+		}
+		avgResult = fmt.Sprintf("%d tok", sum/n)
+	}
+
+	var thr float64
+	for _, wk := range m.workers {
+		if wk.Status != "running" {
+			continue
+		}
+		thr += m.workerRates[wk.ID].rate
+	}
+
+	return []string{
+		lr(w, sDim.Render("Plan (sup)"), sText.Render(formatTokens(supFresh)+"  $0.00")),
+		lr(w, sDim.Render("Local (free)"), sTeal.Render(formatTokens(local)+"  $0.00")),
+		lr(w, sDim.Render("Cached reads"), sText.Render(formatTokens(supCacheRead))),
+		bar,
+		lr(w, sDim.Render("Offload ratio"), sText.Render(fmt.Sprintf("%.1f%%", share*100))),
+		lr(w, sDim.Render("Notional API value"), sText.Render(fmt.Sprintf("$%.2f", m.supCost))),
+		lr(w, sDim.Render("Plan window"), sText.Render(planWindow)),
+		lr(w, sDim.Render("Avg result"), sText.Render(avgResult)),
+		lr(w, sDim.Render("Avg throughput"), sText.Render(fmt.Sprintf("%.0f tok/s", thr))),
+	}
 }
 
 // agentRosterLines builds the Agents box content: the supervisor group,

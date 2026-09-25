@@ -7,26 +7,24 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-const sidePanelWidth = 38
-
-func (m Model) viewChat(w, h int) string {
-	sideW := sidePanelWidth
-	chatW := w - sideW - 1
-	if chatW < 30 {
-		sideW = 0
-		chatW = w
-	}
-
-	chatCol := m.viewChatColumn(chatW, h)
-	if sideW == 0 {
-		return chatCol
-	}
-	side := m.viewSidePanel(sideW)
-	return lipgloss.JoinHorizontal(lipgloss.Top, chatCol, " ", side)
-}
-
+// viewChatColumn renders the supervisor chat column: the log lines
+// bottom-anchored, then the input — a faint rule over the input line, two
+// rows in all. It is rendered inside the Agents screen's supervisor pane,
+// whose own border is the box.
 func (m Model) viewChatColumn(w, h int) string {
-	inputH := 3
+	// Callers budget this column from the window size (the supervisor
+	// pane subtracts its border and margin), so a tiny window can hand
+	// us a negative width that would reach the strings.Repeat on the
+	// input rule below and panic outside any recover. Clamp to a
+	// degenerate-but-valid column: garbage at 4 cells wide beats a
+	// crashed TUI.
+	if w < 4 {
+		w = 4
+	}
+	if h < 4 {
+		h = 4
+	}
+	inputH := 2
 	attach := ""
 	if len(m.pending) > 0 {
 		attach = m.attachmentsLine(w)
@@ -126,21 +124,23 @@ func (m Model) viewChatColumn(w, h int) string {
 	}
 	log := strings.Join(lines, "\n")
 
-	m.input.Width = w - 6
-	inputBox := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).BorderForeground(cFaint).
-		Width(w - 2).Render(m.input.View())
+	// Two input rows: a faint rule, then the prompt line. The value fills
+	// the column beside the 2-cell "› " prompt plus the cursor's cell,
+	// so the row stays exactly w wide.
+	m.input.Width = w - 3
+	rule := sFaint.Render(strings.Repeat("─", w))
+	inputLine := m.input.View()
 
 	if hint != "" {
 		if attach != "" {
-			return lipgloss.JoinVertical(lipgloss.Left, log, hint, attach, inputBox)
+			return lipgloss.JoinVertical(lipgloss.Left, log, hint, attach, rule, inputLine)
 		}
-		return lipgloss.JoinVertical(lipgloss.Left, log, hint, inputBox)
+		return lipgloss.JoinVertical(lipgloss.Left, log, hint, rule, inputLine)
 	}
 	if attach != "" {
-		return lipgloss.JoinVertical(lipgloss.Left, log, attach, inputBox)
+		return lipgloss.JoinVertical(lipgloss.Left, log, attach, rule, inputLine)
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, log, inputBox)
+	return lipgloss.JoinVertical(lipgloss.Left, log, rule, inputLine)
 }
 
 // attachmentsLine is the dim strip above the input box listing the pending
@@ -260,15 +260,6 @@ func mdStylePairs(line, marker string, style lipgloss.Style) string {
 	return b.String()
 }
 
-func (m Model) viewSidePanel(w int) string {
-	panels := []string{
-		m.viewTokensPanel(w),
-		m.viewWorkersMini(w),
-		m.viewModelsPanel(w),
-	}
-	return lipgloss.JoinVertical(lipgloss.Left, panels...)
-}
-
 // barCells splits the token bar, and is the only clamp between a token
 // count and strings.Repeat — which panics on a negative count and would
 // take the whole TUI down, since a render happens outside any recover.
@@ -370,129 +361,6 @@ func (m Model) viewTokensPanel(w int) string {
 		title = truncPlain(title, w-5)
 	}
 	return panel(title, lines, w, cSupBorder, cAmber)
-}
-
-func (m Model) viewWorkersMini(w int) string {
-	active := 0
-	for _, wk := range m.workers {
-		if wk.Status == "running" {
-			active++
-		}
-	}
-	var lines []string
-	rows := m.sortedWorkers()
-	max := 6
-	for _, wk := range rows {
-		if max == 0 {
-			break
-		}
-		max--
-		dur, toks := "—", "—"
-		if !wk.Started.IsZero() && wk.Status != "queued" {
-			end := m.now
-			if !wk.Ended.IsZero() {
-				end = wk.Ended
-			}
-			dur = formatMinSec(end.Sub(wk.Started))
-		}
-		if wk.In+wk.Out > 0 {
-			toks = formatTokens(wk.In + wk.Out)
-		}
-		mdl := truncPlain(wk.Model, 12)
-		// No task fragment here — a five-char "Write…" says nothing; the
-		// dashboard owns task text. Failed rows keep their error, the one
-		// label worth the width.
-		label := ""
-		if wk.Status == "failed" {
-			label = sErr.Render(truncPlain(firstLine(wk.Summary), w-26-len(mdl)))
-		}
-		left := strings.TrimRight(fmt.Sprintf(" %-3s %s %s %s", wk.ID, statusGlyph(wk.Status, m.pulse),
-			sTeal.Render(mdl), label), " ")
-		right := sDim.Render(fmt.Sprintf("%5s %6s ", dur, toks))
-		gap := w - 2 - lipgloss.Width(left) - lipgloss.Width(right)
-		if gap < 1 {
-			gap = 1
-		}
-		lines = append(lines, left+strings.Repeat(" ", gap)+right)
-	}
-	if len(lines) == 0 {
-		lines = []string{" " + sFaint.Render("no workers yet")}
-	}
-	return panel(fmt.Sprintf("Workers · %d active", active), lines, w, cWrkBorder, cTeal)
-}
-
-func (m Model) viewModelsPanel(w int) string {
-	// Rows only for models with something to say — active, generating,
-	// unreachable, or configured-but-not-served. Healthy idle models
-	// collapse to one line naming them (a bare count reads as a riddle).
-	var lines []string
-	var idleNames []string
-	for _, ms := range m.models {
-		// This run's finished workers on the model (done/failed; running
-		// and queued don't count yet). Shown dim, tacked on after the
-		// stat — the row's quiet channel for anything secondary. A track
-		// record is something to say, so an idle model with one keeps its
-		// own row instead of folding into the idle line.
-		doneN, finN := 0, 0
-		for _, wk := range m.workers {
-			if wk.Model != ms.Name {
-				continue
-			}
-			switch wk.Status {
-			case "done":
-				doneN++
-				finN++
-			case "failed":
-				finN++
-			}
-		}
-		val := sFaint.Render("idle")
-		switch {
-		case ms.Note == "endpoint unreachable":
-			val = sErr.Render("unreachable")
-		case ms.Note == "model not loaded":
-			val = sAmber.Render("not loaded")
-		case ms.Active > 0 || ms.TokSec > 0:
-			if ms.TokSec > 0 {
-				val = sText.Render(fmt.Sprintf("%.0f tok/s", ms.TokSec))
-			} else {
-				val = sText.Render("active")
-			}
-			if ms.Active > 0 {
-				val = sTealB.Render(fmt.Sprintf("%d▶ ", ms.Active)) + val
-			}
-		case finN == 0:
-			idleNames = append(idleNames, ms.Name)
-			continue
-		}
-		if finN > 0 {
-			val += sDim.Render(fmt.Sprintf(" · ok %d/%d", doneN, finN))
-		}
-		lines = append(lines, kv(w, truncPlain(ms.Name, w-16), val))
-	}
-	if len(idleNames) > 0 {
-		label := strings.Join(idleNames, ", ")
-		if len(label) > w-12 {
-			label = fmt.Sprintf("%d models", len(idleNames))
-		}
-		lines = append(lines, kv(w, "idle", sFaint.Render(label)))
-	}
-	// task tally
-	var done, running, queued, failed int
-	for _, wk := range m.workers {
-		switch wk.Status {
-		case "done":
-			done++
-		case "running":
-			running++
-		case "queued":
-			queued++
-		case "failed":
-			failed++
-		}
-	}
-	lines = append(lines, kv(w, "tasks", taskTally(done, running, queued, failed)))
-	return panel("Models", lines, w, cBord, cDim)
 }
 
 // taskTally renders the done/running/queued/failed counts with breathing

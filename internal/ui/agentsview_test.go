@@ -61,6 +61,39 @@ func agentsFixture(t *testing.T, w, h, nWorkers int) Model {
 	return agentsFeed(t, New(nil), msgs...)
 }
 
+// TestAgentsViewNeverPanicsAtTinySizes: degenerate windows (0×0 down to
+// 1×1) feed negative widths into the pane arithmetic — viewSupPane hands
+// the chat column w-3, and at a 1-column window that reaches the input
+// rule's strings.Repeat and panics outside any recover. Tiny screens may
+// render garbage, but View must never crash.
+func TestAgentsViewNeverPanicsAtTinySizes(t *testing.T) {
+	sizes := [][2]int{{0, 0}, {1, 0}, {1, 1}, {5, 3}, {20, 5}, {40, 10}}
+	for _, size := range sizes {
+		for _, nWorkers := range []int{0, 5} {
+			for _, focus := range []int{focusSup, focusWork} {
+				for _, zoomed := range []bool{false, true} {
+					name := fmt.Sprintf("%dx%d/%dworkers/focus=%s/zoomed=%v",
+						size[0], size[1], nWorkers,
+						map[int]string{focusSup: "sup", focusWork: "work"}[focus],
+						zoomed)
+					t.Run(name, func(t *testing.T) {
+						m := agentsFixture(t, size[0], size[1], nWorkers)
+						m.tab = tabChat
+						m.focus = focus
+						m.zoomed = zoomed
+						defer func() {
+							if r := recover(); r != nil {
+								t.Fatalf("View panicked at %dx%d: %v", size[0], size[1], r)
+							}
+						}()
+						_ = m.View()
+					})
+				}
+			}
+		}
+	}
+}
+
 // TestAgentsSidebarBorders: at 128x45 the sidebar owns the last 30
 // columns; every body line must end with the sidebar's right border, not
 // the clip ellipsis a too-wide box leaves behind.

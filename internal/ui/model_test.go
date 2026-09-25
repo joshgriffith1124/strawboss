@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"testing"
@@ -849,6 +850,66 @@ func TestWorkerDetailFacts(t *testing.T) {
 		if spark == "" {
 			t.Error("sparkline empty despite history")
 		}
+	}
+}
+
+// TestWorkerUsageLumpRate: the output counter advances in lumps, one per
+// model step. A sample must measure its delta from the last counter
+// ADVANCE, not from the previous sample, and hold the last rate while the
+// count sits still — otherwise a 60s step of 2000 tokens reads as ~1000
+// tok/s over the ~0s between two samples, which no local model can do.
+func TestWorkerUsageLumpRate(t *testing.T) {
+	type sample struct {
+		out int           // cumulative output in the sample
+		age time.Duration // how long ago the counter last advanced
+	}
+	tests := []struct {
+		name    string
+		samples []sample
+		want    []float64 // rate after each sample
+	}{
+		{
+			name: "lump step reads ~33 tok/s, not ~1000, and holds",
+			samples: []sample{
+				{0, 0},               // first sight: seed, no rate
+				{0, 2 * time.Second}, // equal samples hold the anchor
+				{0, 4 * time.Second},
+				{2000, 60 * time.Second}, // the 60s step
+				{2000, 2 * time.Second},  // held between advances
+			},
+			want: []float64{0, 0, 0, 2000.0 / 60, 2000.0 / 60},
+		},
+		{
+			name: "steady steps",
+			samples: []sample{
+				{100, 0}, {200, 2 * time.Second}, {300, 2 * time.Second},
+			},
+			want: []float64{0, 50, 50},
+		},
+		{
+			name: "reset drops the held rate and re-seeds",
+			samples: []sample{
+				{100, 0}, {200, 10 * time.Second}, {20, 12 * time.Second}, {80, 2 * time.Second},
+			},
+			want: []float64{0, 10, 0, 30},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := demoState(t) // w2 is a queued worker with no usage yet
+			for i, s := range tt.samples {
+				if i > 0 {
+					r := m.workerRates["w2"]
+					r.at = time.Now().Add(-s.age)
+					m.workerRates["w2"] = r
+				}
+				m = apply(t, m, WorkerUsageMsg{ID: "w2", Input: 100, Output: s.out})
+				if got := m.workerRates["w2"].rate; math.Abs(got-tt.want[i]) > 1 {
+					t.Errorf("sample %d (out=%d, advance %vs ago): rate = %v, want ~%v",
+						i, s.out, s.age, got, tt.want[i])
+				}
+			}
+		})
 	}
 }
 

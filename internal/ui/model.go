@@ -73,8 +73,9 @@ type workerRow struct {
 	Steps   int // completed model steps (dsh; 0 = unknown)
 }
 
-// Throughput sampling: rates need at least minRateWindow between samples,
-// and a rate older than rateStale no longer counts as live.
+// Throughput sampling: a sample closer than minRateWindow after the
+// counter's last advance would divide real tokens by ~0s, and a worker
+// with no sample of any kind for rateStale no longer counts as live.
 const (
 	minRateWindow = 500 * time.Millisecond
 	rateStale     = 8 * time.Second
@@ -82,18 +83,25 @@ const (
 
 // liveRate is a worker's smoothed output tok/s while its samples are
 // fresh, else 0 — a stalled or dead worker must not keep its last rate.
+// Freshness is judged by the last sample of ANY kind (seen), not the last
+// counter advance (at): a worker mid-step keeps showing its last rate
+// while samples still arrive.
 func (m Model) liveRate(id string) float64 {
 	r, ok := m.workerRates[id]
-	if !ok || m.now.Sub(r.at) >= rateStale {
+	if !ok || m.now.Sub(r.seen) >= rateStale {
 		return 0
 	}
 	return r.rate
 }
 
-// workerRate is per-worker throughput derived from usage deltas.
+// workerRate is per-worker throughput derived from usage deltas. The
+// output counter advances in lumps (one per model step): at is when it
+// last advanced, the rate is measured from there and held between
+// advances, and seen — the last sample of any kind — decides staleness.
 type workerRate struct {
 	out  int
-	at   time.Time
+	at   time.Time // when out last advanced
+	seen time.Time // last sample of any kind (staleness)
 	rate float64   // smoothed output tok/s
 	hist []float64 // rate samples for the sparkline (capped)
 }
@@ -636,12 +644,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if w := m.worker(msg.ID); w != nil {
 			// Live tok/s from output deltas, lightly smoothed; the models
 			// panel shows instantaneous per-endpoint rate, this one is the
-			// worker's own.
+			// worker's own. The counter advances in lumps (one per model
+			// step), so the delta is measured from the last advance and
+			// the rate is held between advances.
 			now := time.Now()
 			r := m.workerRates[msg.ID]
-			// Samples closer than minRateWindow (a startup replay or a
-			// batched burst) would divide real tokens by ~0s: keep the
-			// older anchor so the next sample spans a real interval.
+			r.seen = now
+			// Samples closer than minRateWindow after the last advance
+			// (a startup replay or a batched burst) would divide real
+			// tokens by ~0s: keep the older anchor so the next sample
+			// spans a real interval.
 			if !r.at.IsZero() && now.Sub(r.at) < minRateWindow {
 				w.In, w.Out = msg.Input, msg.Output
 				w.CacheRd = msg.CacheRead
@@ -649,15 +661,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					w.Ctx = msg.Ctx
 					w.Steps++
 				}
+				m.workerRates[msg.ID] = r
 				return m, Listen(m.feed)
 			}
-			if !r.at.IsZero() && msg.Output > r.out && now.After(r.at) {
+			switch {
+			case r.at.IsZero(): // first sight: seed without crediting history
+				r.out, r.at = msg.Output, now
+			case msg.Output < r.out: // reset session: reseed, drop the rate
+				r.out, r.at = msg.Output, now
+				r.rate = 0
+			case msg.Output > r.out:
 				inst := float64(msg.Output-r.out) / now.Sub(r.at).Seconds()
 				if r.rate > 0 {
 					r.rate = 0.6*r.rate + 0.4*inst
 				} else {
 					r.rate = inst
 				}
+				r.out, r.at = msg.Output, now
 			}
 			if r.rate > 0 {
 				r.hist = append(r.hist, r.rate)

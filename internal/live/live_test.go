@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1258,32 +1259,52 @@ func TestRateTrackerFirstSampleSeedsOnly(t *testing.T) {
 	// A worker whose tailer attaches mid-flight arrives with its whole
 	// history already counted; crediting that as one interval's output is
 	// what produced impossible rates (~1700 tok/s on a local endpoint).
+	t0 := time.Now()
 	r := newRateTracker()
-	if got := r.observe("w1", 3400); got != 0 {
-		t.Fatalf("first sample credited %d tokens, want 0", got)
+	if got := r.observe("w1", 3400, t0); got != 0 {
+		t.Fatalf("first sample credited %v tok/s, want 0", got)
 	}
-	if got := r.observe("w1", 3480); got != 80 {
-		t.Fatalf("second sample = %d, want 80", got)
+	if got := r.observe("w1", 3480, t0.Add(40*time.Second)); got != 2 {
+		t.Fatalf("second sample = %v tok/s, want 2", got)
 	}
 }
 
-func TestRateTrackerDeltas(t *testing.T) {
+func TestRateTrackerRates(t *testing.T) {
+	type sample struct {
+		at  time.Duration // offset from t0
+		out int
+	}
+	t0 := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
 	tests := []struct {
 		name    string
-		samples []int
-		want    []int
+		samples []sample
+		want    []float64
 	}{
-		{"steady", []int{100, 200, 300}, []int{0, 100, 100}},
-		{"no progress", []int{100, 100, 100}, []int{0, 0, 0}},
-		{"count goes backwards", []int{500, 20, 60}, []int{0, 0, 40}},
-		{"starts at zero", []int{0, 0, 45}, []int{0, 0, 45}},
+		{"steady",
+			[]sample{{0, 100}, {2 * time.Second, 200}, {4 * time.Second, 300}},
+			[]float64{0, 50, 50}},
+		{"no progress holds the rate",
+			[]sample{{0, 100}, {2 * time.Second, 100}, {4 * time.Second, 100}},
+			[]float64{0, 0, 0}},
+		{"count goes backwards re-seeds",
+			[]sample{{0, 500}, {2 * time.Second, 20}, {4 * time.Second, 60}},
+			[]float64{0, 0, 20}},
+		{"starts at zero",
+			[]sample{{0, 0}, {2 * time.Second, 0}, {4 * time.Second, 45}},
+			[]float64{0, 0, 45.0 / 4}},
+		// The bug this exists for: output arrives in lumps, one per model
+		// step. A 60s step of 2000 tokens reads ~33.3 tok/s, not 2000
+		// tokens over the ~2s poll interval.
+		{"lump step is not a spike",
+			[]sample{{0, 0}, {2 * time.Second, 0}, {4 * time.Second, 0}, {60 * time.Second, 2000}, {62 * time.Second, 2000}},
+			[]float64{0, 0, 0, 2000.0 / 60, 2000.0 / 60}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := newRateTracker()
-			for i, out := range tt.samples {
-				if got := r.observe("w1", out); got != tt.want[i] {
-					t.Errorf("sample %d (out=%d) = %d, want %d", i, out, got, tt.want[i])
+			for i, s := range tt.samples {
+				if got := r.observe("w1", s.out, t0.Add(s.at)); math.Abs(got-tt.want[i]) > 1e-9 {
+					t.Errorf("sample %d (out=%d @+%v) = %v tok/s, want %v", i, s.out, s.at, got, tt.want[i])
 				}
 			}
 		})
@@ -1291,41 +1312,20 @@ func TestRateTrackerDeltas(t *testing.T) {
 }
 
 func TestRateTrackerRetainResetsClosedWorkers(t *testing.T) {
+	t0 := time.Now()
 	r := newRateTracker()
-	r.observe("w1", 100)
-	r.observe("w2", 50)
+	r.observe("w1", 100, t0)
+	r.observe("w2", 50, t0)
 	r.retain(map[string]bool{"w1": true})
 	if _, ok := r.last["w2"]; ok {
-		t.Error("closed worker kept its baseline")
+		t.Error("closed worker kept its state")
 	}
 	// w2 coming back re-seeds instead of crediting its whole count.
-	if got := r.observe("w2", 900); got != 0 {
-		t.Errorf("returning worker credited %d, want 0", got)
+	if got := r.observe("w2", 900, t0.Add(time.Second)); got != 0 {
+		t.Errorf("returning worker credited %v tok/s, want 0", got)
 	}
-	if got := r.observe("w1", 130); got != 30 {
-		t.Errorf("retained worker delta = %d, want 30", got)
-	}
-}
-
-func TestTokSec(t *testing.T) {
-	tests := []struct {
-		name   string
-		delta  int
-		window time.Duration
-		want   float64
-	}{
-		{"two second window", 150, 2 * time.Second, 75},
-		{"slow poll divides by real elapsed", 150, 3 * time.Second, 50},
-		{"no output", 0, 2 * time.Second, 0},
-		{"zero window", 150, 0, 0},
-		{"negative window", 150, -time.Second, 0},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := tokSec(tt.delta, tt.window); got != tt.want {
-				t.Errorf("tokSec(%d, %v) = %v, want %v", tt.delta, tt.window, got, tt.want)
-			}
-		})
+	if got := r.observe("w1", 130, t0.Add(2*time.Second)); got != 15 {
+		t.Errorf("retained worker rate = %v tok/s, want 15", got)
 	}
 }
 

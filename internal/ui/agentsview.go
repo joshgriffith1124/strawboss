@@ -7,12 +7,17 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// maxSideTiles is how many active workers stack in the column beside the
+// supervisor pane; the next ones spill into a band below it.
+const maxSideTiles = 3
+
 // viewAgents renders the Agents screen: a 30-column agent sidebar on the
 // right when the window is wide enough (or a one-line agent strip
-// otherwise); the main area holds the supervisor and selected-worker
-// panes on top, a band of up to three other workers, and the bottom
-// Tasks/Logs/Metrics panel — or just the focused pane when zoomed.
-// It returns exactly h lines, each exactly w cells wide.
+// otherwise); the main area holds the supervisor pane with the first three
+// active workers stacked beside it, a band of up to three more below, and
+// the bottom Tasks/Logs/Metrics panel — or just the focused pane when
+// zoomed. Finished workers leave the panes (the bottom Tasks table keeps
+// them). It returns exactly h lines, each exactly w cells wide.
 func (m Model) viewAgents(w, h int) string {
 	sidebar := w >= 120 && h >= 36
 	mainW, mainH := w, h
@@ -35,13 +40,21 @@ func (m Model) viewAgents(w, h int) string {
 			body = m.viewWorkerPane(sel, mainW, mainH, true)
 		}
 	} else {
+		active := m.activeWorkers()
+		side, extra := active, []workerRow(nil)
+		if len(side) > maxSideTiles {
+			side, extra = active[:maxSideTiles], active[maxSideTiles:]
+			if len(extra) > 3 {
+				extra = extra[:3]
+			}
+		}
+
 		// Band heights: the bottom panel owns 14 lines on tall screens
-		// (8..h/3 on short ones), the worker band gets 12 only when the
-		// screen is tall and it has a worker to show, and the top band
-		// takes the rest.
-		others := m.bandBWorkers()
+		// (8..h/3 on short ones), the overflow band gets 12 only when the
+		// screen is tall and more than three workers are active, and the
+		// top band takes the rest.
 		bandBH := 0
-		if len(others) > 0 && h >= 40 {
+		if len(extra) > 0 && h >= 40 {
 			bandBH = 12
 		}
 		bandCH := 14
@@ -57,34 +70,52 @@ func (m Model) viewAgents(w, h int) string {
 			bandCH = max(3, mainH-bandAH)
 		}
 
-		// Top band: supervisor pane plus the selected worker's pane,
-		// or just the focused pane when too narrow for both.
+		focused := func(wk *workerRow) bool {
+			return m.focus == focusWork && sel != nil && wk.ID == sel.ID
+		}
+
+		// Top band: the supervisor pane, with the side tiles stacked in a
+		// column to its right; alone at full width when nothing is active.
+		// Too narrow for both: just the focused pane.
 		var top string
-		if mainW < 80 {
+		switch {
+		case len(side) == 0:
+			top = m.viewSupPane(mainW, bandAH, m.focus == focusSup)
+		case mainW < 80:
 			if m.focus == focusSup {
 				top = m.viewSupPane(mainW, bandAH, true)
 			} else {
 				top = m.viewWorkerPane(sel, mainW, bandAH, true)
 			}
-		} else {
-			supW := mainW * 56 / 98
+		default:
+			supW := mainW * 55 / 100
+			colW := mainW - supW
+			tileH := bandAH / len(side)
+			tiles := make([]string, 0, len(side))
+			for i := range side {
+				th := tileH
+				if i == len(side)-1 {
+					th = bandAH - tileH*(len(side)-1)
+				}
+				tiles = append(tiles, m.viewWorkerPane(&side[i], colW, th, focused(&side[i])))
+			}
 			top = lipgloss.JoinHorizontal(lipgloss.Top,
 				m.viewSupPane(supW, bandAH, m.focus == focusSup),
-				m.viewWorkerPane(sel, mainW-supW, bandAH, m.focus == focusWork))
+				strings.Join(tiles, "\n"))
 		}
 
 		bands := []string{top}
 		if bandBH > 0 {
-			// Middle band: up to three worker panes side by side in
+			// Overflow band: up to three more workers side by side in
 			// equal widths, the last pane absorbing the remainder.
-			paneW := mainW / len(others)
-			panes := make([]string, 0, len(others))
-			for i, wk := range others {
+			paneW := mainW / len(extra)
+			panes := make([]string, 0, len(extra))
+			for i := range extra {
 				ww := paneW
-				if i == len(others)-1 {
-					ww = mainW - paneW*(len(others)-1)
+				if i == len(extra)-1 {
+					ww = mainW - paneW*(len(extra)-1)
 				}
-				panes = append(panes, m.viewWorkerPane(&wk, ww, bandBH, false))
+				panes = append(panes, m.viewWorkerPane(&extra[i], ww, bandBH, focused(&extra[i])))
 			}
 			bands = append(bands, lipgloss.JoinHorizontal(lipgloss.Top, panes...))
 		}
@@ -106,6 +137,9 @@ func (m Model) viewAgents(w, h int) string {
 		}
 		parts := []string{sup}
 		for _, wk := range m.sortedWorkers() {
+			if wk.Status == "done" {
+				continue
+			}
 			parts = append(parts, sDim.Render(wk.ID)+" "+statusGlyph(wk.Status, m.pulse))
 		}
 		return padTo(strings.Join(parts, "  "), w) + "\n" + body
@@ -117,32 +151,18 @@ func (m Model) viewAgents(w, h int) string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, body, strings.Join(sideLines, "\n"))
 }
 
-// bandBWorkers picks the middle-band workers: running ones first (newest
-// Started first), then finished ones by most recent Ended, excluding the
-// selected worker; at most 3.
-func (m Model) bandBWorkers() []workerRow {
-	sel := m.selectedWorker()
-	var running, fin []workerRow
+// activeWorkers are the workers that get a pane: running or queued, in
+// spawn order (w1 before w2), so a tile keeps its place while its worker
+// runs and the first three spawned fill the column beside the supervisor.
+func (m Model) activeWorkers() []workerRow {
+	var out []workerRow
 	for _, wk := range m.workers {
-		if sel != nil && wk.ID == sel.ID {
-			continue
-		}
-		switch wk.Status {
-		case "running":
-			running = append(running, wk)
-		case "done", "failed":
-			fin = append(fin, wk)
+		if wk.Status == "running" || wk.Status == "queued" {
+			out = append(out, wk)
 		}
 	}
-	sort.SliceStable(running, func(i, j int) bool {
-		return running[i].Started.After(running[j].Started)
+	sort.SliceStable(out, func(i, j int) bool {
+		return workerNum(out[i].ID) < workerNum(out[j].ID)
 	})
-	sort.SliceStable(fin, func(i, j int) bool {
-		return fin[i].Ended.After(fin[j].Ended)
-	})
-	out := append(running, fin...)
-	if len(out) > 3 {
-		out = out[:3]
-	}
 	return out
 }

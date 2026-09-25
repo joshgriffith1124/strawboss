@@ -65,6 +65,27 @@ tested at the end (same rule as milestones). Struck items are done.
     hands the task to an available same-tier sibling with a free slot
     (router.PreferFree, counting slots.Busy plus this call's own tasks)
     before queueing on a saturated pick.
+23. **Shared GPU slot pool** — `max_concurrent` (16) caps each models.toml
+    entry alone, but two entries served by one endpoint split one GPU:
+    four parallel tasks across them each slowed past the 20-minute
+    deadline. An optional pool name shared by entries gives them one cap,
+    so extra tasks queue instead of thrashing.
+24. **Per-worker verify attribution** — parallel workers share the tree
+    and the verify check runs once after all of them, so one worker's
+    missing piece marks every worker in the batch failed ("5 of 5
+    failed" with finished work inside). Credit a worker whose own touched
+    files build and test, and say which worker broke the check.
+25. **Don't retry a timeout on the same hardware** — a tier-2 timeout
+    escalates to the other tier-2 entry; when that entry shares the
+    endpoint (same pool, 23) the retry just burns another deadline.
+    Retry elsewhere or report the timeout with a split-the-task hint.
+26. **Flag stray files** — workers leave debug files behind
+    (`zz_repro_test.go`, `tmp_debug_test.go`), and one broke the build.
+    The result should list new files outside the task's named files.
+27. **Reap dead workers** — a worker whose process dies (power loss,
+    crash) never writes its finished event and shows "running" forever.
+    On TUI and delegate startup, mark running workers whose pid is gone
+    as failed ("process lost").
 18. **Model-neutral repo** — the code already works with any number of
     models (everything reads models.toml), but examples, tests, fixtures,
     the mockup, the replay demo and NOTES name one setup (qwen-coder,

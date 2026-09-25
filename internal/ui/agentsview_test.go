@@ -326,3 +326,87 @@ func TestAgentsTilesHidden(t *testing.T) {
 		}
 	})
 }
+
+// TestSupCtxLabel pins the supervisor context gauge in the Agents pane
+// header: empty before any usage, footprint-only while the window is
+// unknown, nearest-percent share once known, and the /new nudge past the
+// bloat line.
+func TestSupCtxLabel(t *testing.T) {
+	tests := []struct {
+		name  string
+		ctx   int
+		win   int
+		empty bool
+		want  []string
+		lacks []string
+	}{
+		{name: "no context yet", ctx: 0, empty: true},
+		{
+			name:  "unknown window shows footprint only",
+			ctx:   168000,
+			want:  []string{"ctx 168"},
+			lacks: []string{"%"},
+		},
+		{
+			name:  "known window under the bloat line",
+			ctx:   168000,
+			win:   1000000,
+			want:  []string{"17%"},
+			lacks: []string{"/new"},
+		},
+		{
+			name: "bloated window suggests /new",
+			ctx:  600000,
+			win:  1000000,
+			want: []string{"/new"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m := New(nil)
+			m.supCtx = tc.ctx
+			m.supCtxWindow = tc.win
+			got := m.supCtxLabel()
+			if tc.empty {
+				if got != "" {
+					t.Fatalf("supCtxLabel() = %q, want empty", got)
+				}
+				return
+			}
+			for _, s := range tc.want {
+				if !strings.Contains(got, s) {
+					t.Errorf("supCtxLabel() = %q, want it to contain %q", got, s)
+				}
+			}
+			for _, s := range tc.lacks {
+				if strings.Contains(got, s) {
+					t.Errorf("supCtxLabel() = %q, want it to not contain %q", got, s)
+				}
+			}
+		})
+	}
+}
+
+// TestSupCtxLabelInView: at 128x45 the gauge must land in the Agents
+// screen's supervisor pane, and the frame must stay exactly 45 lines of
+// 128 cells each.
+func TestSupCtxLabelInView(t *testing.T) {
+	m := agentsFixture(t, 128, 45, 0)
+	m.supCtx = 168000
+	m.supCtxWindow = 1000000
+	m.tab = tabChat
+
+	out := m.View()
+	if !strings.Contains(out, "ctx 168") {
+		t.Fatalf("View() missing the context gauge:\n%s", out)
+	}
+	lines := strings.Split(out, "\n")
+	if len(lines) != 45 {
+		t.Fatalf("View() returned %d lines, want 45", len(lines))
+	}
+	for i, ln := range lines {
+		if w := lipgloss.Width(ln); w != 128 {
+			t.Errorf("line %d width %d, want 128: %.80q", i+1, w, ln)
+		}
+	}
+}

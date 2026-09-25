@@ -52,7 +52,8 @@ func (m Model) supCtxLabel() string {
 	}
 	label := "ctx " + formatTokens(m.supCtx)
 	if win := m.ctxWindow(); win > 0 {
-		label += fmt.Sprintf("/%s %d%%", formatTokens(win), 100*m.supCtx/win)
+		// Nearest whole percent: 168k of 1M is 17%, not a truncated 16.
+		label += fmt.Sprintf("/%s %d%%", formatTokens(win), (100*m.supCtx+win/2)/win)
 	}
 	if m.ctxBloated() {
 		return sErr.Render(label + " · /new")

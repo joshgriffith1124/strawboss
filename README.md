@@ -34,7 +34,7 @@ results](docs/screenshot-dashboard.png)
 
 ```
 ┌────────────────────────── strawboss (Go, one process) ────────────────────┐
-│  chat tab · dashboard (worker table + live transcripts) · logs            │
+│  Agents (chat + worker panes) · Tasks · Worktrees · Models · Analytics    │
 │    ▲                        ▲                          ▲                  │
 │  supervisor driver        worker harnesses           registry watcher     │
 │  (headless `claude -p`,   (opencode serve API ·      (workers.jsonl,      │
@@ -63,9 +63,16 @@ results](docs/screenshot-dashboard.png)
 
 ## Features
 
-- Live worker table with streaming transcripts, per-worker tok/s
+- Six tabs (`1`–`6` or `tab`): **Agents** — the supervisor chat beside
+  live worker panes and a right-hand sidebar of agents and the token
+  economy (`shift+tab` cycles panes, `ctrl+o` zooms one, `ctrl+t` hides
+  the worker tiles); **Tasks**, **Worktrees**, **Models**, **Analytics**,
+  **Logs**
+- Live worker panes with streaming transcripts, per-worker tok/s
   sparklines, context-window usage, kill (`x`) / retry (`r`) / retry-all
-  (`R`), undo a worker's edits (`u`, press twice), filtering (`/`)
+  (`R`), undo a worker's edits (`u`, press twice), filtering (`/`); a
+  context gauge on the supervisor pane says when a fresh session (`/new`)
+  would be cheaper
 - Paste images into the supervisor chat (`alt+v`, or `ctrl+v` where the
   terminal passes it through) — screenshots go in as image blocks, like
   the Claude Code TUI. Reads the clipboard via PowerShell on WSL,
@@ -85,13 +92,24 @@ results](docs/screenshot-dashboard.png)
   (e.g. Discord) — and with two-way enabled, replying in the channel
   steers the supervisor from your phone. Unconfigured, you keep the
   terminal bell and nothing external is ever contacted
+- Honest results: a worker that leaves stray files behind (debug tests,
+  scratch scripts) has them listed in its result; a worker blocked on an
+  opencode permission prompt fails in seconds with the reason instead of
+  hanging to its deadline; a worker whose process died in a crash is
+  marked "process lost" on the next start instead of "running" forever
 - Loud permission denials with paste-ready allowlist fixes; `strawboss
-  clean` retention sweeps; `strawboss costs` per-run summaries
+  clean` retention sweeps; `strawboss costs` per-run summaries;
+  `strawboss models` (which models are up, their tiers and busy slots)
+- `models.toml` is watched: edit it while strawboss runs and the Models
+  tab and the supervisor's routing follow
+- Inside a herdr (terminal workspace manager) pane, strawboss reports itself to
+  herdr's agent sidebar (working/idle, worker and token counts, a pop-up
+  when a worker fails); outside herdr this does nothing
 - Everything replayable: state is JSONL under `~/.strawboss/`
 
 ## Setup
 
-Requirements: Go 1.22+, a [Claude Code](https://claude.com/claude-code)
+Requirements: Go 1.27+, a [Claude Code](https://claude.com/claude-code)
 subscription login, an OpenAI-compatible inference endpoint (sglang, vLLM,
 llama.cpp server, …), and at least one worker harness:
 [opencode](https://opencode.ai) and/or DeepSeek Harness (`npm i -g
@@ -108,8 +126,8 @@ cp examples/config.toml ~/.strawboss/config.toml   # optional: notify/budget
 ./bin/strawboss
 ```
 
-Type what you want built. The supervisor delegates; the dashboard (tab 2)
-shows workers live. `models.toml` order is preference order — the
+Type what you want built. The supervisor delegates; its workers appear as
+live panes beside the chat on the Agents tab. `models.toml` order is preference order — the
 supervisor favors the first entry.
 
 **Tiered models.** With more than one model — say a small fast one next to
@@ -120,6 +138,9 @@ fits — or passes `--model auto` and strawboss scores the task onto a tier
 itself — and a failed task escalates once to the next tier up. A model
 that is unreachable or not loaded is routed around automatically, so a
 fast model on a workstation that comes and goes is safe to list.
+Optional per-entry `max_concurrent` caps how many workers a model runs at
+once (extra tasks wait as "queued", or go to a free same-tier sibling),
+and `timeout` sets that model's per-worker deadline (default 20m).
 `examples/models.toml` has a worked pair; `docs/DELEGATION.md` has the
 routing rules.
 
@@ -127,7 +148,10 @@ routing rules.
 command) in a `.strawboss.toml` at the project root and delegate runs it
 after workers finish: a worker whose check fails is reported failed and
 escalated with the failing lines, so the supervisor stops taking a small
-model's "done" on faith. `strawboss stats` shows how each model is doing.
+model's "done" on faith. Parallel workers sharing one directory are
+checked once after all of them, and a failure names the workers whose
+files the failing output points at. `strawboss check` runs the check by
+hand; `strawboss stats` shows how each model is doing.
 
 **Branch review.** Work from `delegate --worktree` lands on `strawboss/*`
 branches. Press `b` in the TUI to list them with diff stats, `enter` to
@@ -191,12 +215,26 @@ endpoint. Without one, every delegation fails at spawn.
    (the opencode server) and `model = "local/qwen3.8-27b"`. You do NOT
    need to run `opencode serve` yourself — strawboss spawns and babysits
    it for any localhost endpoint that fails its health check.
+4. Let workers reach files outside the project. opencode asks before a
+   tool touches a path outside its working directory, and an unattended
+   worker cannot answer — add this to the same `opencode.json`:
+
+   ```json
+   "permission": { "external_directory": "allow" }
+   ```
+
+   Without it, such a worker is aborted with a "blocked on an opencode
+   permission prompt" result.
 
 **Option B — DeepSeek Harness (dsh)**: powerful but young (developer
 preview), and its setup is currently manual:
 
-1. `npm i -g @deepseek-ai/dsh`
-2. Install the ACP app packages into the acp profile:
+1. `npm i -g @deepseek-ai/dsh@0.1.1-rc.2` — the version strawboss is
+   verified against; 0.1.5-rc.3 breaks the worker harness (NOTES.md)
+2. Install the ACP app packages into the acp profile, pinned to the SAME
+   version (append `@0.1.1-rc.2` to each — an unpinned spec resolves the
+   wrong dist-tag, and a global/profile version mismatch stops every dsh
+   worker at startup):
    `dsh plugin --profile acp add @deepseek-ai/dsh-acp-demo
    @deepseek-ai/dsh-acp @deepseek-ai/dsh-agent-spine-demo
    @deepseek-ai/dsh-llm-deepseek @deepseek-ai/dsh-fs-sandbox

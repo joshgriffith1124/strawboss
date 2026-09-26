@@ -1399,3 +1399,23 @@ claude (and `resume_agents_on_restore` could resume it into the pane), and
 herdr's opencode plugin inside a managed `opencode serve` would report
 worker sessions against the pane. `herdr.StripEnv` now drops `HERDR_*` for
 the supervisor, managed opencode servers and dsh workers.
+
+## dsh 0.1.5-rc.3 breaks the worker harness — pinned back to 0.1.1-rc.2 (2026-09-26)
+
+Upgrading the global `@deepseek-ai/dsh` to 0.1.5-rc.3 killed every dsh
+worker at boot: the acp profile's 0.1.1-rc.2 leaf plugins resolve their
+core libraries out of the global install, and the skew fails the plugin
+tree (`dsh-llm does not provide an export named 'CallId'`). Bumping the
+profile packages is not enough: `dsh-acp-demo` and
+`dsh-agent-spine-demo` were never published past 0.1.1-rc.2. In 0.1.5,
+ACP boots as `dsh --profile acp` over the `dsh-acp-app` + `dsh-base`
+bundles with `--patch` overlays, and persistence, the session format (v3)
+and the leaf rows all moved into `dsh-base`. Moving to that is a harness
+port (spawn command, composition-as-patch, session-log tailer), not a
+version bump.
+
+Fix: `npm i -g @deepseek-ai/dsh@0.1.1-rc.2`, which restored both dsh models
+(live-verified with bash-tool tasks). npm now skips dependency install
+scripts by default (`dsh-subprocess-local`, `node-pty`); the bash tool works
+without them. Keep the global and profile versions in lockstep until the
+port is done.

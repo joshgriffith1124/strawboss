@@ -213,6 +213,7 @@ func (h *Harness) Result(ctx context.Context, workerID string) (harness.Result, 
 	idlePolls := 0
 	polls := 0
 	loopEvery := 20 // scan the transcript every ~10s at the default interval
+	permEvery := 4  // check for pending permission prompts every ~2s at the default interval
 	for !stalled {
 		polls++
 		if threshold := h.loopThreshold(); threshold > 0 && polls%loopEvery == 0 {
@@ -233,6 +234,12 @@ func (h *Harness) Result(ctx context.Context, workerID string) (harness.Result, 
 						LogPath: logPath,
 					}, nil
 				}
+			}
+		}
+		if polls%permEvery == 0 {
+			if p, ok := h.blockedPermission(ctx, workerID); ok {
+				msgs, _ := h.Client.Messages(ctx, workerID)
+				return h.failOnPermission(ctx, workerID, p, msgs)
 			}
 		}
 		statuses, err := h.Client.Status(ctx, h.Dir)
@@ -315,6 +322,60 @@ func (h *Harness) loopThreshold() int {
 		return 6
 	}
 	return h.LoopThreshold
+}
+
+// blockedPermission reports a pending opencode permission prompt belonging
+// to workerID. opencode's external_directory and doom_loop permissions
+// default to "ask" (verified against the binary, see docs/NOTES.md), and
+// an unattended worker can never answer — the session sits busy until the
+// delegate's deadline. A list error is not a worker failure: skip the
+// check and keep waiting.
+func (h *Harness) blockedPermission(ctx context.Context, workerID string) (PermissionRequest, bool) {
+	reqs, err := h.Client.PendingPermissions(ctx, h.Dir)
+	if err != nil {
+		return PermissionRequest{}, false
+	}
+	for _, p := range reqs {
+		if p.SessionID == workerID {
+			return p, true
+		}
+	}
+	return PermissionRequest{}, false
+}
+
+// failOnPermission is the loop-abort pattern applied to a permission hang:
+// reject the prompt, abort the session, write the transcript, and return a
+// failed result that names the prompt so the supervisor knows why the
+// worker died.
+func (h *Harness) failOnPermission(ctx context.Context, workerID string, p PermissionRequest, msgs []Message) (harness.Result, error) {
+	_ = h.Client.RejectPermission(ctx, p.ID) // unattended: nobody else will answer it
+	abortCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	_ = h.Abort(abortCtx, workerID)
+	cancel()
+	logPath, err := h.writeLog(workerID, msgs)
+	if err != nil {
+		return harness.Result{}, err
+	}
+	return harness.Result{
+		WorkerID: workerID,
+		Status:   harness.StatusFailed,
+		Summary:  permissionSummary(p),
+		LogPath:  logPath,
+	}, nil
+}
+
+// permissionSummary keeps the terse contract: one line under ~300 chars,
+// naming the prompt and the two fixes.
+func permissionSummary(p PermissionRequest) string {
+	detail := p.Permission
+	if n := len(p.Patterns); n > 0 {
+		s := strings.Join(p.Patterns, ", ")
+		if len(s) > 80 {
+			s = s[:80] + "…"
+		}
+		detail += ": " + s
+	}
+	return "worker blocked on an opencode permission prompt (" + detail + ") and was aborted — unattended workers cannot answer prompts. Allow it in opencode.json \"permission\" or keep the task inside the working directory."
 }
 
 // tailToolRun walks every tool part in transcript order and returns the

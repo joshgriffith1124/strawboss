@@ -1,0 +1,11 @@
+[
+  {
+    "id": "per_fixture0000000000000000001",
+    "sessionID": "ses_fb60449aeffeOeKJ878Yqn4aj6",
+    "permission": "external_directory",
+    "patterns": ["/home/josh/outside-repo/notes.md"],
+    "metadata": {},
+    "always": ["/home/josh/outside-repo/**"],
+    "tool": {"messageID": "msg_fix", "callID": "call_fix"}
+  }
+]

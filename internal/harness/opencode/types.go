@@ -34,6 +34,17 @@ type SessionInfo struct {
 	} `json:"location"`
 }
 
+// PermissionRequest is a pending opencode permission prompt from
+// GET /permission (v1 permission.list; verified against opencode 1.18.32 —
+// see docs/NOTES.md). Unattended workers can't answer these, so the
+// harness rejects and aborts instead of hanging to the deadline.
+type PermissionRequest struct {
+	ID         string   `json:"id"`
+	SessionID  string   `json:"sessionID"`
+	Permission string   `json:"permission"` // e.g. "external_directory", "doom_loop"
+	Patterns   []string `json:"patterns"`   // human description, e.g. the target paths
+}
+
 // SessionStatus is one entry of GET /session/status. Sessions not in the
 // map are idle.
 type SessionStatus struct {

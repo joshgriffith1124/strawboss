@@ -1419,3 +1419,41 @@ Fix: `npm i -g @deepseek-ai/dsh@0.1.1-rc.2`, which restored both dsh models
 scripts by default (`dsh-subprocess-local`, `node-pty`); the bash tool works
 without them. Keep the global and profile versions in lockstep until the
 port is done.
+
+## opencode permission prompts hang unattended workers (2026-09-26)
+
+opencode asks for permission before some tool calls — `external_directory`
+(touching a path outside the session's working directory) and `doom_loop`
+default to "ask" (verified in the installed binary 1.18.32; the build
+agent's ruleset ships `"*":"allow", doom_loop:"ask", external_directory:{...:"ask"},
+read:{"*":"allow", "*.env":"ask"}`…). An unattended worker has nobody to
+answer, so its session sits busy forever and the delegate hangs until the
+20-minute timeout.
+
+Symptom: a worker that read a file or ran `bash cat` on a path outside its
+working directory (read tool or bash `cat` alike — both trigger
+`external_directory`) hung until the deadline, with no error recorded in
+the transcript (the pending tool part just sat in `pending` state).
+
+Fix, two sides:
+
+1. **User-side**: allow the paths in `~/.config/opencode/opencode.json`,
+   e.g. `"permission": {"external_directory": "allow"}`.
+2. **Harness-side**: `Result` now polls `GET /permission?directory=<dir>`
+   every ~2s (every 4th poll); a pending request for the worker's session
+   is answered with `POST /permission/{requestID}/reply`
+   `{"reply":"reject"}` (v1 `permission.reply`), the session is aborted
+   like the loop-abort path, and the worker returns a failed result naming
+   the prompt type and patterns, with advice to allow it in opencode.json
+   or keep the task inside the working directory. A list-error just skips
+   the check; other sessions' prompts are ignored.
+
+Verified against the live server (1.18.32) at 127.0.0.1:4477:
+`GET /permission` lists pending prompts (empty array when none; each entry
+carries `id` `per…`, `sessionID`, `permission`, `patterns`, `metadata`,
+`always`, `tool{messageID,callID}`); the reply endpoint returns
+`PermissionNotFoundError` (404) for unknown ids. The SSE event announcing
+a new prompt is `permission.asked` (`permission.replied` on answer; v2
+variants `permission.v2.asked`/`replied` also exist), but the harness
+deliberately polls the list endpoint — event-driven handling would couple
+the result path to the SSE stream.

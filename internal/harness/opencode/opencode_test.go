@@ -21,16 +21,26 @@ import (
 // against the GX10 — see docs/NOTES.md).
 const fixtureSID = "ses_fb60449aeffeOeKJ878Yqn4aj6"
 
+// fixturePermID is the request id in testdata/permission_list.json and in the
+// inline permission responses below.
+const fixturePermID = "per_fixture0000000000000000001"
+
 // fakeServer replays the captured fixtures over the routes the harness
 // uses. statusPolls counts /session/status calls; the first `busyPolls`
 // report busy so Result's polling loop is exercised.
+
 type fakeServer struct {
 	t             *testing.T
 	stalled       bool
 	reasoningOnly bool
 	busyPolls     int32
+	permFor       string // session with a pending permission prompt; "" = none
+	permListErr   bool   // GET /permission returns 500
 	statusPolls   atomic.Int32
 	prompts       atomic.Int32
+	permPolls     atomic.Int32
+	rejects       atomic.Int32
+	aborts        atomic.Int32
 	lastPrompt    atomic.Value // json body string
 }
 
@@ -96,6 +106,38 @@ func (f *fakeServer) handler() http.Handler {
 	mux.HandleFunc("GET /global/event", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Write(fixture(f.t, "events.sse"))
+	})
+	mux.HandleFunc("POST /session/{sid}/abort", func(w http.ResponseWriter, r *http.Request) {
+		f.aborts.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("GET /permission", func(w http.ResponseWriter, r *http.Request) {
+		f.permPolls.Add(1)
+		if f.permListErr {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"_tag":"error","message":"boom"}`))
+			return
+		}
+		if f.permFor == "" {
+			w.Write([]byte(`[]`))
+			return
+		}
+		// Same shape as testdata/permission_list.json, with the session id
+		// chosen per test case.
+		w.Write([]byte(`[{"id":"` + fixturePermID +
+			`","sessionID":"` + f.permFor +
+			`","permission":"external_directory","patterns":["/home/josh/outside-repo/notes.md"],"metadata":{},"always":["/home/josh/outside-repo/**"],"tool":{"messageID":"msg_fix","callID":"call_fix"}}]`))
+	})
+	mux.HandleFunc("POST /permission/{requestID}/reply", func(w http.ResponseWriter, r *http.Request) {
+		f.rejects.Add(1)
+		if r.PathValue("requestID") != fixturePermID {
+			f.t.Errorf("reply to %q, want %q", r.PathValue("requestID"), fixturePermID)
+		}
+		body := readJSON(r)
+		if body["reply"] != "reject" {
+			f.t.Errorf("reply body = %v, want reply=reject", body)
+		}
+		w.Write([]byte(`true`))
 	})
 	return mux
 }
@@ -440,5 +482,102 @@ func TestResultAbortsOnToolLoop(t *testing.T) {
 	}
 	if aborts.Load() != 1 {
 		t.Errorf("aborts = %d", aborts.Load())
+	}
+}
+
+// TestPendingPermissionsParse: hand-written fixture matching the OpenAPI
+// schema of GET /permission (permission.list) on opencode 1.18.32 — a live
+// pending prompt can't be captured without a real worker asking one.
+func TestPendingPermissionsParse(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /permission", func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("directory"); got != "/w" {
+			t.Errorf("directory = %q, want /w", got)
+		}
+		w.Write(fixture(t, "permission_list.json"))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	reqs, err := (&Client{Base: srv.URL}).PendingPermissions(context.Background(), "/w")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reqs) != 1 {
+		t.Fatalf("got %d requests, want 1", len(reqs))
+	}
+	p := reqs[0]
+	if p.ID != fixturePermID {
+		t.Errorf("id = %q", p.ID)
+	}
+	if p.SessionID != fixtureSID {
+		t.Errorf("sessionID = %q", p.SessionID)
+	}
+	if p.Permission != "external_directory" {
+		t.Errorf("permission = %q", p.Permission)
+	}
+	if len(p.Patterns) != 1 || p.Patterns[0] != "/home/josh/outside-repo/notes.md" {
+		t.Errorf("patterns = %v", p.Patterns)
+	}
+}
+
+// TestResultPermissionBlocked: opencode's external_directory/doom_loop
+// prompts default to "ask", so a worker touching a path outside its
+// working directory sits busy with a pending prompt until the delegate's
+// deadline. Result must reject the prompt, abort the session, and fail
+// fast with a summary naming the prompt (docs/NOTES.md).
+func TestResultPermissionBlocked(t *testing.T) {
+	tests := []struct {
+		name        string
+		permFor     string // session holding a pending prompt; "" = none
+		permListErr bool   // GET /permission returns 500
+		wantFailed  bool
+	}{
+		{"prompt for this session fails it", fixtureSID, false, true},
+		{"prompt for another session is ignored", "ses_other", false, false},
+		{"no pending prompt", "", false, false},
+		{"list endpoint erroring", fixtureSID, true, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := &fakeServer{t: t, busyPolls: 3, permFor: tt.permFor, permListErr: tt.permListErr}
+			h := newHarness(t, f)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			res, err := h.Result(ctx, fixtureSID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !tt.wantFailed {
+				if res.Status != harness.StatusDone {
+					t.Fatalf("status = %q, want done", res.Status)
+				}
+				if f.rejects.Load() != 0 {
+					t.Errorf("rejects = %d, want 0", f.rejects.Load())
+				}
+				return
+			}
+			if res.Status != harness.StatusFailed {
+				t.Fatalf("status = %q, want failed", res.Status)
+			}
+			for _, want := range []string{"permission prompt", "external_directory", "aborted"} {
+				if !strings.Contains(res.Summary, want) {
+					t.Errorf("summary missing %q: %q", want, res.Summary)
+				}
+			}
+			if len(res.Summary) > 300 {
+				t.Errorf("summary too long: %d bytes", len(res.Summary))
+			}
+			if res.LogPath == "" {
+				t.Error("no log path")
+			}
+			if f.rejects.Load() != 1 {
+				t.Errorf("rejects = %d, want 1", f.rejects.Load())
+			}
+			if f.aborts.Load() != 1 {
+				t.Errorf("aborts = %d, want 1", f.aborts.Load())
+			}
+		})
 	}
 }

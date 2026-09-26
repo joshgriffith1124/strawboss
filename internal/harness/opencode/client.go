@@ -142,6 +142,29 @@ func (c *Client) Abort(ctx context.Context, sessionID string) error {
 	return c.do(ctx, "POST", "/session/"+sessionID+"/abort", map[string]any{}, nil)
 }
 
+// PendingPermissions lists the permission prompts currently waiting for a
+// reply (v1 permission.list). dir MUST be the directory the sessions live
+// in: the endpoint is project-scoped, like Status (see docs/NOTES.md).
+func (c *Client) PendingPermissions(ctx context.Context, dir string) ([]PermissionRequest, error) {
+	path := "/permission"
+	if dir != "" {
+		path += "?directory=" + url.QueryEscape(dir)
+	}
+	var out []PermissionRequest
+	if err := c.do(ctx, "GET", path, nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// RejectPermission answers a pending permission request with "reject".
+// Unattended workers can never answer prompts, so the harness rejects and
+// aborts instead of letting the session sit busy to the deadline.
+func (c *Client) RejectPermission(ctx context.Context, requestID string) error {
+	body := map[string]any{"reply": "reject"}
+	return c.do(ctx, "POST", "/permission/"+url.PathEscape(requestID)+"/reply", body, nil)
+}
+
 // Events subscribes to the server's SSE feed and emits every parsed event
 // until the context is cancelled or the stream ends. Callers filter by
 // session id. A dropped stream closes the channel — displayed state, never

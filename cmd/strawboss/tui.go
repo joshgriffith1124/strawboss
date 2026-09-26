@@ -14,6 +14,7 @@ import (
 
 	"github.com/joshgriffith1124/strawboss/internal/clipboard"
 	"github.com/joshgriffith1124/strawboss/internal/config"
+	"github.com/joshgriffith1124/strawboss/internal/herdr"
 	"github.com/joshgriffith1124/strawboss/internal/live"
 	"github.com/joshgriffith1124/strawboss/internal/registry"
 	"github.com/joshgriffith1124/strawboss/internal/supervisor"
@@ -217,7 +218,16 @@ func buildLive(stateDir, modelsPath string, fresh bool) (ui.Model, func(), error
 	o.Budget = cfg.Budget
 	o.Run(context.Background())
 
-	m := ui.New(o.Feed())
+	// Inside a herdr pane, mirror the feed to herdr's agent sidebar. It
+	// only reads what the UI already gets — no supervisor tokens.
+	feed, shutdown := o.Feed(), o.Shutdown
+	if hc := herdr.FromEnv(); hc != nil {
+		var stopHerdr func()
+		feed, stopHerdr = herdr.Tee(hc, feed)
+		shutdown = func() { o.Shutdown(); stopHerdr() }
+	}
+
+	m := ui.New(feed)
 	m.OnPrompt = o.OnPrompt
 	m.OnInterrupt = o.OnInterrupt
 	// Clipboard paste: read + fit off the Update loop; the result comes
@@ -266,5 +276,5 @@ func buildLive(stateDir, modelsPath string, fresh bool) (ui.Model, func(), error
 		}
 		return rows
 	}
-	return m, o.Shutdown, nil
+	return m, shutdown, nil
 }

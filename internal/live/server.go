@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/joshgriffith1124/strawboss/internal/herdr"
 	"github.com/joshgriffith1124/strawboss/internal/ui"
 )
 
@@ -62,6 +63,7 @@ func (o *Orchestrator) ensureServers(ctx context.Context) {
 			}
 			cmd := exec.Command("opencode", "serve", "--port", u.Port(), "--hostname", host)
 			cmd.Dir = o.StateDir
+			cmd.Env = herdr.StripEnv(os.Environ())
 			cmd.Stdout = logf
 			cmd.Stderr = logf
 			if err := cmd.Start(); err != nil {

@@ -10,6 +10,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/joshgriffith1124/strawboss/internal/herdr"
 )
 
 // maxLineBytes bounds a single stream-json line; tool results can be large.
@@ -144,8 +146,11 @@ func (t *Turn) Interrupt() {
 
 // scrubEnv returns env without ANTHROPIC_API_KEY. Subscription auth only
 // (invariant 1): an API key in the env would take precedence and start
-// billing real dollars.
+// billing real dollars. herdr's pane context goes too (see
+// herdr.StripEnv): the headless supervisor must not register itself as
+// the pane's claude.
 func scrubEnv(env []string) []string {
+	env = herdr.StripEnv(env)
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
 		if strings.HasPrefix(kv, "ANTHROPIC_API_KEY=") {

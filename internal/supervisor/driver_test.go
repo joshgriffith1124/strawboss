@@ -10,14 +10,15 @@ import (
 )
 
 func TestScrubEnv(t *testing.T) {
-	env := []string{"PATH=/bin", "ANTHROPIC_API_KEY=sk-ant-secret", "HOME=/home/x"}
+	env := []string{"PATH=/bin", "ANTHROPIC_API_KEY=sk-ant-secret", "HOME=/home/x",
+		"HERDR_ENV=1", "HERDR_PANE_ID=w1:p1"}
 	got := scrubEnv(env)
 	if len(got) != 2 {
 		t.Fatalf("got %v", got)
 	}
 	for _, kv := range got {
-		if strings.Contains(kv, "ANTHROPIC_API_KEY") {
-			t.Fatalf("key leaked: %v", got)
+		if strings.Contains(kv, "ANTHROPIC_API_KEY") || strings.HasPrefix(kv, "HERDR_") {
+			t.Fatalf("leaked: %v", got)
 		}
 	}
 }

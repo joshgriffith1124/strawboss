@@ -1362,3 +1362,40 @@ backspace on an empty line drops the last; enter sends them with the text
 paste. Images cost supervisor tokens (~1.6k for a full-size one) — user
 input, not observability, so invariant 2 is untouched. Drag-and-dropped
 image paths already worked: the supervisor Reads them.
+
+## herdr support (verified 2026-09-26, herdr 0.9.1, API protocol 22)
+
+herdr has no plugin point for new agent kinds; its built-in integrations
+are hook scripts that write one JSON line per request to
+`$HERDR_SOCKET_PATH` and read one reply line. Inside a herdr pane
+(`HERDR_ENV=1`) strawboss does the same from Go (`internal/herdr`): a tee
+on the feed channel folds messages into a status and a writer goroutine
+reports only what changed. It is observation of the TUI's own feed — zero
+supervisor tokens (invariant 2); outside herdr nothing runs.
+
+Verified against the live server:
+- `pane.report_agent` accepts any agent string — `"strawboss"` shows in
+  the agent list with the reported state (`idle`/`working`/`blocked`/
+  `unknown`). `seq` orders reports; strawboss uses the clock, like herdr.
+- `pane.report_metadata` sets `title` and up to 16 `tokens`. A `null`
+  token value clears it; `clear_title: true` clears the title.
+- Metadata **outlives** `pane.release_agent`, so exit clears the tokens and
+  title before releasing.
+- `notification.show` pops a toast (`sound`: none/done/request).
+
+State: `working` while a supervisor turn streams *or* any worker is
+queued/running, else `idle` — herdr's "done" then means the whole operation
+settled. Turn errors ride as the report `message`. Live (non-replayed)
+worker failures raise a notification. Tokens: `$workers` ("2 running · 1
+queued"), `$local_tok`, `$sup_tok`; title = the last delegated task. Show
+them with, in `~/.config/herdr/config.toml`:
+
+    [ui.sidebar.agents.rows_by_agent]
+    strawboss = [["state_icon", "workspace", "tab"], ["$workers", "$local_tok"]]
+
+Bug found on the way: children inherited `HERDR_PANE_ID`, so herdr's claude
+hook registered the headless supervisor session as the strawboss pane's
+claude (and `resume_agents_on_restore` could resume it into the pane), and
+herdr's opencode plugin inside a managed `opencode serve` would report
+worker sessions against the pane. `herdr.StripEnv` now drops `HERDR_*` for
+the supervisor, managed opencode servers and dsh workers.

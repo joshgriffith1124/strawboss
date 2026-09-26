@@ -21,6 +21,7 @@ import (
 
 	"github.com/joshgriffith1124/strawboss/internal/config"
 	"github.com/joshgriffith1124/strawboss/internal/harness"
+	"github.com/joshgriffith1124/strawboss/internal/herdr"
 	"github.com/joshgriffith1124/strawboss/internal/loopdetect"
 )
 
@@ -223,7 +224,7 @@ func (h *Harness) Spawn(ctx context.Context, task string, mc config.ModelConfig)
 
 	cmd := exec.Command(bin, "--config", cfgPath)
 	cmd.Dir = h.Dir
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(herdr.StripEnv(os.Environ()),
 		"STRAWBOSS_LLM_BASE_URL="+proxy.URL(),
 		"STRAWBOSS_LLM_API_KEY="+apiKey,
 		"STRAWBOSS_DSH_MODEL="+mc.Model,

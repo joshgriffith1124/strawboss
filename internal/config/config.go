@@ -69,6 +69,12 @@ type ModelConfig struct {
 	// "queued" until a slot frees. For a single-GPU server whose parallel
 	// requests thrash rather than overlap. 0 = unlimited.
 	MaxConcurrent int `toml:"max_concurrent"`
+	// Pool names a set of interchangeable entries: two (or more) instances
+	// of the same model on different hosts share a pool and work evenly. A
+	// task routed to any member runs on the least-loaded available member
+	// (fewest workers busy + already planned), ties broken by file order.
+	// Empty = no pool.
+	Pool string `toml:"pool"`
 	// Timeout, when set, is the per-attempt worker deadline for this
 	// model: each run (first try and an escalation retry alike) gets a
 	// fresh context bounded by it. 0 = unset: the delegate command falls
@@ -298,6 +304,23 @@ func LoadModels(path string) ([]ModelConfig, error) {
 		for i := range out {
 			if out[i].Tier == 0 {
 				out[i].Tier = 1
+			}
+		}
+	}
+	// Pool members must be the same capability: balancing work across
+	// entries of different tiers would put a big-model task on a small
+	// model.
+	byPool := map[string][]ModelConfig{}
+	for _, mc := range out {
+		if mc.Pool != "" {
+			byPool[mc.Pool] = append(byPool[mc.Pool], mc)
+		}
+	}
+	for pool, members := range byPool {
+		for _, mc := range members {
+			if mc.Tier != members[0].Tier {
+				return nil, fmt.Errorf("pool %q: models %q (tier %d) and %q (tier %d) must share a tier",
+					pool, members[0].Name, members[0].Tier, mc.Name, mc.Tier)
 			}
 		}
 	}

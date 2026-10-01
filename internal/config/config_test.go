@@ -359,6 +359,51 @@ func TestLoadModelsMissingFile(t *testing.T) {
 	}
 }
 
+func TestLoadModelsPool(t *testing.T) {
+	good := `
+[models.a]
+endpoint = "http://h:1"
+model = "m"
+pool = "qwen"
+max_concurrent = 2
+
+[models.b]
+endpoint = "http://h:2"
+model = "m"
+pool = "qwen"
+`
+	models, err := LoadModels(writeFile(t, "models.toml", good))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if models[0].Pool != "qwen" || models[1].Pool != "qwen" {
+		t.Errorf("pools = %q, %q; want qwen, qwen", models[0].Pool, models[1].Pool)
+	}
+	empty := "[models.x]\nendpoint = \"http://h:1\"\nmodel = \"m\"\n"
+	if models, err := LoadModels(writeFile(t, "none.toml", empty)); err != nil || models[0].Pool != "" {
+		t.Errorf("pool = %q, err %v; want empty", models[0].Pool, err)
+	}
+
+	mixed := `
+[models.a]
+endpoint = "http://h:1"
+model = "m"
+pool = "x"
+tier = 1
+
+[models.b]
+endpoint = "http://h:2"
+model = "m"
+pool = "x"
+tier = 2
+`
+	if _, err := LoadModels(writeFile(t, "bad.toml", mixed)); err == nil ||
+		!strings.Contains(err.Error(), `pool "x"`) ||
+		!strings.Contains(err.Error(), "must share a tier") {
+		t.Errorf("mixed-tier pool: err = %v, want it naming the pool and tier", err)
+	}
+}
+
 func TestLoadModelsToolsMode(t *testing.T) {
 	good := "[models.x]\nendpoint = \"http://h:1\"\nmodel = \"m\"\nharness = \"dsh\"\ntools_mode = \"code\"\n"
 	models, err := LoadModels(writeFile(t, "models.toml", good))

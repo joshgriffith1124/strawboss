@@ -942,6 +942,83 @@ func TestRouteTasksFreeSlot(t *testing.T) {
 	})
 }
 
+// TestRouteTasksPool: pool members share work evenly — a pinned task on a
+// pool member lands on the least-loaded member (file order breaking ties),
+// and auto routing through a pool alternates instead of filling the first
+// member. Models without a pool keep fill-first behavior.
+func TestRouteTasksPool(t *testing.T) {
+	availFn := func(_ context.Context, mc config.ModelConfig) (bool, string) { return true, "" }
+	poolAB := []config.ModelConfig{
+		{Name: "a", Tier: 1, Pool: "qwen", MaxConcurrent: 2},
+		{Name: "b", Tier: 1, Pool: "qwen", MaxConcurrent: 2},
+	}
+
+	t.Run("pinned tasks alternate across the pool", func(t *testing.T) {
+		routes, err := routeTasks(poolAB, []string{"t1", "t2", "t3", "t4"}, []modelPin{{"a", 0}}, "models.toml", availFn, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := routes[0].mc.Name + routes[1].mc.Name + routes[2].mc.Name + routes[3].mc.Name
+		if got != "abab" {
+			t.Errorf("models = %q, want abab", got)
+		}
+		if !strings.Contains(routes[1].note, "ran on b (pool qwen)") {
+			t.Errorf("note = %q, want it naming the pool member", routes[1].note)
+		}
+	})
+
+	t.Run("busy on one member sheds to the idle one", func(t *testing.T) {
+		busy := func(m config.ModelConfig) int {
+			if m.Name == "a" {
+				return 1
+			}
+			return 0
+		}
+		routes, err := routeTasks(poolAB, []string{"t1"}, []modelPin{{"a", 0}}, "models.toml", availFn, busy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if routes[0].mc.Name != "b" {
+			t.Errorf("model = %q, want b", routes[0].mc.Name)
+		}
+	})
+
+	t.Run("auto routing alternates through the pool", func(t *testing.T) {
+		models := []config.ModelConfig{
+			{Name: "a", Tier: 2, Pool: "qwen", MaxConcurrent: 2},
+			{Name: "b", Tier: 2, Pool: "qwen", MaxConcurrent: 2},
+			{Name: "fast", Tier: 1},
+		}
+		heavy := "refactor the parser; debug and investigate the root cause across a.go, b.go, c.go"
+		routes, err := routeTasks(models, []string{heavy, heavy, heavy, heavy}, []modelPin{{"auto", 0}}, "models.toml", availFn, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := routes[0].mc.Name + routes[1].mc.Name + routes[2].mc.Name + routes[3].mc.Name
+		if got != "abab" {
+			t.Errorf("models = %q, want abab", got)
+		}
+		if !strings.HasPrefix(routes[0].note, "[auto → a") || !strings.HasPrefix(routes[1].note, "[auto → b") {
+			t.Errorf("notes = %q, %q; want auto notes naming the member used", routes[0].note, routes[1].note)
+		}
+	})
+
+	t.Run("models without a pool keep fill-first behavior", func(t *testing.T) {
+		models := []config.ModelConfig{
+			{Name: "a", Tier: 1, MaxConcurrent: 2},
+			{Name: "b", Tier: 1},
+		}
+		routes, err := routeTasks(models, []string{"t1", "t2", "t3", "t4"}, []modelPin{{"a", 0}}, "models.toml", availFn, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := routes[0].mc.Name + routes[1].mc.Name + routes[2].mc.Name + routes[3].mc.Name
+		if got != "aabb" {
+			t.Errorf("models = %q, want aabb (fill first, then spill)", got)
+		}
+	})
+}
+
 // TestDelegateVerifyPasses: a passing --verify check keeps the done status
 // and appends the verified note to the terse result.
 func TestDelegateVerifyPasses(t *testing.T) {

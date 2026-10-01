@@ -27,6 +27,29 @@
 #                             # on this model; more wait as "queued". For a
 #                             # server with few parallel slots (llama.cpp
 #                             # --parallel, one GPU) where overlap thrashes.
+#                             # Set pool (below) to spread work over several
+#                             # instances of the same model instead.
+#
+# Pools (optional). Two (or more) entries that are the same model on
+# different hosts share a `pool` name and split tasks evenly — a task routed
+# to any member runs on the least-loaded one. Members must share a tier, and
+# max_concurrent is what balances them across processes:
+#
+#   [models.qwen-a]
+#   endpoint = "http://host-a:8000/v1"
+#   model = "your-model"
+#   harness = "dsh"
+#   tier = 1
+#   max_concurrent = 2
+#   pool = "qwen"
+#
+#   [models.qwen-b]
+#   endpoint = "http://host-b:8000/v1"
+#   model = "your-model"
+#   harness = "dsh"
+#   tier = 1
+#   max_concurrent = 2
+#   pool = "qwen"
 #
 #   [models.qwen-dsh]
 #   ...

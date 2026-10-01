@@ -141,6 +141,8 @@ fast model on a workstation that comes and goes is safe to list.
 Optional per-entry `max_concurrent` caps how many workers a model runs at
 once (extra tasks wait as "queued", or go to a free same-tier sibling),
 and `timeout` sets that model's per-worker deadline (default 20m).
+Entries sharing a `pool` are interchangeable instances of one model and
+split work evenly across the least-loaded member.
 `examples/models.toml` has a worked pair; `docs/DELEGATION.md` has the
 routing rules.
 

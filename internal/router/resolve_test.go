@@ -200,6 +200,50 @@ func TestPreferFree(t *testing.T) {
 	}
 }
 
+func TestBalance(t *testing.T) {
+	pooled := []config.ModelConfig{
+		{Name: "a", Tier: 1, Pool: "qwen"},
+		{Name: "b", Tier: 1, Pool: "qwen"},
+	}
+
+	// loadNames builds a busy count per model name (missing = 0).
+	loadNames := func(counts map[string]int) func(config.ModelConfig) int {
+		return func(m config.ModelConfig) int { return counts[m.Name] }
+	}
+
+	t.Run("no pool returns got unchanged", func(t *testing.T) {
+		got := model("solo", 1)
+		if bal := Balance(pooled, got, down(), loadNames(map[string]int{"solo": 9}), nil); bal.Name != "solo" {
+			t.Errorf("Balance name = %q, want solo", bal.Name)
+		}
+	})
+	t.Run("even loads keep the first member", func(t *testing.T) {
+		if bal := Balance(pooled, pooled[1], down(), loadNames(nil), nil); bal.Name != "a" {
+			t.Errorf("Balance name = %q, want a (file order wins ties)", bal.Name)
+		}
+	})
+	t.Run("busier member sheds to the idle one", func(t *testing.T) {
+		if bal := Balance(pooled, pooled[0], down(), loadNames(map[string]int{"a": 1}), nil); bal.Name != "b" {
+			t.Errorf("Balance name = %q, want b", bal.Name)
+		}
+	})
+	t.Run("an unavailable member is skipped", func(t *testing.T) {
+		if bal := Balance(pooled, pooled[0], down("b"), loadNames(map[string]int{"a": 1}), nil); bal.Name != "a" {
+			t.Errorf("Balance name = %q, want a (b is down)", bal.Name)
+		}
+	})
+	t.Run("a free member beats a lower-load-but-full one", func(t *testing.T) {
+		if bal := Balance(pooled, pooled[0], down(), loadNames(map[string]int{"a": 0, "b": 1}), freeNames("b")); bal.Name != "b" {
+			t.Errorf("Balance name = %q, want b (free beats load)", bal.Name)
+		}
+	})
+	t.Run("nil free falls back to load alone", func(t *testing.T) {
+		if bal := Balance(pooled, pooled[0], down(), loadNames(map[string]int{"a": 1}), nil); bal.Name != "b" {
+			t.Errorf("Balance name = %q, want b", bal.Name)
+		}
+	})
+}
+
 func TestNext(t *testing.T) {
 	cases := []struct {
 		name     string

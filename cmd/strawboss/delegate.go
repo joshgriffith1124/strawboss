@@ -484,10 +484,11 @@ type route struct {
 // against availability, so a task aimed at a model that is down or not
 // loaded runs on the nearest live one instead of failing on arrival. When
 // the pick is at its max_concurrent cap, a free same-tier sibling takes the
-// task instead of making it queue. Each model is probed at most once per
-// call. When nothing is available the task keeps its want and surfaces the
-// real error. busy reports, per model, how many of its slots are held by
-// other processes (nil counts zero).
+// task instead of making it queue. Pool members share work evenly (see
+// router.Balance). Each model is probed at most once per call. When nothing
+// is available the task keeps its want and surfaces the real error. busy
+// reports, per model, how many of its slots are held by other processes
+// (nil counts zero).
 func routeTasks(models []config.ModelConfig, tasks []string, pins []modelPin, modelsPath string,
 	available func(context.Context, config.ModelConfig) (bool, string),
 	busy func(config.ModelConfig) int) ([]route, error) {
@@ -518,6 +519,17 @@ func routeTasks(models []config.ModelConfig, tasks []string, pins []modelPin, mo
 			b = busy(m)
 		}
 		return b+planned[m.Name] < m.MaxConcurrent
+	}
+	// Pool members share work: load is busy (other processes) plus what
+	// this call already planned. busy is only counted for capped models
+	// (see slots.Busy), so cross-process balance needs max_concurrent on
+	// pool members — within a call, planned always counts.
+	load := func(m config.ModelConfig) int {
+		b := 0
+		if m.MaxConcurrent > 0 && busy != nil {
+			b = busy(m)
+		}
+		return b + planned[m.Name]
 	}
 
 	routes := make([]route, len(tasks))
@@ -551,6 +563,16 @@ func routeTasks(models []config.ModelConfig, tasks []string, pins []modelPin, mo
 		if ok {
 			if alt := router.PreferFree(models, got, availFn, free); alt.Name != got.Name {
 				note = "[" + got.Name + " slots full; ran on " + alt.Name + "]"
+				got = alt
+			}
+			// Pool members share work evenly; a pinned task that gets
+			// re-balanced, and an auto task, both say which member ran it.
+			if alt := router.Balance(models, got, availFn, load, free); alt.Name != got.Name {
+				if name != router.Auto {
+					note = "[" + name + " busier; ran on " + alt.Name + " (pool " + alt.Pool + ")]"
+				} else {
+					note = "[auto → " + alt.Name + "]"
+				}
 				got = alt
 			}
 		}

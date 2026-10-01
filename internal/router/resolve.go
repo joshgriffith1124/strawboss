@@ -41,6 +41,55 @@ func PreferFree(models []config.ModelConfig, got config.ModelConfig,
 	return got
 }
 
+// Balance spreads tasks across interchangeable pool members: entries
+// sharing a Pool are the same model on different hosts, and a task routed
+// to any of them should run on the least-loaded available one rather than
+// piling onto the first entry. got is returned unchanged when it has no
+// pool. free (optional) marks entries with a slot under max_concurrent —
+// free candidates are preferred over merely less loaded ones; without any
+// free candidate the lowest load still wins. Ties keep file order.
+func Balance(models []config.ModelConfig, got config.ModelConfig,
+	avail func(config.ModelConfig) bool, load func(config.ModelConfig) int, free func(config.ModelConfig) bool) config.ModelConfig {
+	if got.Pool == "" {
+		return got
+	}
+	var cands []config.ModelConfig
+	for _, m := range models {
+		if m.Pool != got.Pool {
+			continue
+		}
+		if !available(avail, m) {
+			continue
+		}
+		cands = append(cands, m)
+	}
+	if len(cands) == 0 {
+		return got
+	}
+	if free != nil {
+		var freer []config.ModelConfig
+		for _, m := range cands {
+			if free(m) {
+				freer = append(freer, m)
+			}
+		}
+		if len(freer) > 0 {
+			cands = freer
+		}
+	}
+	if load == nil {
+		return cands[0]
+	}
+	best := cands[0]
+	bestLoad := load(best)
+	for _, m := range cands[1:] {
+		if l := load(m); l < bestLoad {
+			best, bestLoad = m, l
+		}
+	}
+	return best
+}
+
 // Next returns the model a task that FAILED on cur escalates to, skipping
 // unavailable models. ok is false when there is nowhere to go: a same-tier
 // retry would hit the same capability wall, and an untiered list has nothing

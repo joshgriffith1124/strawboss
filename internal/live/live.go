@@ -521,6 +521,7 @@ If a task's text contains $( ), backticks, or < >, do NOT put it in --task: thos
 Run INDEPENDENT tasks in parallel by repeating --task in ONE delegate call — each task becomes its own concurrent worker:
   %s delegate --model <m> --task "first task" --task "second task"
 Only chain separate delegate calls when one task needs another's output.
+A delegate call can outlast the Bash tool's default limit (a slow worker, or one the operator gives extra time from the TUI): always pass the Bash tool's maximum timeout on delegate calls so the call is never cut off mid-worker.
 
 Delegation is not free for you: the task text you write is output tokens, the result you read comes back into your context, and the call takes 10–60s. Do it yourself when the whole job is one command you are allowed to run, or an edit you could write in fewer tokens than it takes to describe it (roughly under 30 lines) — Read, Edit and Write are yours. Delegate when a worker has to read code to work out what to write, write more than that, debug, or iterate. Never delegate "run X and report the output" for a command you can run.
 

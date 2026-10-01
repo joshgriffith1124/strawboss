@@ -21,7 +21,7 @@ import (
 // Event is one line of workers.jsonl.
 type Event struct {
 	TS      time.Time `json:"ts"`
-	Type    string    `json:"type"` // "queued" | "spawned" | "finished"
+	Type    string    `json:"type"` // "queued" | "spawned" | "finished" | "deadline"
 	Worker  string    `json:"worker"`
 	Session string    `json:"session"`
 	// Run scopes workers to one supervisor run so the TUI doesn't replay
@@ -35,6 +35,10 @@ type Event struct {
 	// 0 for server-backed workers (opencode). The TUI kills by pid when
 	// there is no server to ask.
 	PID int `json:"pid,omitempty"`
+	// Deadline is a deadline-event field: the worker's current per-attempt
+	// deadline (initial or extended), so the TUI can show time left and
+	// operator push-backs.
+	Deadline time.Time `json:"deadline,omitempty"`
 	// finished fields
 	Status          string `json:"status,omitempty"`
 	Summary         string `json:"summary,omitempty"`
@@ -166,6 +170,17 @@ func (r *Registry) Finish(workerID, session, status, summary, logPath string, du
 			Status: status, Summary: summary, LogPath: logPath,
 			DurationMS:  duration.Milliseconds(),
 			InputTokens: inputTokens, CacheReadTokens: cacheReadTokens, OutputTokens: outputTokens,
+		})
+	})
+}
+
+// SetDeadline records a worker's current deadline (initial or extended) as a
+// "deadline" event.
+func (r *Registry) SetDeadline(worker string, at time.Time) error {
+	return r.withLock(func() error {
+		return r.append(Event{
+			TS: time.Now(), Type: "deadline", Worker: worker, Run: r.Run,
+			Deadline: at,
 		})
 	})
 }

@@ -328,3 +328,45 @@ func TestReduceQueued(t *testing.T) {
 		})
 	}
 }
+
+func TestSetDeadlineRoundTrips(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "workers.jsonl")
+	r := &Registry{Path: path, Run: "run1"}
+	at := time.Now().Add(5 * time.Minute).Truncate(time.Second)
+	if err := r.SetDeadline("w1", at); err != nil {
+		t.Fatal(err)
+	}
+	events, err := r.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want 1", len(events))
+	}
+	ev := events[0]
+	if ev.Type != "deadline" || ev.Worker != "w1" || ev.Run != "run1" || !ev.Deadline.Equal(at) {
+		t.Errorf("event = type %q worker %q run %q deadline %v; want deadline/w1/run1/%v",
+			ev.Type, ev.Worker, ev.Run, ev.Deadline, at)
+	}
+	// The deadline event must not disturb per-worker state, and a later
+	// extension overwrites the earlier one in the log.
+	if err := r.SetDeadline("w1", at.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if workers := Reduce(mustLoad(t, r)); len(workers) != 0 {
+		t.Errorf("Reduce = %+v; want no workers (deadline isn't a lifecycle event)", workers)
+	}
+	events, _ = r.Load()
+	if len(events) != 2 || !events[1].Deadline.Equal(at.Add(time.Minute)) {
+		t.Errorf("extension not recorded: %+v", events)
+	}
+}
+
+func mustLoad(t *testing.T, r *Registry) []Event {
+	t.Helper()
+	events, err := r.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return events
+}

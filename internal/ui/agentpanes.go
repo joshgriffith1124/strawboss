@@ -61,6 +61,24 @@ func (m Model) supCtxLabel() string {
 	return sDim.Render(label)
 }
 
+// workerCtxLabel is a worker's context gauge, "ctx 24k/131k 18%" — the same
+// shape as supCtxLabel, amber from 70% (the DETAIL column's threshold).
+// Unknown window shows the footprint alone; nothing yet is "".
+func (m Model) workerCtxLabel(wk *workerRow) string {
+	if wk.Ctx <= 0 {
+		return ""
+	}
+	label := "ctx " + formatTokens(wk.Ctx)
+	if win := m.contextWindowFor(wk.Model); win > 0 {
+		pct := (100*wk.Ctx + win/2) / win
+		label += fmt.Sprintf("/%s %d%%", formatTokens(win), pct)
+		if pct >= 70 {
+			return sAmberB.Render(label)
+		}
+	}
+	return sDim.Render(label)
+}
+
 // viewWorkerPane is one worker's detail pane: the status pill plus worktree in
 // the head, the task's first line, the transcript tail (wrapped, newest at
 // the bottom), and for finished workers the summary with duration and tokens.
@@ -84,8 +102,15 @@ func (m Model) viewWorkerPane(wk *workerRow, w, h int, focused bool) string {
 	case "failed":
 		text, fg, bg = glyphFail+" "+wk.ID+" ›", cErr, lipgloss.Color("#2A1214")
 	}
-	right := sDim.Render(wk.Model)
 	head := pill(text, fg, bg)
+	// Header right like the supervisor pane: context gauge first, the model
+	// name only while both fit.
+	right := m.workerCtxLabel(wk)
+	if model := sDim.Render(wk.Model); right == "" {
+		right = model
+	} else if withModel := right + sFaint.Render(" · ") + model; lipgloss.Width(head)+lipgloss.Width(withModel)+4 <= w-2 {
+		right = withModel
+	}
 	room := w - 4 - lipgloss.Width(right) - lipgloss.Width(head) - 1
 	if room >= 1 {
 		head += sDim.Render(" " + truncPlain(wk.Dir, room))

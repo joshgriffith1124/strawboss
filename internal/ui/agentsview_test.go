@@ -387,6 +387,38 @@ func TestSupCtxLabel(t *testing.T) {
 	}
 }
 
+// TestWorkerCtxLabel: a worker pane's context gauge, in the same shape as
+// the supervisor's.
+func TestWorkerCtxLabel(t *testing.T) {
+	tests := []struct {
+		name  string
+		ctx   int
+		win   int
+		want  string
+		lacks string
+	}{
+		{name: "no context yet", ctx: 0, want: ""},
+		{name: "unknown window shows footprint only", ctx: 24000, want: "ctx 24", lacks: "%"},
+		{name: "known window", ctx: 24000, win: 131072, want: "18%"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m := New(nil)
+			m.models = []modelStat{{Name: "qwen", ContextWindow: tc.win}}
+			got := m.workerCtxLabel(&workerRow{Model: "qwen", Ctx: tc.ctx})
+			if tc.want == "" && got != "" {
+				t.Fatalf("workerCtxLabel() = %q, want empty", got)
+			}
+			if !strings.Contains(got, tc.want) {
+				t.Errorf("workerCtxLabel() = %q, want it to contain %q", got, tc.want)
+			}
+			if tc.lacks != "" && strings.Contains(got, tc.lacks) {
+				t.Errorf("workerCtxLabel() = %q, want it to not contain %q", got, tc.lacks)
+			}
+		})
+	}
+}
+
 // TestSupCtxLabelInView: at 128x45 the gauge must land in the Agents
 // screen's supervisor pane, and the frame must stay exactly 45 lines of
 // 128 cells each.

@@ -61,6 +61,9 @@ harness = "dsh"
 # temperature = 0.2           # forced onto every request; unset leaves the
 #                             # server's model default (GLM's is 1.0, which
 #                             # leaks CJK tokens into code — docs/NOTES.md)
+# reasoning_effort = "high"   # off|low|high|max for this model; overrides
+#                             # STRAWBOSS_DSH_REASONING (GLM only thinks
+#                             # when asked)
 # max_tokens = 49152          # per-request output cap (shared with the
 #                             # model's reasoning); default 49152
 # timeout = "20m"             # per-worker deadline for this model; unset =

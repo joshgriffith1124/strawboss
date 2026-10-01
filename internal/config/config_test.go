@@ -396,3 +396,25 @@ func TestModelTemperature(t *testing.T) {
 		t.Errorf("temperature 3 accepted: %v", err)
 	}
 }
+
+func TestModelReasoningEffort(t *testing.T) {
+	dir := t.TempDir()
+	write := func(body string) string {
+		p := filepath.Join(dir, "models.toml")
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	models, err := LoadModels(write("[models.x]\nendpoint = \"http://h:1\"\nmodel = \"m\"\nharness = \"dsh\"\nreasoning_effort = \"high\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if models[0].ReasoningEffort != "high" {
+		t.Errorf("reasoning_effort = %q", models[0].ReasoningEffort)
+	}
+	if _, err := LoadModels(write("[models.x]\nendpoint = \"http://h:1\"\nmodel = \"m\"\nreasoning_effort = \"xhigh\"\n")); err == nil ||
+		!strings.Contains(err.Error(), "unknown reasoning_effort") {
+		t.Errorf("reasoning_effort xhigh accepted: %v", err)
+	}
+}

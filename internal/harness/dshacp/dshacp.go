@@ -233,6 +233,9 @@ func (h *Harness) Spawn(ctx context.Context, task string, mc config.ModelConfig)
 	if mc.ToolsMode != "" {
 		cmd.Env = append(cmd.Env, "STRAWBOSS_DSH_TOOLS_MODE="+mc.ToolsMode)
 	}
+	if mc.ReasoningEffort != "" {
+		cmd.Env = append(cmd.Env, "STRAWBOSS_DSH_REASONING="+mc.ReasoningEffort)
+	}
 	maxTokens := mc.MaxTokens
 	if maxTokens <= 0 {
 		maxTokens = 49152 // opencode-limit parity; see config.ModelConfig

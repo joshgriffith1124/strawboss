@@ -47,6 +47,11 @@ type ModelConfig struct {
 	// is 1.0, where it emits stray CJK tokens into code (docs/NOTES.md).
 	// Unset = leave the request alone. Ignored by the opencode harness.
 	Temperature *float64 `toml:"temperature"`
+	// ReasoningEffort sets a dsh worker's reasoning_effort for this model
+	// (off|low|high|max), overriding the global STRAWBOSS_DSH_REASONING.
+	// GLM does not think unless asked (docs/NOTES.md). Unset = the global
+	// env var, else off. Ignored by the opencode harness.
+	ReasoningEffort string `toml:"reasoning_effort"`
 	// Tier ranks capability: 1 is the cheapest/fastest, higher is stronger
 	// (and slower). The supervisor is told to pick the lowest tier that fits
 	// a task, and a failed task escalates to the next tier up rather than
@@ -260,6 +265,11 @@ func LoadModels(path string) ([]ModelConfig, error) {
 		}
 		if mc.Temperature != nil && (*mc.Temperature < 0 || *mc.Temperature > 2) {
 			return nil, fmt.Errorf("model %q: temperature %v out of range (0–2)", name, *mc.Temperature)
+		}
+		switch mc.ReasoningEffort {
+		case "", "off", "low", "high", "max":
+		default:
+			return nil, fmt.Errorf("model %q: unknown reasoning_effort %q (off, low, high, or max)", name, mc.ReasoningEffort)
 		}
 		if mc.Tier < 0 {
 			return nil, fmt.Errorf("model %q: tier %d must be 1 or higher", name, mc.Tier)

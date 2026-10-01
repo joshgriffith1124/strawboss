@@ -53,6 +53,17 @@ func (o *Orchestrator) readRegistryFrom(ctx context.Context, path string, offset
 		return offset
 	}
 	rd := bufio.NewReader(f)
+	// A pass from offset 0 (startup or a session-switch rewind) applies
+	// the whole history; fold its msgs into ONE ui.BatchMsg so the screen
+	// renders once instead of popping tiles per event. Incremental passes
+	// keep emitting individually — those events are happening now.
+	var batch []tea.Msg
+	replay := offset == 0
+	defer func() {
+		if replay && len(batch) > 0 {
+			o.emit(ctx, ui.BatchMsg{Msgs: batch})
+		}
+	}()
 	for {
 		line, err := rd.ReadBytes('\n')
 		if err != nil { // partial write in progress — retry from same offset
@@ -63,11 +74,15 @@ func (o *Orchestrator) readRegistryFrom(ctx context.Context, path string, offset
 		if json.Unmarshal(line, &ev) != nil {
 			continue
 		}
-		o.applyRegistryEvent(ctx, ev)
+		if replay {
+			o.applyRegistryEvent(ctx, ev, &batch)
+		} else {
+			o.applyRegistryEvent(ctx, ev, nil)
+		}
 	}
 }
 
-func (o *Orchestrator) applyRegistryEvent(ctx context.Context, ev registry.Event) {
+func (o *Orchestrator) applyRegistryEvent(ctx context.Context, ev registry.Event, batch *[]tea.Msg) {
 	o.mu.Lock()
 	run := o.RunID
 	o.mu.Unlock()
@@ -84,7 +99,7 @@ func (o *Orchestrator) applyRegistryEvent(ctx context.Context, ev registry.Event
 		o.workerDir[ev.Worker] = ev.Dir
 		o.workerTask[ev.Worker] = ev.Task
 		o.mu.Unlock()
-		o.emit(ctx, ui.WorkerUpsertMsg{
+		o.emitBatch(ctx, batch, ui.WorkerUpsertMsg{
 			ID: ev.Worker, Model: ev.Model, Task: ev.Task, Dir: ev.Dir,
 			Status: "queued",
 		})
@@ -107,7 +122,7 @@ func (o *Orchestrator) applyRegistryEvent(ctx context.Context, ev registry.Event
 		if startTail {
 			go o.tailDshWorker(ctx, ev.Worker, ev.Session)
 		}
-		o.emit(ctx, ui.WorkerUpsertMsg{
+		o.emitBatch(ctx, batch, ui.WorkerUpsertMsg{
 			ID: ev.Worker, Model: ev.Model, Task: ev.Task, Dir: ev.Dir,
 			Status: "running", Started: ev.TS,
 		})
@@ -129,7 +144,7 @@ func (o *Orchestrator) applyRegistryEvent(ctx context.Context, ev registry.Event
 			}
 			o.pushFailure(ev.Worker, summary)
 		}
-		o.emit(ctx,
+		o.emitBatch(ctx, batch,
 			ui.WorkerUpsertMsg{ID: ev.Worker, Status: ev.Status, Summary: ev.Summary,
 				LogPath: ev.LogPath, Ended: ev.TS, Replay: replay},
 			ui.WorkerUsageMsg{ID: ev.Worker, Input: ev.InputTokens, CacheRead: ev.CacheReadTokens, Output: ev.OutputTokens},
@@ -137,12 +152,33 @@ func (o *Orchestrator) applyRegistryEvent(ctx context.Context, ev registry.Event
 	}
 }
 
+// emitBatch appends msgs to a replay collector when one is active (a
+// first registry pass folds them into one ui.BatchMsg) and emits them
+// normally otherwise.
+func (o *Orchestrator) emitBatch(ctx context.Context, batch *[]tea.Msg, msgs ...tea.Msg) {
+	if batch != nil {
+		*batch = append(*batch, msgs...)
+		return
+	}
+	o.emit(ctx, msgs...)
+}
+
+// replayFlushDelay is how long a dsh tailer may sit on buffered replayed
+// history before flushing it as one ui.BatchMsg anyway.
+const replayFlushDelay = 200 * time.Millisecond
+
 // tailDshWorker streams one dsh worker's session log into transcript and
 // usage msgs — dsh has no server to poll or subscribe to; the JSONL under
 // the persistence root is the observability surface (docs/NOTES.md). The
 // tailer ends at turn/end; if the worker is still unfinished then (its
 // delegate died — an orphaned dsh subprocess runs to completion on its
 // own), the row is closed as recovered like the opencode path.
+//
+// Replayed history (a session log that already existed when the tail
+// began) is buffered and flushed as ONE ui.BatchMsg — on the first live
+// item, the tail closing, or 200ms of quiet, whichever comes first — so
+// an old transcript doesn't visibly scroll through the tile. Live items
+// emit individually.
 func (o *Orchestrator) tailDshWorker(ctx context.Context, wid, session string) {
 	defer func() {
 		o.mu.Lock()
@@ -151,19 +187,63 @@ func (o *Orchestrator) tailDshWorker(ctx context.Context, wid, session string) {
 	}()
 	root := dshacp.SessionsRootFor(o.StateDir)
 	endReason := ""
-	for it := range dshacp.TailSession(ctx, root, session, 0) {
+	var pending []tea.Msg
+	flush := func() {
+		if len(pending) > 0 {
+			o.emit(ctx, ui.BatchMsg{Msgs: pending})
+			pending = nil
+		}
+	}
+	timer := time.NewTimer(replayFlushDelay)
+	defer timer.Stop()
+	apply := func(it dshacp.TailItem) {
 		switch {
 		case it.Event != nil:
-			o.emit(ctx, ui.WorkerEventMsg{ID: wid, Kind: it.Event.Kind, Text: it.Event.Text, Replay: it.Replay})
+			if it.Replay {
+				pending = append(pending, ui.WorkerEventMsg{ID: wid, Kind: it.Event.Kind, Text: it.Event.Text, Replay: true})
+			} else {
+				flush()
+				o.emit(ctx, ui.WorkerEventMsg{ID: wid, Kind: it.Event.Kind, Text: it.Event.Text})
+			}
 		case it.Usage != nil:
 			o.mu.Lock()
 			o.dshOut[wid] = it.Usage.OutputTokens
 			o.mu.Unlock()
-			o.emit(ctx, ui.WorkerUsageMsg{ID: wid, Input: it.Usage.InputTokens, CacheRead: it.Usage.CacheReadTokens, Output: it.Usage.OutputTokens, Ctx: it.Ctx})
+			if it.Replay {
+				pending = append(pending, ui.WorkerUsageMsg{ID: wid, Input: it.Usage.InputTokens, CacheRead: it.Usage.CacheReadTokens, Output: it.Usage.OutputTokens, Ctx: it.Ctx})
+			} else {
+				flush()
+				o.emit(ctx, ui.WorkerUsageMsg{ID: wid, Input: it.Usage.InputTokens, CacheRead: it.Usage.CacheReadTokens, Output: it.Usage.OutputTokens, Ctx: it.Ctx})
+			}
 		case it.TurnEnded:
 			endReason = it.EndReason
 		}
 	}
+	tail := dshacp.TailSession(ctx, root, session, 0)
+	for {
+		select {
+		case it, ok := <-tail:
+			if !ok {
+				flush()
+				goto done
+			}
+			apply(it)
+			if it.Replay {
+				// Re-arm the 200ms quiet window; a live item flushes
+				// the batch itself, so only replay items matter here.
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				timer.Reset(replayFlushDelay)
+			}
+		case <-timer.C:
+			flush()
+		}
+	}
+done:
 	if ctx.Err() != nil || endReason == "" {
 		return
 	}

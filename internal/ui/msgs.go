@@ -160,6 +160,13 @@ type WorkerEventMsg struct {
 	Replay bool
 }
 
+// BatchMsg applies several feed msgs in one Update so the screen renders
+// once: history (registry replay, tailer backfill) arrives folded instead
+// of popping tiles and scrolling transcripts one msg at a time.
+type BatchMsg struct {
+	Msgs []tea.Msg
+}
+
 // ModelStatMsg updates one model config's endpoint stats.
 type ModelStatMsg struct {
 	Name   string

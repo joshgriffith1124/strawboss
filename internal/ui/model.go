@@ -450,6 +450,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return model, Listen(m.feed)
 
+	case BatchMsg:
+		// History replayed wholesale: fold the msgs in order through the
+		// normal Update path so the screen renders once. The inner cmds
+		// are dropped — each feed case re-arms Listen, and arming it once
+		// per inner msg would read the feed concurrently. Re-arm exactly
+		// once here instead.
+		var model tea.Model = m
+		for _, inner := range msg.Msgs {
+			model, _ = model.Update(inner)
+		}
+		return model, Listen(m.feed)
+
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		return m, nil

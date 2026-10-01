@@ -1319,6 +1319,53 @@ func TestFeedBatchFoldsInOneUpdate(t *testing.T) {
 	}
 }
 
+// TestBatchMsgReplayMatchesOneByOne: a BatchMsg folds history in one
+// render — the model state must equal applying the same msgs one at a
+// time, and the feed listener must re-arm EXACTLY once (not per inner
+// msg; a double re-arm reads the feed concurrently).
+func TestBatchMsgReplayMatchesOneByOne(t *testing.T) {
+	msgs := []tea.Msg{
+		WorkerUpsertMsg{ID: "w1", Model: "m", Task: "first", Status: "running", Started: time.Now()},
+		WorkerEventMsg{ID: "w1", Kind: "text", Text: "working…", Replay: true},
+		WorkerUsageMsg{ID: "w1", Input: 200, CacheRead: 100, Output: 80, Ctx: 300},
+		WorkerUpsertMsg{ID: "w1", Status: "done", Summary: "ok", Ended: time.Now(), Replay: true},
+	}
+	stepped := New(make(chan tea.Msg))
+	for _, msg := range msgs {
+		next, _ := stepped.Update(msg)
+		stepped = next.(Model)
+	}
+	// The re-arm cmd closes over the model's feed, so build the batched
+	// model over a channel we control and can drain.
+	feed := make(chan tea.Msg, 8)
+	close(feed)
+	batched := New(feed)
+	next, cmd := batched.Update(BatchMsg{Msgs: msgs})
+	batched = next.(Model)
+
+	if len(batched.workers) != 1 || len(stepped.workers) != 1 {
+		t.Fatalf("workers: batch=%d step=%d", len(batched.workers), len(stepped.workers))
+	}
+	if got, want := batched.workers[0], stepped.workers[0]; got != want {
+		t.Errorf("batched row = %+v, stepped = %+v", got, want)
+	}
+	if len(batched.workerEvents["w1"]) != len(stepped.workerEvents["w1"]) {
+		t.Errorf("events: batch=%d step=%d",
+			len(batched.workerEvents["w1"]), len(stepped.workerEvents["w1"]))
+	}
+	if got, want := batched.workerRates["w1"].rate, stepped.workerRates["w1"].rate; got != want {
+		t.Errorf("rate: batch=%v step=%v", got, want)
+	}
+	if cmd == nil {
+		t.Fatal("BatchMsg did not re-arm the listener")
+	}
+	// A single re-arm is one cmd, not a tea.Batch of N Listens: run it
+	// against the drained feed — one clean nil, no further reads.
+	if msg := cmd(); msg != nil {
+		t.Errorf("re-arm read from a closed feed: %v", msg)
+	}
+}
+
 // TestLiveTurnUsageShowsMidTurn: the supervisor counter must move DURING
 // a long turn (per-call estimates), then snap to the authoritative turn
 // totals without double-counting.

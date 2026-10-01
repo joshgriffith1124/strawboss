@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -28,14 +29,23 @@ import (
 )
 
 // drainUntil pulls feed msgs until pred returns true or the timeout hits.
+// Replayed history arrives folded in ui.BatchMsg; the inner msgs are
+// flattened so preds see the events, not the envelope.
 func drainUntil(t *testing.T, feed <-chan tea.Msg, timeout time.Duration, pred func(tea.Msg) bool) []tea.Msg {
 	t.Helper()
 	var got []tea.Msg
+	flatten := func(m tea.Msg) {
+		if b, ok := m.(ui.BatchMsg); ok {
+			got = append(got, b.Msgs...)
+			return
+		}
+		got = append(got, m)
+	}
 	deadline := time.After(timeout)
 	for {
 		select {
 		case m := <-feed:
-			got = append(got, m)
+			flatten(m)
 			if pred(m) {
 				return got
 			}
@@ -121,8 +131,18 @@ func TestRegistryWatcher(t *testing.T) {
 	go o.watchRegistry(ctx)
 
 	msgs := drainUntil(t, o.Feed(), 5*time.Second, func(m tea.Msg) bool {
-		u, ok := m.(ui.WorkerUsageMsg)
-		return ok && u.ID == w1
+		switch v := m.(type) {
+		case ui.BatchMsg: // the first (replay) pass arrives folded
+			for _, inner := range v.Msgs {
+				if u, ok := inner.(ui.WorkerUsageMsg); ok && u.ID == w1 {
+					return true
+				}
+			}
+			return false
+		case ui.WorkerUsageMsg:
+			return v.ID == w1
+		}
+		return false
 	})
 	first := msgs[0].(ui.WorkerUpsertMsg)
 	if first.ID != w1 || first.Status != "running" || first.Task != "old task" {
@@ -187,6 +207,16 @@ func TestRegistryWatcherQueued(t *testing.T) {
 	addEvent(t, registry.Event{TS: time.Now(), Type: "queued", Worker: "w1", Run: "run-q",
 		Model: "qwen-coder", Task: "queued task", Dir: "/repo"})
 	drainUntil(t, o.Feed(), 5*time.Second, func(m tea.Msg) bool {
+		// The first pass from offset 0 folds its (single) msg into a
+		// BatchMsg; accept either shape.
+		if b, ok := m.(ui.BatchMsg); ok {
+			m = nil
+			for _, inner := range b.Msgs {
+				if u, ok := inner.(ui.WorkerUpsertMsg); ok && u.ID == "w1" && u.Status == "queued" {
+					m = u
+				}
+			}
+		}
 		u, ok := m.(ui.WorkerUpsertMsg)
 		return ok && u.ID == "w1" && u.Status == "queued"
 	})
@@ -422,6 +452,15 @@ func TestRegistryWatcherScopesByRun(t *testing.T) {
 	go o.watchRegistry(ctx)
 
 	msgs := drainUntil(t, o.Feed(), 5*time.Second, func(m tea.Msg) bool {
+		// The first (replay) pass arrives folded; look inside the batch.
+		if b, ok := m.(ui.BatchMsg); ok {
+			for _, inner := range b.Msgs {
+				if u, ok := inner.(ui.WorkerUpsertMsg); ok && u.ID == w2 {
+					return true
+				}
+			}
+			return false
+		}
 		u, ok := m.(ui.WorkerUpsertMsg)
 		return ok && u.ID == w2
 	})
@@ -520,8 +559,17 @@ func TestRetryWorkerSpawnsNewWorker(t *testing.T) {
 	defer cancel()
 	go o.watchRegistry(ctx)
 
-	// History replay populates the task/model/dir maps retry reads.
+	// History replay populates the task/model/dir maps retry reads (the
+	// first pass arrives folded in a BatchMsg).
 	drainUntil(t, o.Feed(), 5*time.Second, func(m tea.Msg) bool {
+		if b, ok := m.(ui.BatchMsg); ok {
+			for _, inner := range b.Msgs {
+				if u, ok := inner.(ui.WorkerUsageMsg); ok && u.ID == w1 {
+					return true
+				}
+			}
+			return false
+		}
 		u, ok := m.(ui.WorkerUsageMsg)
 		return ok && u.ID == w1
 	})
@@ -598,8 +646,17 @@ func TestRetryWorkerRunsVerify(t *testing.T) {
 		t.Cleanup(cancel)
 		go o.watchRegistry(ctx)
 
-		// History replay populates the task/model/dir maps retry reads.
+		// History replay populates the task/model/dir maps retry reads
+		// (the first pass arrives folded in a BatchMsg).
 		drainUntil(t, o.Feed(), 5*time.Second, func(m tea.Msg) bool {
+			if b, ok := m.(ui.BatchMsg); ok {
+				for _, inner := range b.Msgs {
+					if u, ok := inner.(ui.WorkerUsageMsg); ok && u.ID == w1 {
+						return true
+					}
+				}
+				return false
+			}
 			u, ok := m.(ui.WorkerUsageMsg)
 			return ok && u.ID == w1
 		})
@@ -698,7 +755,7 @@ func TestDshWorkerTailAndRecovery(t *testing.T) {
 	go o.watchRegistry(ctx)
 
 	var sawTool, sawText, sawUsage bool
-	drainUntil(t, o.Feed(), 10*time.Second, func(m tea.Msg) bool {
+	see := func(m tea.Msg) {
 		switch v := m.(type) {
 		case ui.WorkerEventMsg:
 			if v.ID == w1 && v.Kind == "tool" {
@@ -711,16 +768,159 @@ func TestDshWorkerTailAndRecovery(t *testing.T) {
 			if v.ID == w1 && v.Output == 52 {
 				sawUsage = true
 			}
-		case ui.WorkerUpsertMsg:
-			return v.ID == w1 && v.Status == "done" && strings.Contains(v.Summary, "recovered")
 		}
-		return false
+	}
+	drainUntil(t, o.Feed(), 10*time.Second, func(m tea.Msg) bool {
+		if b, ok := m.(ui.BatchMsg); ok { // replayed history arrives folded
+			for _, inner := range b.Msgs {
+				see(inner)
+			}
+		} else {
+			see(m)
+		}
+		u, ok := m.(ui.WorkerUpsertMsg)
+		return ok && u.ID == w1 && u.Status == "done" && strings.Contains(u.Summary, "recovered")
 	})
 	if !sawTool || !sawText || !sawUsage {
 		t.Errorf("tool=%v text=%v usage=%v", sawTool, sawText, sawUsage)
 	}
 	if o.workerPID[w1] != 12345 {
 		t.Errorf("pid = %d", o.workerPID[w1])
+	}
+}
+
+// TestRegistryFirstPassBatches: the first pass (offset 0) folds the whole
+// history into exactly ONE ui.BatchMsg; a subsequent incremental pass
+// emits its events individually.
+func TestRegistryFirstPassBatches(t *testing.T) {
+	stateDir := t.TempDir()
+	reg := &registry.Registry{Path: filepath.Join(stateDir, "workers.jsonl")}
+
+	// Two workers of pre-existing history: queued+spawned for w1,
+	// spawned+finished for w2.
+	w1, _ := reg.Allocate("ses_1", "qwen-coder", "task one", "/repo", 0)
+	w2, _ := reg.Allocate("ses_2", "qwen-small", "task two", "/repo", 0)
+	if err := reg.Finish(w2, "ses_2", "done", "fine", "/l", time.Second, 10, 0, 5); err != nil {
+		t.Fatal(err)
+	}
+
+	o := New(&supervisor.Driver{}, nil, stateDir)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go o.watchRegistry(ctx)
+
+	var batch ui.BatchMsg
+	select {
+	case m := <-o.Feed():
+		b, ok := m.(ui.BatchMsg)
+		if !ok {
+			t.Fatalf("first feed msg = %T, want ui.BatchMsg", m)
+		}
+		batch = b
+	case <-time.After(5 * time.Second):
+		t.Fatal("no batch within 5s")
+	}
+	// Exactly one batch, then nothing else until the next event: the
+	// whole first pass folded, no individual msgs trailing behind.
+	select {
+	case m := <-o.Feed():
+		t.Fatalf("extra msg before the incremental event: %T", m)
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	var got []string
+	for _, m := range batch.Msgs {
+		u, ok := m.(ui.WorkerUpsertMsg)
+		if !ok {
+			continue // WorkerUsageMsg rides along with the finished upsert
+		}
+		got = append(got, u.ID+"/"+u.Status)
+	}
+	want := []string{w1 + "/running", w2 + "/running", w2 + "/done"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("batch = %v, want %v", got, want)
+	}
+	var lastUpsert ui.WorkerUpsertMsg
+	for _, m := range batch.Msgs {
+		if u, ok := m.(ui.WorkerUpsertMsg); ok {
+			lastUpsert = u
+		}
+	}
+	if lastUpsert.ID != w2 || !lastUpsert.Replay {
+		t.Errorf("replayed finish = %+v, want w2 with Replay", lastUpsert)
+	}
+
+	// Incremental pass: the next event emits individually.
+	w3, err := reg.Allocate("ses_3", "qwen-coder", "task three", "/repo", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case m := <-o.Feed():
+		u, ok := m.(ui.WorkerUpsertMsg)
+		if !ok || u.ID != w3 || u.Status != "running" {
+			t.Fatalf("incremental msg = %#v, want bare upsert for %s", m, w3)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no incremental msg within 5s")
+	}
+}
+
+// TestDshTailReplayBatches: replayed tail items (and only those) arrive as
+// one ui.BatchMsg — flushed on the first live item, the tail closing, or
+// 200ms of quiet.
+func TestDshTailReplayBatches(t *testing.T) {
+	stateDir := t.TempDir()
+	const sid = "ses_dsh_batch"
+	logDir := filepath.Join(stateDir, "dsh-sessions", "proj", sid)
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Pre-existing history: one transcript event and one usage chunk.
+	fixture, err := os.ReadFile(filepath.Join("..", "harness", "dshacp", "testdata", "session.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(logDir, "session.jsonl"), fixture, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	o := New(&supervisor.Driver{}, nil, stateDir)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go o.tailDshWorker(ctx, "w9", sid)
+
+	// 200ms quiet window flushes the batch even with no live traffic.
+	var batch ui.BatchMsg
+	select {
+	case m := <-o.Feed():
+		b, ok := m.(ui.BatchMsg)
+		if !ok {
+			t.Fatalf("first tail msg = %T, want ui.BatchMsg", m)
+		}
+		batch = b
+	case <-time.After(5 * time.Second):
+		t.Fatal("no replay batch within 5s")
+	}
+	var events, usages int
+	for _, m := range batch.Msgs {
+		switch v := m.(type) {
+		case ui.WorkerEventMsg:
+			if v.ID != "w9" || !v.Replay {
+				t.Errorf("batch event = %+v", v)
+			}
+			events++
+		case ui.WorkerUsageMsg:
+			if v.ID != "w9" {
+				t.Errorf("batch usage = %+v", v)
+			}
+			usages++
+		default:
+			t.Errorf("batch held %T", m)
+		}
+	}
+	if events == 0 || usages == 0 {
+		t.Errorf("batch incomplete: events=%d usages=%d", events, usages)
 	}
 }
 
@@ -781,8 +981,17 @@ func TestNtfyPushOnLiveFailure(t *testing.T) {
 	defer cancel()
 	go o.watchRegistry(ctx)
 
-	// Wait for the replay, then a live failure.
+	// Wait for the replay, then a live failure (the replay arrives
+	// folded in a BatchMsg).
 	drainUntil(t, o.Feed(), 5*time.Second, func(m tea.Msg) bool {
+		if b, ok := m.(ui.BatchMsg); ok {
+			for _, inner := range b.Msgs {
+				if u, ok := inner.(ui.WorkerUsageMsg); ok && u.ID == w1 {
+					return true
+				}
+			}
+			return false
+		}
 		u, ok := m.(ui.WorkerUsageMsg)
 		return ok && u.ID == w1
 	})
@@ -1131,13 +1340,20 @@ func TestSessionHistoryAndSwitch(t *testing.T) {
 	// flake under parallel load.
 	var sawSwitch, sawReplay bool
 	drainUntil(t, o.Feed(), 10*time.Second, func(m tea.Msg) bool {
-		switch v := m.(type) {
-		case ui.SessionSwitchedMsg:
-			sawSwitch = true
-		case ui.WorkerUpsertMsg:
-			if v.ID == w1 && v.Status == "done" { // run-1 replayed
+		see := func(v tea.Msg) {
+			if u, ok := v.(ui.WorkerUpsertMsg); ok && u.ID == w1 && u.Status == "done" { // run-1 replayed
 				sawReplay = true
 			}
+		}
+		if b, ok := m.(ui.BatchMsg); ok {
+			for _, inner := range b.Msgs {
+				see(inner)
+			}
+		} else {
+			see(m)
+		}
+		if _, ok := m.(ui.SessionSwitchedMsg); ok {
+			sawSwitch = true
 		}
 		return sawSwitch && sawReplay
 	})

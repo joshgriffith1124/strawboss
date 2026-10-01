@@ -355,7 +355,16 @@ func (o *Orchestrator) pollWorkers(ctx context.Context) {
 			}
 			in := info.Tokens.Input + info.Tokens.Cache.Write
 			out := info.Tokens.Output + info.Tokens.Reasoning
-			o.emit(ctx, ui.WorkerUsageMsg{ID: s.worker, Input: in, CacheRead: info.Tokens.Cache.Read, Output: out})
+			// Context footprint: opencode reports per-message token
+			// accounting, so take the latest assistant message with any
+			// (the session record above is cumulative). While the last
+			// assistant message is still streaming it carries zero tokens;
+			// the previous one's value is the footprint the model saw.
+			footprint := 0
+			if msgs, err := c.Messages(ctx, s.session); err == nil {
+				footprint = opencodeCtx(msgs)
+			}
+			o.emit(ctx, ui.WorkerUsageMsg{ID: s.worker, Input: in, CacheRead: info.Tokens.Cache.Read, Output: out, Ctx: footprint})
 			ratePerModel[s.model] += rates.observe(s.worker, out, now)
 
 			busy := busyByEndpoint[c.Base]
@@ -441,6 +450,24 @@ func (o *Orchestrator) pollWorkers(ctx context.Context) {
 			})
 		}
 	}
+}
+
+// opencodeCtx computes a worker's context footprint from its transcript:
+// input + cache-read + cache-write of the latest assistant message that
+// reports non-zero tokens. Streaming assistant messages carry zero tokens
+// until they finish, so the previous one's value is the footprint the
+// model actually saw.
+func opencodeCtx(msgs []opencode.Message) int {
+	footprint := 0
+	for _, m := range msgs {
+		if m.Info.Role != "assistant" {
+			continue
+		}
+		if n := m.Info.Tokens.Input + m.Info.Tokens.Cache.Read + m.Info.Tokens.Cache.Write; n > 0 {
+			footprint = n
+		}
+	}
+	return footprint
 }
 
 // llmModels lists an OpenAI-compatible endpoint's served models with

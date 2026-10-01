@@ -138,6 +138,9 @@ type WorkerUpsertMsg struct {
 	// toast: restarting after a crash otherwise announces every worker the
 	// crash killed, as if it were failing again right then.
 	Replay bool
+	// Deadline is the worker's current per-attempt deadline; zero keeps
+	// existing so usage/status upserts don't wipe a known one.
+	Deadline time.Time
 }
 
 // WorkerUsageMsg updates a worker's token counts. Input is fresh;
@@ -285,6 +288,10 @@ type KillWorkerMsg struct{ ID string }
 // RetryWorkerMsg is emitted by the UI when the user asks to re-run the
 // selected finished worker's task as a new worker (dashboard `r`).
 type RetryWorkerMsg struct{ ID string }
+
+// ExtendWorkerMsg is emitted by the UI when the user asks to push a
+// running worker's deadline out (dashboard/agent pane `+`).
+type ExtendWorkerMsg struct{ ID string }
 
 // tickMsg drives the run clock, pulse animation, and toast expiry.
 type tickMsg time.Time

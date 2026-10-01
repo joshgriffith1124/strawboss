@@ -151,11 +151,22 @@ type Budget struct {
 	MaxPlan5h float64 `toml:"max_plan_5h"`
 }
 
+// Workers holds per-worker runtime knobs (config.toml [workers]).
+type Workers struct {
+	// ExtendStep is how much one `+` press in the TUI pushes a running
+	// worker's deadline out (a Go duration string, e.g. "5m"). Default
+	// "5m"; must parse to a positive duration.
+	ExtendStepRaw string `toml:"extend_step"`
+	// ExtendStep is the parsed ExtendStepRaw.
+	ExtendStep time.Duration `toml:"-"`
+}
+
 // Config is the app configuration from config.toml.
 type Config struct {
 	Supervisor Supervisor `toml:"supervisor"`
 	Notify     Notify     `toml:"notify"`
 	Budget     Budget     `toml:"budget"`
+	Workers    Workers    `toml:"workers"`
 
 	// StateDir is where logs and session state live. Default ~/.strawboss.
 	StateDir string `toml:"state_dir"`
@@ -198,6 +209,18 @@ func Load(path string) (Config, error) {
 		if err != nil {
 			return Config{}, err
 		}
+	}
+	if cfg.Workers.ExtendStepRaw == "" {
+		cfg.Workers.ExtendStep = 5 * time.Minute
+	} else {
+		d, err := time.ParseDuration(cfg.Workers.ExtendStepRaw)
+		if err != nil {
+			return Config{}, fmt.Errorf("loading %s: workers.extend_step %q: %w", path, cfg.Workers.ExtendStepRaw, err)
+		}
+		if d <= 0 {
+			return Config{}, fmt.Errorf("loading %s: workers.extend_step %q must be positive", path, cfg.Workers.ExtendStepRaw)
+		}
+		cfg.Workers.ExtendStep = d
 	}
 	return cfg, nil
 }

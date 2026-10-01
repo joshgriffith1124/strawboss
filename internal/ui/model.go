@@ -58,19 +58,20 @@ type chatItem struct {
 
 // workerRow is the UI's view of one worker.
 type workerRow struct {
-	ID      string
-	Model   string
-	Task    string
-	Status  string
-	Summary string
-	LogPath string
-	Dir     string
-	Started time.Time
-	Ended   time.Time
-	In, Out int
-	CacheRd int // worker-side prefix re-reads, separate from fresh In
-	Ctx     int // current context footprint (0 = unknown)
-	Steps   int // completed model steps (dsh; 0 = unknown)
+	ID       string
+	Model    string
+	Task     string
+	Status   string
+	Summary  string
+	LogPath  string
+	Dir      string
+	Started  time.Time
+	Ended    time.Time
+	In, Out  int
+	CacheRd  int // worker-side prefix re-reads, separate from fresh In
+	Ctx      int // current context footprint (0 = unknown)
+	Steps    int // completed model steps (dsh; 0 = unknown)
+	Deadline time.Time
 }
 
 // Throughput sampling: a sample closer than minRateWindow after the
@@ -262,6 +263,9 @@ type Model struct {
 	// the live orchestrator; nil in demo mode.
 	OnKillWorker  func(id string)
 	OnRetryWorker func(id string)
+	// OnExtendWorker pushes a worker's deadline out by the configured
+	// step (`+`); nil in demo mode.
+	OnExtendWorker func(id string)
 	// OnListSessions/OnSwitchSession drive the session picker;
 	// OnNewSession starts a fresh session (`/new`, `n`).
 	OnListSessions  func() []SessionInfo
@@ -651,6 +655,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.log("wrk", msg.ID+" "+msg.Status)
 		}
+		if !msg.Deadline.IsZero() {
+			w.Deadline = msg.Deadline
+		}
 		return m, Listen(m.feed)
 	case WorkerUsageMsg:
 		if w := m.worker(msg.ID); w != nil {
@@ -851,6 +858,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.OnRetryWorker(msg.ID)
 		} else {
 			m.showToast("demo replay — worker retry isn't wired to a live harness")
+		}
+		return m, nil
+	case ExtendWorkerMsg:
+		if m.OnExtendWorker != nil {
+			m.OnExtendWorker(msg.ID)
+		} else {
+			m.showToast("demo replay — deadline extension isn't wired to a live harness")
 		}
 		return m, nil
 
@@ -1432,6 +1446,20 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		id := wk.ID
 		return m, func() tea.Msg { return KillWorkerMsg{ID: id} }
+	case "+":
+		if !m.workerKeys() {
+			break
+		}
+		wk := m.selectedWorker()
+		if wk == nil {
+			break
+		}
+		if wk.Status != "running" && wk.Status != "queued" {
+			m.showToast(wk.ID + " isn't running — nothing to extend")
+			break
+		}
+		id := wk.ID
+		return m, func() tea.Msg { return ExtendWorkerMsg{ID: id} }
 	case "r":
 		if !m.workerKeys() {
 			break

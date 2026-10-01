@@ -2,7 +2,9 @@ package ui
 
 import (
 	"fmt"
+	"math"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -79,6 +81,31 @@ func (m Model) workerCtxLabel(wk *workerRow) string {
 	return sDim.Render(label)
 }
 
+// countdownLabel is the time left to a deadline: "⏱ 4m" (minutes, rounded
+// up), "⏱ <1m" under a minute, "⏱ 0m" once past. style returns the style
+// for the label — amber under five minutes, dim otherwise.
+func (m Model) countdownLabel(d time.Time) (string, lipgloss.Style) {
+	label, style := m.timeLeft(d)
+	return "⏱ " + label, style
+}
+
+// timeLeft is the minutes to d by the UI clock, rounded up — "4m", "<1m",
+// "0m" once past — styled amber under five minutes, dim otherwise.
+func (m Model) timeLeft(d time.Time) (string, lipgloss.Style) {
+	left := d.Sub(m.now)
+	label := fmt.Sprintf("%dm", int(math.Ceil(left.Minutes())))
+	switch {
+	case left <= 0:
+		label = "0m"
+	case left < time.Minute:
+		label = "<1m"
+	}
+	if left < 5*time.Minute {
+		return label, sAmberB
+	}
+	return label, sDim
+}
+
 // viewWorkerPane is one worker's detail pane: the status pill plus worktree in
 // the head, the task's first line, the transcript tail (wrapped, newest at
 // the bottom), and for finished workers the summary with duration and tokens.
@@ -103,9 +130,20 @@ func (m Model) viewWorkerPane(wk *workerRow, w, h int, focused bool) string {
 		text, fg, bg = glyphFail+" "+wk.ID+" ›", cErr, lipgloss.Color("#2A1214")
 	}
 	head := pill(text, fg, bg)
-	// Header right like the supervisor pane: context gauge first, the model
-	// name only while both fit.
-	right := m.workerCtxLabel(wk)
+	// Header right like the supervisor pane: the deadline countdown (when
+	// one is known) first, then the context gauge; the model name drops
+	// when narrow but the countdown and ctx label stay.
+	var right string
+	if wk.Status == "running" && !wk.Deadline.IsZero() {
+		label, style := m.countdownLabel(wk.Deadline)
+		right = style.Render(label)
+	}
+	if ctx := m.workerCtxLabel(wk); ctx != "" {
+		if right != "" {
+			right += sFaint.Render(" · ")
+		}
+		right += ctx
+	}
 	if model := sDim.Render(wk.Model); right == "" {
 		right = model
 	} else if withModel := right + sFaint.Render(" · ") + model; lipgloss.Width(head)+lipgloss.Width(withModel)+4 <= w-2 {

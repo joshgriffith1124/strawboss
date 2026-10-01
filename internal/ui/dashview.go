@@ -249,6 +249,13 @@ func (m Model) workerDetailLines(wk *workerRow, w int) []string {
 		lines = append(lines, " "+ctx)
 	}
 
+	// Deadline: when it ends and how much is left (amber under five
+	// minutes), for a running worker with a known deadline.
+	if wk.Status == "running" && !wk.Deadline.IsZero() {
+		left, style := m.timeLeft(wk.Deadline)
+		lines = append(lines, " "+style.Render("ends "+wk.Deadline.Local().Format("15:04")+" · "+left+" left"))
+	}
+
 	meta := fmt.Sprintf("started %s · ran %s", wk.Started.Local().Format("15:04:05"), formatMinSec(elapsed))
 	if wk.Steps > 0 {
 		meta += fmt.Sprintf(" · step %d", wk.Steps)

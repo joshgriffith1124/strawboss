@@ -84,13 +84,22 @@ type Orchestrator struct {
 	workerTask      map[string]string    // wN → task text (for retry)
 	workerPID       map[string]int       // wN → worker subprocess pid (dsh; 0 for opencode)
 	workerStarted   map[string]time.Time // wN → spawn time (reaping: predates the last boot?)
+	workerDeadline  map[string]time.Time // wN → current per-attempt deadline (registry "deadline" events)
 	unfinished      map[string]bool      // wN spawned but no finished event yet
 	reaped          map[string]bool      // wN closed as dead by x: its finished event replays silent
 	tailing         map[string]bool      // wN with a session-log tailer running (dsh)
 	dshOut          map[string]int       // wN → latest output tokens seen by its tailer
-	stream          *supervisor.Stream   // the persistent supervisor process, if running
-	servers         []*managedServer     // managed opencode serve children
-	subscribed      map[string]bool      // opencode endpoints with an event subscriber
+	// lastRequested remembers each deadline extension the TUI itself
+	// requested, so presses stack even before the registry event lands.
+	lastRequested map[string]time.Time
+
+	// ExtendStep is how much each `+` press pushes a worker's deadline
+	// out; zero means the 5m default. Set from config in buildLive.
+	ExtendStep time.Duration
+
+	stream     *supervisor.Stream // the persistent supervisor process, if running
+	servers    []*managedServer   // managed opencode serve children
+	subscribed map[string]bool    // opencode endpoints with an event subscriber
 
 	// budget guard accumulation (see budget.go)
 	supTotals     supUsageTotals // per-run supervisor ledger (supusage.go)
@@ -124,10 +133,12 @@ func New(d *supervisor.Driver, models []config.ModelConfig, stateDir string) *Or
 		workerTask:      map[string]string{},
 		workerPID:       map[string]int{},
 		workerStarted:   map[string]time.Time{},
+		workerDeadline:  map[string]time.Time{},
 		unfinished:      map[string]bool{},
 		reaped:          map[string]bool{},
 		tailing:         map[string]bool{},
 		dshOut:          map[string]int{},
+		lastRequested:   map[string]time.Time{},
 		toolCmds:        map[string]string{},
 		deniedNotified:  map[string]bool{},
 		subscribed:      map[string]bool{},

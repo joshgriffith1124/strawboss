@@ -8,10 +8,13 @@ package runner
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/joshgriffith1124/strawboss/internal/config"
+	"github.com/joshgriffith1124/strawboss/internal/deadline"
 	"github.com/joshgriffith1124/strawboss/internal/harness"
 	"github.com/joshgriffith1124/strawboss/internal/harness/dshacp"
 	"github.com/joshgriffith1124/strawboss/internal/harness/opencode"
@@ -54,6 +57,10 @@ type Outcome struct {
 	Added    []string // files the worker created (from before/after snapshots); nil when unknown
 	Changed  []string // files the worker touched (created, modified or deleted); nil when unknown
 }
+
+// watchInterval is how often Run's watcher polls the worker's deadline
+// request file for operator extensions. Var so tests can tighten it.
+var watchInterval = 2 * time.Second
 
 // SlotsDir is where concurrency-slot lock files live for a registry: the
 // state dir's slots/ (the registry is <state>/workers.jsonl), so every
@@ -113,7 +120,11 @@ func takeSlot(ctx context.Context, reg *registry.Registry, mc config.ModelConfig
 // A worker in a git repo gets before/after snapshots; the pair is saved under
 // refs/strawboss/snap/<id>/ (so the TUI can undo its edits) only when the
 // dir is not a linked worktree, and the created-file list is reported in
-// Outcome.Added.
+// Outcome.Added. When ctx carries an extendable deadline (deadline.
+// WithTimeout) its initial time is recorded in the registry, a request file
+// written by the operator during the run extends it, the extension is
+// recorded too, and the result summary carries an "[deadline extended
+// ...]" note.
 func Run(ctx context.Context, h harness.WorkerHarness, reg *registry.Registry, mc config.ModelConfig, prompt, task, dir string, warn func(string), decorate func(*harness.Result)) (oc Outcome) {
 	if warn == nil {
 		warn = func(string) {}
@@ -179,6 +190,50 @@ func Run(ctx context.Context, h harness.WorkerHarness, reg *registry.Registry, m
 		return oc
 	}
 
+	// Operator-extendable deadline: when ctx carries one (deadline.
+	// WithTimeout), record its current time in the registry so the TUI can
+	// show time left, and watch the worker's request file so a push-back
+	// extends both the ctx and the recorded deadline. watchCtx is ours —
+	// the attempt ctx's cancellation must not stop watching before Run is
+	// done cleaning up. Extensions are accumulated as newAt minus the
+	// ORIGINAL deadline so the note reports the total push-back.
+	var (
+		extMu    sync.Mutex
+		origAt   time.Time
+		extended time.Duration
+	)
+	d := deadline.FromContext(ctx)
+	stateDir := filepath.Dir(reg.Path)
+	var stopWatch context.CancelFunc
+	if d != nil {
+		origAt = d.At()
+		if err := reg.SetDeadline(oc.WorkerID, origAt); err != nil {
+			warn("record deadline: " + err.Error())
+		}
+		var watchCtx context.Context
+		watchCtx, stopWatch = context.WithCancel(context.Background())
+		reqPath := deadline.Path(stateDir, oc.WorkerID)
+		go d.Watch(watchCtx, reqPath, watchInterval, func(newAt time.Time) {
+			extMu.Lock()
+			extended = newAt.Sub(origAt)
+			extMu.Unlock()
+			if err := reg.SetDeadline(oc.WorkerID, newAt); err != nil {
+				warn("record deadline extension: " + err.Error())
+			}
+		})
+	}
+	// Run is returning: stop watching and drop the request file so a
+	// stale request can't extend a later attempt with the same id.
+	defer func() {
+		if stopWatch == nil {
+			return
+		}
+		stopWatch()
+		if err := os.Remove(deadline.Path(stateDir, oc.WorkerID)); err != nil && !os.IsNotExist(err) {
+			warn("deadline request cleanup: " + err.Error())
+		}
+	}()
+
 	if undo {
 		if serr := snapshot.Save(dir, oc.WorkerID, "before", before); serr != nil {
 			warn("undo snapshot: " + serr.Error())
@@ -226,6 +281,19 @@ func Run(ctx context.Context, h harness.WorkerHarness, reg *registry.Registry, m
 				oc.Changed = changed
 			}
 		}
+	}
+	// Operator push-back is visible to everyone the summary reaches (the
+	// supervisor's terse result, the registry, the TUI): prefix it before
+	// decorate so notes added later stack beneath it.
+	extMu.Lock()
+	total := extended
+	extMu.Unlock()
+	if total > 0 {
+		mins := int(total.Minutes())
+		if mins < 1 {
+			mins = 1
+		}
+		res.Summary = fmt.Sprintf("[deadline extended +%dm by operator]\n%s", mins, res.Summary)
 	}
 	if decorate != nil {
 		decorate(&res)

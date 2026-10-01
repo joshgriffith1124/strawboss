@@ -21,6 +21,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/joshgriffith1124/strawboss/internal/config"
+	"github.com/joshgriffith1124/strawboss/internal/deadline"
 	"github.com/joshgriffith1124/strawboss/internal/harness/opencode"
 	"github.com/joshgriffith1124/strawboss/internal/registry"
 	"github.com/joshgriffith1124/strawboss/internal/supervisor"
@@ -1639,5 +1640,64 @@ func TestModelWindowsRemembered(t *testing.T) {
 	got := loadModelWindows(stateDir)
 	if got["claude-opus-5[1m]"] != 1_000_000 || got["claude-haiku-4-5-20251001"] != 200_000 || len(got) != 2 {
 		t.Errorf("windows = %v", got)
+	}
+}
+
+// readDeadlineRequest reads back the extension request file and parses it
+// (RFC3339), failing the test on any I/O or parse problem.
+func readDeadlineRequest(t *testing.T, stateDir, id string) time.Time {
+	t.Helper()
+	data, err := os.ReadFile(deadline.Path(stateDir, id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := time.Parse(time.RFC3339, strings.TrimSpace(string(data)))
+	if err != nil {
+		t.Fatalf("request file %q: %v", data, err)
+	}
+	return want
+}
+
+// TestOnExtendWorker: dashboard `+` writes a deadline.Request file the
+// worker's delegate polls, toasts, and stacks on repeated presses; a
+// finished worker refuses.
+func TestOnExtendWorker(t *testing.T) {
+	stateDir := t.TempDir()
+	o := New(&supervisor.Driver{}, nil, stateDir)
+	o.ExtendStep = 5 * time.Minute
+	known := time.Now().Add(10 * time.Minute).Round(time.Second)
+	o.mu.Lock()
+	o.unfinished["w1"] = true
+	o.workerDeadline["w1"] = known
+	o.mu.Unlock()
+
+	// A finished worker: toast, no request file.
+	o.OnExtendWorker("w2")
+	drainUntil(t, o.Feed(), 5*time.Second, func(m tea.Msg) bool {
+		tm, ok := m.(ui.ToastMsg)
+		return ok && strings.Contains(tm.Text, "nothing to extend")
+	})
+	if _, err := os.Stat(deadline.Path(stateDir, "w2")); !os.IsNotExist(err) {
+		t.Errorf("refused worker wrote a request file: stat err = %v", err)
+	}
+
+	// First press: known+5m.
+	o.OnExtendWorker("w1")
+	drainUntil(t, o.Feed(), 5*time.Second, func(m tea.Msg) bool {
+		tm, ok := m.(ui.ToastMsg)
+		return ok && strings.Contains(tm.Text, "+5m")
+	})
+	if got := readDeadlineRequest(t, stateDir, "w1"); !got.Equal(known.Add(5 * time.Minute)) {
+		t.Errorf("request = %v, want known+5m = %v", got, known.Add(5*time.Minute))
+	}
+
+	// Second press stacks: known+10m.
+	o.OnExtendWorker("w1")
+	drainUntil(t, o.Feed(), 5*time.Second, func(m tea.Msg) bool {
+		tm, ok := m.(ui.ToastMsg)
+		return ok && strings.Contains(tm.Text, "+5m")
+	})
+	if got := readDeadlineRequest(t, stateDir, "w1"); !got.Equal(known.Add(10 * time.Minute)) {
+		t.Errorf("stacked request = %v, want known+10m = %v", got, known.Add(10*time.Minute))
 	}
 }

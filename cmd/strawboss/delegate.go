@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/joshgriffith1124/strawboss/internal/config"
+	"github.com/joshgriffith1124/strawboss/internal/deadline"
 	"github.com/joshgriffith1124/strawboss/internal/harness"
 	"github.com/joshgriffith1124/strawboss/internal/live"
 	"github.com/joshgriffith1124/strawboss/internal/registry"
@@ -275,8 +276,10 @@ func runDelegate(args []string, stdout io.Writer) error {
 			}
 			// Per-attempt deadline (flag > model > default), created when
 			// the attempt starts and cancelled when it returns, so a slow
-			// worker spends only its own clock, never the batch's.
-			attemptCtx, cancelAttempt := context.WithTimeout(ctx, timeoutFor(*timeout, mc))
+			// worker spends only its own clock, never the batch's. A
+			// deadline (not a plain ctx) so the operator can push it back
+			// mid-run; the runner records and watches for extensions.
+			attemptCtx, cancelAttempt := deadline.WithTimeout(ctx, timeoutFor(*timeout, mc))
 			outcomes[i] = runner.Run(attemptCtx, h, reg, mc, prompt, task, workerDir, warn, decorate)
 			cancelAttempt()
 			// Cheap-first escalation: a failure on the requested (cheap)
@@ -300,8 +303,9 @@ func runDelegate(args []string, stdout io.Writer) error {
 					}
 					// The retry's clock is also created now: the first
 					// attempt's deadline is already spent, so the retry
-					// model's timeout is measured from here.
-					retryCtx, cancelRetry := context.WithTimeout(ctx, timeoutFor(*timeout, next))
+					// model's timeout is measured from here. Extendable
+					// like the first attempt's.
+					retryCtx, cancelRetry := deadline.WithTimeout(ctx, timeoutFor(*timeout, next))
 					outcomes[i] = runEscalated(retryCtx, outcomes[i], next, mc.Name,
 						retryPrompt, task, workerDir, *stateDir, reg, warn, decorate)
 					cancelRetry()

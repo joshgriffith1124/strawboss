@@ -92,6 +92,46 @@ allowed_tools = ["Bash(strawboss delegate:*)", "Read"]
 	}
 }
 
+func TestLoadExtendStep(t *testing.T) {
+	tests := []struct {
+		name    string
+		extend  string
+		want    time.Duration
+		wantErr string
+	}{
+		{name: "unset keeps 5m default", extend: "", want: 5 * time.Minute},
+		{name: "10m parsed", extend: "10m", want: 10 * time.Minute},
+		{name: "garbage errors", extend: "abc", wantErr: "extend_step"},
+		{name: "zero errors", extend: "0s", wantErr: "must be positive"},
+		{name: "negative errors", extend: "-1m", wantErr: "must be positive"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			toml := ""
+			if tt.extend != "" {
+				toml = "[workers]\nextend_step = \"" + tt.extend + "\"\n"
+			}
+			cfg, err := Load(writeFile(t, "config.toml", toml))
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("err = %v, want containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Workers.ExtendStep != tt.want {
+				t.Errorf("ExtendStep = %v, want %v", cfg.Workers.ExtendStep, tt.want)
+			}
+			if cfg.Workers.ExtendStepRaw != tt.extend {
+				t.Errorf("ExtendStepRaw = %q, want %q", cfg.Workers.ExtendStepRaw, tt.extend)
+			}
+		})
+	}
+}
+
 func TestLoadMissingFileReturnsDefaults(t *testing.T) {
 	cfg, err := Load(filepath.Join(t.TempDir(), "nope.toml"))
 	if err != nil {

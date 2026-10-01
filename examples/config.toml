@@ -21,3 +21,7 @@
 # delegations until lifted (--new, or the plan window recovering).
 # max_cost_usd = 5.0              # notional supervisor cost per run
 # max_plan_5h = 80                # percent of the 5-hour plan window
+
+[workers]
+# extend_step = "5m"              # how much one `+` press pushes a running
+#                                 # worker's deadline out (Go duration)

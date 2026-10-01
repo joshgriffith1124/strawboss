@@ -70,7 +70,8 @@ results](docs/screenshot-dashboard.png)
   **Logs**
 - Live worker panes with streaming transcripts, per-worker tok/s
   sparklines, context-window usage, kill (`x`) / retry (`r`) / retry-all
-  (`R`), undo a worker's edits (`u`, press twice), filtering (`/`); a
+  (`R`), undo a worker's edits (`u`, press twice), deadline extensions
+  (`+`, step configurable via `workers.extend_step`), filtering (`/`); a
   context gauge on the supervisor pane says when a fresh session (`/new`)
   would be cheaper
 - Paste images into the supervisor chat (`alt+v`, or `ctrl+v` where the

@@ -149,6 +149,13 @@ func (o *Orchestrator) applyRegistryEvent(ctx context.Context, ev registry.Event
 				LogPath: ev.LogPath, Ended: ev.TS, Replay: replay},
 			ui.WorkerUsageMsg{ID: ev.Worker, Input: ev.InputTokens, CacheRead: ev.CacheReadTokens, Output: ev.OutputTokens},
 		)
+	case "deadline":
+		o.mu.Lock()
+		o.workerDeadline[ev.Worker] = ev.Deadline
+		o.mu.Unlock()
+		// A bare upsert: only the deadline — the merge must keep the
+		// row's other fields.
+		o.emitBatch(ctx, batch, ui.WorkerUpsertMsg{ID: ev.Worker, Deadline: ev.Deadline})
 	}
 }
 

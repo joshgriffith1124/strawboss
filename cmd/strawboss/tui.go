@@ -216,6 +216,7 @@ func buildLive(stateDir, modelsPath string, fresh bool) (ui.Model, func(), error
 	o.RunID = runID
 	o.Notify = cfg.Notify
 	o.Budget = cfg.Budget
+	o.ExtendStep = cfg.Workers.ExtendStep
 	o.Run(context.Background())
 
 	// Inside a herdr pane, mirror the feed to herdr's agent sidebar. It
@@ -251,6 +252,7 @@ func buildLive(stateDir, modelsPath string, fresh bool) (ui.Model, func(), error
 	}
 	m.OnKillWorker = o.OnKillWorker
 	m.OnRetryWorker = o.OnRetryWorker
+	m.OnExtendWorker = o.OnExtendWorker
 	m.OnListSessions = o.ListSessions
 	m.OnSwitchSession = o.SwitchSession
 	m.OnNewSession = o.NewSession

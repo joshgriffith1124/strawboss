@@ -2,9 +2,11 @@ package live
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"time"
 
+	"github.com/joshgriffith1124/strawboss/internal/deadline"
 	"github.com/joshgriffith1124/strawboss/internal/registry"
 	"github.com/joshgriffith1124/strawboss/internal/repomap"
 	"github.com/joshgriffith1124/strawboss/internal/runner"
@@ -79,6 +81,50 @@ func (o *Orchestrator) OnKillWorker(id string) {
 	}()
 }
 
+// extendStepDefault is the extend step when config leaves it unset
+// (workers.extend_step in config.toml).
+const extendStepDefault = 5 * time.Minute
+
+// OnExtendWorker pushes a worker's deadline out by ExtendStep (ui hook,
+// `+`). The request lands as a file the worker's delegate process polls
+// (deadline.Request); the registry's "deadline" event then flows the new
+// time back here and to the UI. Repeated presses before the registry
+// event lands stack via the lastRequested map: each press bases on the
+// later of the known deadline, the last requested one, and now.
+func (o *Orchestrator) OnExtendWorker(id string) {
+	o.mu.Lock()
+	unfinished := o.unfinished[id]
+	known := o.workerDeadline[id]
+	last := o.lastRequested[id]
+	step := o.ExtendStep
+	o.mu.Unlock()
+
+	if !unfinished {
+		o.emitAsync(ui.ToastMsg{Text: id + " isn't running — nothing to extend"})
+		return
+	}
+	if step <= 0 {
+		step = extendStepDefault
+	}
+	now := time.Now()
+	base := now
+	if known.After(base) {
+		base = known
+	}
+	if last.After(base) {
+		base = last
+	}
+	target := base.Add(step)
+	if err := deadline.Request(o.StateDir, id, target); err != nil {
+		o.emitAsync(ui.ToastMsg{Text: "extend " + id + ": " + err.Error()})
+		return
+	}
+	o.mu.Lock()
+	o.lastRequested[id] = target
+	o.mu.Unlock()
+	o.emitAsync(ui.ToastMsg{Text: fmt.Sprintf("%s +%dm → ends %s", id, int(step.Minutes()), target.Local().Format("15:04"))})
+}
+
 // OnRetryWorker re-runs a finished worker's task as a NEW worker with the
 // same model and directory (ui hook, dashboard `r`). The TUI spawns it
 // itself through the harness + registry — zero supervisor tokens (the
@@ -128,7 +174,9 @@ func (o *Orchestrator) OnRetryWorker(id string) {
 	o.mu.Unlock()
 	o.emitAsync(ui.ToastMsg{Text: "retrying " + id + "'s task on " + model})
 	go func() {
-		ctx, cancel := context.WithTimeout(ctx, retryTimeout)
+		// Extendable deadline: the operator can push a retry back too,
+		// and the runner records/watches it exactly like delegate's.
+		ctx, cancel := deadline.WithTimeout(ctx, retryTimeout)
 		defer cancel()
 		reg := &registry.Registry{Path: filepath.Join(o.StateDir, "workers.jsonl"), Run: run}
 		warn := func(s string) { o.emitAsync(ui.RawLogMsg{Source: "wrk", Line: s}) }

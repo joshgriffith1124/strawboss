@@ -216,8 +216,10 @@ func (m Model) workerDetailLines(wk *workerRow, w int) []string {
 		end = wk.Ended
 	}
 	elapsed := end.Sub(wk.Started)
-	if r, ok := m.workerRates[wk.ID]; ok && wk.Status == "running" && r.rate > 0 && m.now.Sub(r.at) < 8*time.Second {
-		tok += sDim.Render(" · ") + sTealB.Render(fmt.Sprintf("%.0f tok/s", r.rate)) + sDim.Render(" live")
+	// Usage arrives once per model step, so the "live" figure is the
+	// recent steps' smoothed rate, held between steps.
+	if rate := m.liveRate(wk.ID); wk.Status == "running" && rate > 0 {
+		tok += sDim.Render(" · ") + sTealB.Render(fmt.Sprintf("%.0f tok/s", rate)) + sDim.Render(" recent")
 	} else if wk.Out > 0 && elapsed > time.Second {
 		tok += sDim.Render(fmt.Sprintf(" · avg %.0f tok/s", float64(wk.Out)/elapsed.Seconds()))
 	}

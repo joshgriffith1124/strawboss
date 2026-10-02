@@ -913,6 +913,82 @@ func TestWorkerUsageLumpRate(t *testing.T) {
 	}
 }
 
+// TestWorkerRateWindow: the rate anchor and staleness window. Idle polls
+// must not move the anchor (a 60s step of 2500 tokens read as 1250 tok/s
+// when each 2s poll reset the divisor), a sub-minRateWindow burst is
+// absorbed without credit so its tokens don't inflate the next step, and
+// the rate survives a silent worker for rateStale (90s), not 8s.
+// The handler stamps time.Now(); like TestWorkerUsageLumpRate we drive
+// time by re-aging the anchors between samples (and m.now for staleness).
+func TestWorkerRateWindow(t *testing.T) {
+	type sample struct {
+		out    int           // cumulative output in the sample
+		anchor time.Duration // how long ago the counter last advanced
+		seen   time.Duration // silence after the sample: liveRate age (0 = fresh)
+		want   float64       // liveRate after the sample
+	}
+	tests := []struct {
+		name    string
+		samples []sample
+	}{
+		{
+			name: "idle polls don't dilute a 60s step",
+			samples: []sample{
+				{out: 0, anchor: 0, want: 0},                // first sight: seed
+				{out: 0, anchor: 2 * time.Second, want: 0},  // poll: anchor holds
+				{out: 0, anchor: 30 * time.Second, want: 0}, // poll: still holds
+				{out: 0, anchor: 58 * time.Second, want: 0}, // poll: still holds
+				{out: 2500, anchor: 60 * time.Second, want: 2500.0 / 60},
+				{out: 2500, anchor: 62 * time.Second, want: 2500.0 / 60}, // held
+			},
+		},
+		{
+			name: "burst is absorbed; only post-burst tokens count",
+			samples: []sample{
+				{out: 100, anchor: 0, want: 0}, // seed
+				// Two samples <500ms after the anchor: counts absorbed,
+				// not credited, so the divisor starts after the burst.
+				{out: 300, anchor: 100 * time.Millisecond, want: 0},
+				{out: 300, anchor: 100 * time.Millisecond, want: 0},
+				{out: 400, anchor: 10 * time.Second, want: 10}, // 100/10, not 300/10
+			},
+		},
+		{
+			name: "rate survives 30s of silence, dies at 90s",
+			samples: []sample{
+				{out: 0, anchor: 0, want: 0},                     // seed
+				{out: 2000, anchor: 10 * time.Second, want: 200}, // first advance
+				{out: 2000, anchor: 12 * time.Second, want: 200}, // idle poll holds it
+				{out: 2000, anchor: 12 * time.Second, seen: 30 * time.Second, want: 200},
+				{out: 2000, anchor: 12 * time.Second, seen: 90 * time.Second, want: 0},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := demoState(t) // w2 is a queued worker with no usage yet
+			for i, s := range tt.samples {
+				m.now = time.Now()
+				if i > 0 {
+					r := m.workerRates["w2"]
+					r.at = m.now.Add(-s.anchor)
+					m.workerRates["w2"] = r
+				}
+				m = apply(t, m, WorkerUsageMsg{ID: "w2", Input: 100, Output: s.out})
+				if s.seen > 0 { // silence: age the last-sample stamp
+					r := m.workerRates["w2"]
+					r.seen = m.now.Add(-s.seen)
+					m.workerRates["w2"] = r
+				}
+				if got := m.liveRate("w2"); math.Abs(got-s.want) > 1 {
+					t.Errorf("sample %d (out=%d, advance %vs ago, silent %vs): rate = %v, want ~%v",
+						i, s.out, s.anchor, s.seen, got, s.want)
+				}
+			}
+		})
+	}
+}
+
 func TestSupervisorDetailRecentResults(t *testing.T) {
 	m := demoState(t)
 	m = apply(t, m,

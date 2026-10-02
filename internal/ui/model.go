@@ -79,7 +79,9 @@ type workerRow struct {
 // with no sample of any kind for rateStale no longer counts as live.
 const (
 	minRateWindow = 500 * time.Millisecond
-	rateStale     = 8 * time.Second
+	// dsh reports usage once per model step and a step can run a minute
+	// or more: a shorter window dropped live workers to 0 between steps.
+	rateStale = 90 * time.Second
 )
 
 // liveRate is a worker's smoothed output tok/s while its samples are
@@ -671,9 +673,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			r.seen = now
 			// Samples closer than minRateWindow after the last advance
 			// (a startup replay or a batched burst) would divide real
-			// tokens by ~0s: keep the older anchor so the next sample
-			// spans a real interval.
+			// tokens by ~0s: absorb their count without crediting it, so
+			// the next sample measures only what is generated after it.
 			if !r.at.IsZero() && now.Sub(r.at) < minRateWindow {
+				if msg.Output > r.out {
+					r.out = msg.Output
+				}
 				w.In, w.Out = msg.Input, msg.Output
 				w.CacheRd = msg.CacheRead
 				if msg.Ctx > 0 {
@@ -704,7 +709,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					r.hist = r.hist[len(r.hist)-120:]
 				}
 			}
-			r.out, r.at = msg.Output, now
+			// No advance leaves the anchor alone: the next step's tokens
+			// are divided by the time since the LAST advance, not by the
+			// poll interval (a 60s step of 2500 tokens read as 1250 tok/s).
 			m.workerRates[msg.ID] = r
 			w.In, w.Out = msg.Input, msg.Output
 			w.CacheRd = msg.CacheRead

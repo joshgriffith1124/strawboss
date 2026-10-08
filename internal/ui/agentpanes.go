@@ -37,6 +37,16 @@ func (m Model) viewSupPane(w, h int, focused bool) string {
 	}
 	sep := sFaint.Render(" · ")
 	right := strings.Join(parts, sep)
+	// Repo/branch after the pill, dimmed. It outranks the model name (the
+	// sidebar shows that too) but not the indicators: it takes what they
+	// leave, dropping the repo name before cutting the branch, and drops
+	// entirely when not even a readable branch fits. Leaving one spare
+	// cell (room = gap-2) keeps pane()'s gap ≥ 1.
+	if room := w - 6 - lipgloss.Width(right) - lipgloss.Width(head); room >= 4 {
+		if label := m.repoLabel(room); label != "" {
+			head += sDim.Render(" " + label)
+		}
+	}
 	if m.supModel != "" {
 		withModel := sDim.Render(m.supModel)
 		if right != "" {
@@ -46,31 +56,25 @@ func (m Model) viewSupPane(w, h int, focused bool) string {
 			right = withModel
 		}
 	}
-	// Repo/branch after the pill, dimmed — the header's lowest priority:
-	// it takes only what the right side left over, truncates first, and
-	// drops entirely when even a readable minimum doesn't fit. Leaving one
-	// spare cell (room = gap-2) keeps pane()'s gap ≥ 1, so `right` never
-	// loses its slot to the label.
-	if label := m.repoLabel(); label != "" {
-		if room := w - 6 - lipgloss.Width(right) - lipgloss.Width(head); room >= 4 {
-			head += sDim.Render(" " + truncPlain(label, room))
-		}
-	}
 	return pane(head, right, lines, w, h, border)
 }
 
-// repoLabel is the repo and branch the supervisor works in — "strawboss ⎇
-// repo-info-pane", plus " *" when the worktree is dirty. Empty until the
-// first RepoInfoMsg arrives.
-func (m Model) repoLabel() string {
+// repoLabel is the repo and branch the supervisor works in, fitted to room
+// cells: "strawboss ⎇ repo-info-pane *" (`*` = uncommitted changes), else
+// "⎇ repo-info-pane *" without the repo name, else the branch cut short.
+// Empty until the first RepoInfoMsg arrives.
+func (m Model) repoLabel(room int) string {
 	if m.repoName == "" {
 		return ""
 	}
-	label := m.repoName + " ⎇ " + m.repoBranch
+	branch := "⎇ " + m.repoBranch
 	if m.repoDirty {
-		label += " *"
+		branch += " *"
 	}
-	return label
+	if full := m.repoName + " " + branch; lipgloss.Width(full) <= room {
+		return full
+	}
+	return truncPlain(branch, room)
 }
 
 // supCtxLabel is the supervisor's context gauge, "ctx 168k/1.0M 17%": red

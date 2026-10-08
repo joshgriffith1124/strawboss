@@ -41,19 +41,52 @@ func TestWrapEventLinesHang(t *testing.T) {
 }
 
 // TestRepoLabel: empty before the first RepoInfoMsg, then "repo ⎇ branch"
-// with a " *" suffix when the worktree is dirty.
+// with a " *" suffix when the worktree is dirty; short on room, the repo
+// name drops before the branch is cut.
 func TestRepoLabel(t *testing.T) {
 	m := New(nil)
-	if got := m.repoLabel(); got != "" {
+	if got := m.repoLabel(80); got != "" {
 		t.Fatalf("fresh model repoLabel = %q, want empty", got)
 	}
 	m = agentsFeed(t, m, RepoInfoMsg{Repo: "strawboss", Branch: "repo-info-pane"})
-	if got := m.repoLabel(); got != "strawboss ⎇ repo-info-pane" {
+	if got := m.repoLabel(80); got != "strawboss ⎇ repo-info-pane" {
 		t.Fatalf("repoLabel = %q", got)
 	}
 	m = agentsFeed(t, m, RepoInfoMsg{Repo: "strawboss", Branch: "repo-info-pane", Dirty: true})
-	if got := m.repoLabel(); got != "strawboss ⎇ repo-info-pane *" {
-		t.Fatalf("dirty repoLabel = %q", got)
+	tests := []struct {
+		room int
+		want string
+	}{
+		{80, "strawboss ⎇ repo-info-pane *"},
+		{20, "⎇ repo-info-pane *"}, // repo name dropped, branch whole
+	}
+	for _, tt := range tests {
+		if got := m.repoLabel(tt.room); got != tt.want {
+			t.Errorf("repoLabel(%d) = %q, want %q", tt.room, got, tt.want)
+		}
+	}
+	if got := m.repoLabel(10); lipgloss.Width(got) > 10 || !strings.HasPrefix(got, "⎇ repo") {
+		t.Errorf("repoLabel(10) = %q, want the branch cut to fit", got)
+	}
+}
+
+// TestSupHeaderBranchBeatsModel: with a long model name and the indicators
+// on, the whole branch still shows — the model name yields first.
+func TestSupHeaderBranchBeatsModel(t *testing.T) {
+	m := agentsFixture(t, 128, 45, 0)
+	m.supModel = "claude-opus-5-5[1m]-with-a-long-suffix"
+	m.rolesOn = true
+	m.supCtx, m.supCtxWindow = 168000, 1000000
+	m = agentsFeed(t, m, RepoInfoMsg{Repo: "strawboss", Branch: "repo-info-pane", Dirty: true})
+	m.tab = tabChat
+	out := m.View()
+	if !strings.Contains(out, "repo-info-pane *") {
+		t.Errorf("branch cut off in the supervisor header:\n%s", strings.SplitN(out, "\n", 3)[1])
+	}
+	for i, ln := range strings.Split(out, "\n") {
+		if w := lipgloss.Width(ln); w != 128 {
+			t.Errorf("line %d width %d, want 128", i+1, w)
+		}
 	}
 }
 
@@ -106,20 +139,29 @@ func TestSupRepoInfoNarrowPane(t *testing.T) {
 	}
 	fit(t, out, 100)
 
-	// Middle width: the label is truncated to the room left over — a
-	// prefix of it shows, the full branch does not, and `right` (the model
-	// name) keeps its slot. 60 cols leaves room = 60-6-14-23 = 17.
+	// Middle width: the branch outranks the model name — the whole branch
+	// shows and the model name (also in the sidebar) yields its slot.
 	m = agentsFixture(t, 60, 10, 0)
 	m = agentsFeed(t, m, RepoInfoMsg{Repo: "strawboss", Branch: "repo-info-pane"})
 	pane := m.viewSupPane(60, 10, true)
 	plain := ansiSeq.ReplaceAllString(pane, "")
-	if !strings.Contains(plain, "strawboss") || strings.Contains(plain, "repo-info-pane") {
-		t.Fatalf("60-col pane did not truncate the label: %q", plain)
+	if !strings.Contains(plain, "repo-info-pane") {
+		t.Fatalf("60-col pane cut the branch: %q", plain)
 	}
-	if !strings.Contains(plain, "claude-fable-5") {
-		t.Fatalf("60-col pane dropped the model name for the label: %q", plain)
+	if strings.Contains(plain, "claude-fable-5") {
+		t.Fatalf("60-col pane kept the model name over the branch: %q", plain)
 	}
 	fit(t, pane, 60)
+
+	// Tighter: the repo name drops before the branch is cut.
+	m = agentsFixture(t, 44, 10, 0)
+	m = agentsFeed(t, m, RepoInfoMsg{Repo: "strawboss", Branch: "repo-info-pane"})
+	pane = m.viewSupPane(44, 10, true)
+	plain = ansiSeq.ReplaceAllString(pane, "")
+	if strings.Contains(plain, "strawboss ⎇") || !strings.Contains(plain, "⎇ repo") {
+		t.Fatalf("44-col pane: want the branch without the repo name: %q", plain)
+	}
+	fit(t, pane, 44)
 
 	// Very narrow: no room even for a readable prefix — gone entirely.
 	m = agentsFixture(t, 30, 10, 0)

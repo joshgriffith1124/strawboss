@@ -274,6 +274,11 @@ type Model struct {
 	OnToggleRoles func(on bool)
 	// rolesOn mirrors the orchestrator's roles mode (RolesModeMsg).
 	rolesOn bool
+	// repoName/repoBranch mirror the orchestrator's git probe
+	// (RepoInfoMsg); empty until the first one arrives — the supervisor
+	// pane header shows nothing before that.
+	repoName, repoBranch string
+	repoDirty            bool
 	// OnListSessions/OnSwitchSession drive the session picker;
 	// OnNewSession starts a fresh session (`/new`, `n`).
 	OnListSessions  func() []SessionInfo
@@ -908,6 +913,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case RolesModeMsg:
 		m.rolesOn = msg.On
+		return m, Listen(m.feed)
+	case RepoInfoMsg:
+		m.repoName, m.repoBranch, m.repoDirty = msg.Repo, msg.Branch, msg.Dirty
 		return m, Listen(m.feed)
 	case WorkerCostMsg:
 		// Copy-on-write, like supModelCost: Model is a value type.

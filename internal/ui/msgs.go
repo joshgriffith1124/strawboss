@@ -318,6 +318,16 @@ type ToggleRolesMsg struct{ On bool }
 // configured value) and after every toggle.
 type RolesModeMsg struct{ On bool }
 
+// RepoInfoMsg reports the git repo the supervisor (Driver.Dir) works in —
+// name, current branch, dirty flag — probed by the orchestrator (UI code
+// never runs git) and emitted only when something changes. Branch is the
+// short commit on a detached head.
+type RepoInfoMsg struct {
+	Repo   string
+	Branch string
+	Dirty  bool
+}
+
 // tickMsg drives the run clock, pulse animation, and toast expiry.
 type tickMsg time.Time
 

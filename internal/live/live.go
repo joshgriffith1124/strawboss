@@ -231,6 +231,7 @@ func (o *Orchestrator) Run(ctx context.Context) {
 	go o.ensureServers(ctx)
 	go o.openclawLoop(ctx)
 	go o.watchModels(ctx)
+	go o.pollRepo(ctx)
 	o.subscribeNewEndpoints(ctx)
 }
 

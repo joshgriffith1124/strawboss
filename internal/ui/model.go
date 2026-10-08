@@ -269,6 +269,10 @@ type Model struct {
 	// OnExtendWorker pushes a worker's deadline out by the configured
 	// step (`+`); nil in demo mode.
 	OnExtendWorker func(id string)
+	// OnToggleRoles sets the roles mode (ctrl+r); nil in demo mode.
+	OnToggleRoles func(on bool)
+	// rolesOn mirrors the orchestrator's roles mode (RolesModeMsg).
+	rolesOn bool
 	// OnListSessions/OnSwitchSession drive the session picker;
 	// OnNewSession starts a fresh session (`/new`, `n`).
 	OnListSessions  func() []SessionInfo
@@ -887,6 +891,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showToast("demo replay — worker retry isn't wired to a live harness")
 		}
 		return m, nil
+	case ToggleRolesMsg:
+		if m.OnToggleRoles != nil {
+			m.OnToggleRoles(msg.On)
+		}
+		return m, nil
+	case RolesModeMsg:
+		m.rolesOn = msg.On
+		return m, Listen(m.feed)
 	case ExtendWorkerMsg:
 		if m.OnExtendWorker != nil {
 			m.OnExtendWorker(msg.ID)
@@ -1300,6 +1312,15 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+	case "ctrl+r":
+		// Roles mode on/off, from any focus (works while typing). The
+		// orchestrator answers with RolesModeMsg, the authoritative state.
+		if m.OnToggleRoles == nil {
+			m.showToast("demo replay — roles mode isn't wired to a live supervisor")
+			return m, nil
+		}
+		on := !m.rolesOn
+		return m, func() tea.Msg { return ToggleRolesMsg{On: on} }
 	case "ctrl+o":
 		// Zoom the focused Agents pane from either focus — checked
 		// before the typing branch, so it works while typing.

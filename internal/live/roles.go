@@ -3,9 +3,61 @@ package live
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/joshgriffith1124/strawboss/internal/config"
+	"github.com/joshgriffith1124/strawboss/internal/ui"
 )
+
+// SetRolesMode flips the roles mode at runtime (the TUI toggle): the
+// supervisor prompt is rebuilt, and since a running supervisor keeps the
+// prompt it started with, the supervisor restarts on the same session to
+// pick it up — at once when idle, after the current turn otherwise. The
+// restart re-reads the conversation without its prompt cache, once.
+func (o *Orchestrator) SetRolesMode(on bool) {
+	o.RolesOn.Store(on)
+	o.emitAsync(ui.RolesModeMsg{On: on})
+	state := "off"
+	if on {
+		state = "on"
+	}
+	if o.PromptFor == nil || o.Driver == nil {
+		// A configured system_prompt replaces the built-in one entirely:
+		// there is no roles section to add or drop.
+		o.emitAsync(ui.ToastMsg{Text: "roles mode " + state + " — delegate flags only (config sets a custom system_prompt)"})
+		return
+	}
+	if on && o.RolesPath != "" {
+		// Say so when there is nothing to offer: the mode would otherwise
+		// look on while the prompt silently lacks the section.
+		roles, err := config.LoadRoles(o.RolesPath, o.Models())
+		switch {
+		case err != nil:
+			o.emitAsync(ui.ToastMsg{Text: "roles mode on, but " + err.Error()})
+		case len(roles.Roles) == 0:
+			o.emitAsync(ui.ToastMsg{Text: "roles mode on, but there is no roles.toml — see examples/roles.toml"})
+		}
+	}
+	o.Driver.SetSystemPrompt(o.PromptFor(o.Models()))
+
+	o.mu.Lock()
+	stream, busy := o.stream, o.turnBusy
+	if busy {
+		o.promptStale = true
+	} else {
+		o.stream = nil
+	}
+	o.mu.Unlock()
+	switch {
+	case stream == nil:
+		o.emitAsync(ui.ToastMsg{Text: "roles mode " + state})
+	case busy:
+		o.emitAsync(ui.ToastMsg{Text: "roles mode " + state + " — applies when the current turn ends"})
+	default:
+		go stream.Shutdown(3 * time.Second)
+		o.emitAsync(ui.ToastMsg{Text: "roles mode " + state + " — supervisor restarts on your next prompt"})
+	}
+}
 
 // RolesPrompt is the supervisor-prompt section for the roles mode
 // (config.toml [roles] mode = "on"): roles.toml's roles and pipelines with

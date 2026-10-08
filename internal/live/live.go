@@ -97,6 +97,19 @@ type Orchestrator struct {
 	// out; zero means the 5m default. Set from config in buildLive.
 	ExtendStep time.Duration
 
+	// RolesOn is the roles mode: whether the supervisor prompt offers
+	// roles.toml's roles and pipelines. Seeded from config.toml / --roles,
+	// flipped live by the TUI toggle (SetRolesMode); PromptFor reads it.
+	RolesOn atomic.Bool
+	// RolesPath is roles.toml, checked when the mode is switched on so a
+	// missing or broken file is reported instead of silently offering
+	// nothing.
+	RolesPath string
+	// turnBusy is true while a supervisor turn is in flight; promptStale
+	// marks a system prompt changed mid-turn, applied by restarting the
+	// supervisor once the turn ends. Both under mu.
+	turnBusy, promptStale bool
+
 	stream     *supervisor.Stream // the persistent supervisor process, if running
 	servers    []*managedServer   // managed opencode serve children
 	subscribed map[string]bool    // opencode endpoints with an event subscriber
@@ -210,7 +223,8 @@ func (o *Orchestrator) Run(ctx context.Context) {
 	ctx, o.cancel = context.WithCancel(ctx)
 	o.runCtx = ctx
 	o.seedSupUsage()
-	o.reapDead() // before the watcher: close out workers a crash left "running"
+	o.reapDead()                                          // before the watcher: close out workers a crash left "running"
+	go o.emit(ctx, ui.RolesModeMsg{On: o.RolesOn.Load()}) // the configured mode, for the UI's indicator
 	go o.supervisorLoop(ctx)
 	go o.watchRegistry(ctx)
 	go o.pollWorkers(ctx)
@@ -369,6 +383,10 @@ func (o *Orchestrator) supervisorLoop(ctx context.Context) {
 			}
 			if err := s.SendContent(p.text, p.images); err != nil {
 				o.emit(ctx, ui.SupTurnDoneMsg{Err: err.Error()})
+			} else {
+				o.mu.Lock()
+				o.turnBusy = true
+				o.mu.Unlock()
 			}
 		}
 	}
@@ -391,6 +409,22 @@ func (o *Orchestrator) startStream(ctx context.Context) (*supervisor.Stream, err
 			if r, ok := ev.(supervisor.ResultEvent); ok {
 				ev = resultDelta(r, prevResult)
 				prevResult = r
+			}
+			switch ev.(type) {
+			case supervisor.ResultEvent, supervisor.TurnDoneEvent:
+				// The turn is over: a prompt change that waited for it
+				// (the roles toggle mid-turn) applies now.
+				o.mu.Lock()
+				o.turnBusy = false
+				stale := o.promptStale && o.stream == s
+				if stale {
+					o.promptStale = false
+					o.stream = nil
+				}
+				o.mu.Unlock()
+				if stale {
+					go s.Shutdown(3 * time.Second)
+				}
 			}
 			if init, isInit := ev.(supervisor.InitEvent); isInit && init.SessionID != "" {
 				_ = os.MkdirAll(filepath.Dir(o.sessionFile()), 0o755)

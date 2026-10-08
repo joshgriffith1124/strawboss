@@ -156,9 +156,12 @@ feature --task "..."` runs plan → code → review in order in the working
 directory, handing each step's full report to the next, with optional fix
 rounds when the reviewer ends on `VERDICT: CHANGES`; the supervisor reads
 one terse result. Nothing changes until you use it: the supervisor is only
-told about roles with `[roles] mode = "on"` in `config.toml` (or
-`strawboss --roles on`), and `strawboss stats --by-role` shows whether a
-role earns its extra runs. `examples/roles.toml` has a starter set.
+told about roles while the roles mode is on — `ctrl+r` in the TUI toggles
+it live (the header shows "roles on"; the supervisor restarts on the same
+session to pick it up, after the current turn if one is running), and
+`[roles] mode = "on"` in `config.toml` or `strawboss --roles on` sets the
+starting state. `strawboss stats --by-role` shows whether a role earns
+its extra runs. `examples/roles.toml` has a starter set.
 
 **Verify.** Put `verify = "go test ./..."` (or your build/lint/test
 command) in a `.strawboss.toml` at the project root and delegate runs it

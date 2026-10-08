@@ -3,9 +3,10 @@
 #
 # A role is a focus for one task: a prompt preamble, a default model, and
 # whether the role may edit files. The supervisor only hears about roles
-# when the roles mode is on (config.toml [roles] mode = "on", or
-# `strawboss --roles on` for one run); `strawboss delegate --role <name>`
-# and `--pipeline <name>` work either way.
+# while the roles mode is on — ctrl+r in the TUI toggles it; config.toml
+# [roles] mode = "on" (or `strawboss --roles on`) sets the starting state.
+# `strawboss delegate --role <name>` and `--pipeline <name>` work either
+# way.
 #
 # Role keys:
 #   description  one-line routing hint the supervisor chooses by

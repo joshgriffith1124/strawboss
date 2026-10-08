@@ -298,6 +298,14 @@ type RetryWorkerMsg struct{ ID string }
 // running worker's deadline out (dashboard/agent pane `+`).
 type ExtendWorkerMsg struct{ ID string }
 
+// ToggleRolesMsg is emitted by the UI when the user flips the roles mode
+// (ctrl+r); On is the requested state.
+type ToggleRolesMsg struct{ On bool }
+
+// RolesModeMsg reports the orchestrator's roles mode: at startup (the
+// configured value) and after every toggle.
+type RolesModeMsg struct{ On bool }
+
 // tickMsg drives the run clock, pulse animation, and toast expiry.
 type tickMsg time.Time
 

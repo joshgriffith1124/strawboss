@@ -193,11 +193,11 @@ func buildLive(stateDir, modelsPath string, fresh bool, rolesMode string) (ui.Mo
 			return zero, nil, err
 		}
 	}
-	promptFor := func(ms []config.ModelConfig) string {
+	buildPrompt := func(ms []config.ModelConfig, withRoles bool) string {
 		p := live.BuildSystemPrompt(exe, ms)
-		if rolesOn {
-			// Validated above; a later models.toml edit that breaks a role
-			// drops the section rather than the whole prompt.
+		if withRoles {
+			// A roles.toml broken by a later edit drops the section rather
+			// than the whole prompt (the toggle toasts the error).
 			if roles, err := config.LoadRoles(rolesPath, ms); err == nil {
 				p += live.RolesPrompt(exe, roles)
 			}
@@ -206,7 +206,7 @@ func buildLive(stateDir, modelsPath string, fresh bool, rolesMode string) (ui.Mo
 	}
 	system := cfg.Supervisor.SystemPrompt
 	if system == "" {
-		system = promptFor(models)
+		system = buildPrompt(models, rolesOn)
 	}
 	// The run id scopes worker history: --new rotates it so old runs'
 	// workers don't replay into a fresh session; resume keeps it. Both it
@@ -242,8 +242,12 @@ func buildLive(stateDir, modelsPath string, fresh bool, rolesMode string) (ui.Mo
 	o := live.New(driver, models, stateDir)
 	o.ModelsPath = modelsPath
 	if cfg.Supervisor.SystemPrompt == "" {
-		o.PromptFor = promptFor
+		// Reads the live roles mode, so the ctrl+r toggle and a models.toml
+		// reload both rebuild the prompt the same way.
+		o.PromptFor = func(ms []config.ModelConfig) string { return buildPrompt(ms, o.RolesOn.Load()) }
 	}
+	o.RolesOn.Store(rolesOn)
+	o.RolesPath = rolesPath
 	o.RunID = runID
 	o.Notify = cfg.Notify
 	o.Budget = cfg.Budget
@@ -284,6 +288,7 @@ func buildLive(stateDir, modelsPath string, fresh bool, rolesMode string) (ui.Mo
 	m.OnKillWorker = o.OnKillWorker
 	m.OnRetryWorker = o.OnRetryWorker
 	m.OnExtendWorker = o.OnExtendWorker
+	m.OnToggleRoles = o.SetRolesMode
 	m.OnListSessions = o.ListSessions
 	m.OnSwitchSession = o.SwitchSession
 	m.OnNewSession = o.NewSession

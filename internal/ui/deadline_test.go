@@ -74,6 +74,39 @@ func TestCountdownLabel(t *testing.T) {
 	}
 }
 
+// TestRolesToggleKey: ctrl+r asks for the opposite of the current mode;
+// the indicator follows the orchestrator's RolesModeMsg, not the key.
+func TestRolesToggleKey(t *testing.T) {
+	m := New(make(chan tea.Msg))
+	m = apply(t, m, tea.WindowSizeMsg{Width: 132, Height: 40})
+	var asked []bool
+	m.OnToggleRoles = func(on bool) { asked = append(asked, on) }
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatal("ctrl+r produced no cmd")
+	}
+	m = apply(t, m, cmd())
+	if len(asked) != 1 || !asked[0] {
+		t.Fatalf("hook got %v, want [true]", asked)
+	}
+	if m.rolesOn {
+		t.Error("indicator turned on before the orchestrator confirmed")
+	}
+	m = apply(t, m, RolesModeMsg{On: true})
+	if !m.rolesOn || !strings.Contains(m.View(), "roles on") {
+		t.Error("RolesModeMsg{On: true} did not show the indicator")
+	}
+
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	m = next.(Model)
+	m = apply(t, m, cmd())
+	if len(asked) != 2 || asked[1] {
+		t.Fatalf("second press asked %v, want off", asked)
+	}
+}
+
 // TestExtendKey: '+' on a selected worker emits ExtendWorkerMsg, which
 // reaches the OnExtendWorker hook; on a finished worker it refuses with
 // a toast.

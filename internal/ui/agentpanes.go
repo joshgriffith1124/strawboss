@@ -28,6 +28,10 @@ func (m Model) viewSupPane(w, h int, focused bool) string {
 		// Tiles hidden with ctrl+t: say how many are tucked away.
 		parts = append(parts, sAmber.Render(fmt.Sprintf("%d tiles hidden · ctrl+t", n)))
 	}
+	if m.rolesOn {
+		// The supervisor is being offered roles and pipelines (ctrl+r).
+		parts = append(parts, sAmber.Render("roles on"))
+	}
 	if ctx := m.supCtxLabel(); ctx != "" {
 		parts = append(parts, ctx)
 	}

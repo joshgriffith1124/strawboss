@@ -27,7 +27,9 @@
 #                                 # worker's deadline out (Go duration)
 
 [roles]
-# mode = "off"                    # "on" offers roles.toml's roles and
-#                                 # pipelines to the supervisor (see
-#                                 # examples/roles.toml); `strawboss --roles
-#                                 # on|off` overrides it for one run
+# mode = "off"                    # starting state of the roles mode: "on"
+#                                 # offers roles.toml's roles and pipelines
+#                                 # to the supervisor (examples/roles.toml).
+#                                 # ctrl+r in the TUI toggles it live;
+#                                 # `strawboss --roles on|off` sets one run's
+#                                 # starting state

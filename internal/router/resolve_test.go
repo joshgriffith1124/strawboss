@@ -31,6 +31,41 @@ func freeNames(names ...string) func(config.ModelConfig) bool {
 	return func(m config.ModelConfig) bool { return free[m.Name] }
 }
 
+// TestMeteredNeverAutomatic: a metered model (a Claude Code worker) runs
+// only when named — auto routing, fallback around a down model, free-slot
+// moves and escalation all pass it by, even when it is the only other
+// model up.
+func TestMeteredNeverAutomatic(t *testing.T) {
+	models := []config.ModelConfig{
+		{Name: "opus", Harness: "claude", Tier: 2},
+		{Name: "fast", Tier: 1, MaxConcurrent: 1},
+		{Name: "big", Tier: 2},
+	}
+	if got, _ := Pick(models, "rename a variable"); got.Metered() {
+		t.Errorf("Pick chose metered %s", got.Name)
+	}
+	if got, _ := Pick(models, "design and implement a new package with tests across several files and debug the failures"); got.Name != "big" {
+		t.Errorf("heavy Pick = %s, want big (first UNMETERED in its tier)", got.Name)
+	}
+	// big is down: the fallback must not be opus, though opus is up.
+	if got, ok := Resolve(models, models[2], down("big")); ok && got.Metered() {
+		t.Errorf("Resolve fell back onto metered %s", got.Name)
+	}
+	// fast is full: its free same-tier... none; and opus is never a sibling move.
+	full := func(m config.ModelConfig) bool { return m.Name != "fast" }
+	if got := PreferFree(models, models[1], nil, full); got.Metered() {
+		t.Errorf("PreferFree moved onto metered %s", got.Name)
+	}
+	// A failed tier-1 task escalates to big, never opus.
+	if got, ok := Next(models, "fast", nil); !ok || got.Name != "big" {
+		t.Errorf("Next = %s, %v; want big", got.Name, ok)
+	}
+	// Named explicitly, it runs.
+	if got, ok := Resolve(models, models[0], nil); !ok || got.Name != "opus" {
+		t.Errorf("Resolve(opus) = %s, want opus when named", got.Name)
+	}
+}
+
 func TestResolve(t *testing.T) {
 	cases := []struct {
 		name     string

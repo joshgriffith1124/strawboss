@@ -518,7 +518,7 @@ func (o *Orchestrator) Shutdown() {
 	// workers are subprocesses of their delegate — SIGTERM the recorded
 	// pid; opencode workers are server sessions — abort via the API.
 	for _, w := range workers {
-		if mc, ok := o.modelConfig(w.model); ok && mc.Harness == "dsh" {
+		if mc, ok := o.modelConfig(w.model); ok && (mc.Harness == "dsh" || mc.Harness == "claude") {
 			if w.pid > 0 {
 				_ = syscall.Kill(w.pid, syscall.SIGTERM)
 			}
@@ -596,6 +596,12 @@ Every worker automatically receives a compact repository map (file paths with to
 // flat preference list; tiered ones as a ladder, lowest tier first, each
 // entry carrying the description the supervisor routes by.
 func modelRoster(models []config.ModelConfig) (roster, retry string) {
+	// Metered models (Claude Code workers) are never offered: the
+	// supervisor reaches them only through a role that names one, so where
+	// frontier spend goes stays the operator's choice in roles.toml.
+	if free := config.Unmetered(models); len(free) > 0 {
+		models = free
+	}
 	if !config.Tiered(models) {
 		var names []string
 		sep := ", "

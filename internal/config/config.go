@@ -69,6 +69,11 @@ type ModelConfig struct {
 	// "queued" until a slot frees. For a single-GPU server whose parallel
 	// requests thrash rather than overlap. 0 = unlimited.
 	MaxConcurrent int `toml:"max_concurrent"`
+	// AllowedTools is the claude harness's --allowedTools for its worker
+	// (a read-only role also gets the edit tools denied). Empty = a coding
+	// default: Read, Glob, Grep, Edit, Write, Bash. Ignored by the other
+	// harnesses.
+	AllowedTools []string `toml:"allowed_tools"`
 	// Pool names a set of interchangeable entries: two (or more) instances
 	// of the same model on different hosts share a pool and work evenly. A
 	// task routed to any member runs on the least-loaded available member
@@ -83,6 +88,25 @@ type ModelConfig struct {
 	// TimeoutRaw is the on-disk `timeout` value (a Go duration string,
 	// e.g. "40m"); LoadModels parses and validates it into Timeout.
 	TimeoutRaw string `toml:"timeout"`
+}
+
+// Metered reports a model whose runs spend a metered plan: the claude
+// harness, a Claude Code worker on the subscription. Metered models run
+// only when something names them — a role's model, or an explicit --model
+// — never by auto routing, availability fallback, free-slot moves or
+// escalation, so a failed local task can never quietly retry on a
+// frontier model.
+func (mc ModelConfig) Metered() bool { return mc.Harness == "claude" }
+
+// Unmetered is models without the metered ones, in order.
+func Unmetered(models []ModelConfig) []ModelConfig {
+	out := make([]ModelConfig, 0, len(models))
+	for _, mc := range models {
+		if !mc.Metered() {
+			out = append(out, mc)
+		}
+	}
+	return out
 }
 
 // Tiered reports whether models use capability tiers (any entry sets one).
@@ -255,9 +279,10 @@ type modelsFile struct {
 	Models map[string]ModelConfig `toml:"models"`
 }
 
-// knownHarnesses gates the harness field: opencode (v1) and dsh (DeepSeek
-// Harness ACP workers, docs/NOTES.md).
-var knownHarnesses = map[string]bool{"opencode": true, "dsh": true}
+// knownHarnesses gates the harness field: opencode (v1), dsh (DeepSeek
+// Harness ACP workers, docs/NOTES.md), and claude (a Claude Code worker on
+// the subscription — metered, see ModelConfig.Metered).
+var knownHarnesses = map[string]bool{"opencode": true, "dsh": true, "claude": true}
 
 // LoadModels reads models.toml at path and returns configs in declaration
 // order — the file's order is the preference order (the supervisor is told
@@ -298,7 +323,8 @@ func LoadModels(path string) ([]ModelConfig, error) {
 		if mc.Harness == "" {
 			mc.Harness = "opencode"
 		}
-		if mc.Endpoint == "" {
+		// A claude worker runs the local CLI; it has no endpoint.
+		if mc.Endpoint == "" && mc.Harness != "claude" {
 			return nil, fmt.Errorf("model %q: endpoint is required", name)
 		}
 		if mc.Model == "" {

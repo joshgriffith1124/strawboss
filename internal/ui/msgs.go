@@ -146,6 +146,9 @@ type WorkerUpsertMsg struct {
 	Deadline time.Time
 	// Role is the roles.toml role the worker runs in; "" keeps existing.
 	Role string
+	// Metered marks a worker on a metered model (a Claude Code worker);
+	// false keeps existing.
+	Metered bool
 }
 
 // WorkerUsageMsg updates a worker's token counts. Input is fresh;
@@ -297,6 +300,15 @@ type RetryWorkerMsg struct{ ID string }
 // ExtendWorkerMsg is emitted by the UI when the user asks to push a
 // running worker's deadline out (dashboard/agent pane `+`).
 type ExtendWorkerMsg struct{ ID string }
+
+// WorkerCostMsg is a metered worker's notional cost (a Claude Code worker
+// on the subscription), recorded when it finished. Local workers never
+// send one.
+type WorkerCostMsg struct {
+	ID      string
+	Model   string
+	CostUSD float64
+}
 
 // ToggleRolesMsg is emitted by the UI when the user flips the roles mode
 // (ctrl+r); On is the requested state.

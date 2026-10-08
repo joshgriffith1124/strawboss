@@ -168,12 +168,13 @@ func LoadRoles(path string, models []ModelConfig) (Roles, error) {
 	return out, nil
 }
 
-// TierModel is the first model config (file order) in the given tier —
-// the starting point routing then resolves against availability and free
-// slots like any pinned task.
+// TierModel is the first unmetered model config (file order) in the given
+// tier — the starting point routing then resolves against availability
+// and free slots like any pinned task. A role reaches a metered model only
+// by naming it with `model`.
 func TierModel(models []ModelConfig, tier int) (ModelConfig, bool) {
 	for _, mc := range models {
-		if mc.Tier == tier {
+		if mc.Tier == tier && !mc.Metered() {
 			return mc, true
 		}
 	}

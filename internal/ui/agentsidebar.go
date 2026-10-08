@@ -62,10 +62,17 @@ func (m Model) viewTokenEconomy(w int) []string {
 	supIn, supCacheRead, supCacheWrite, supOut := m.supTokens()
 	supFresh := supIn + supCacheWrite + supOut
 
-	local := 0
+	// Metered workers (Claude Code on the plan) are not free local work:
+	// they count on the metered side of the offload ratio.
+	local, metered := 0, 0
 	for _, wk := range m.workers {
+		if wk.Metered {
+			metered += wk.In + wk.Out
+			continue
+		}
 		local += wk.In + wk.Out
 	}
+	supFresh += metered
 
 	// Offload bar: share of fresh tokens the workers produced locally.
 	share := 0.0
@@ -100,8 +107,17 @@ func (m Model) viewTokenEconomy(w int) []string {
 		thr += m.liveRate(wk.ID)
 	}
 
-	return []string{
-		lr(w, sDim.Render("Plan (sup)"), sText.Render(formatTokens(supFresh)+"  $0.00")),
+	lines := []string{
+		lr(w, sDim.Render("Plan (sup)"), sText.Render(formatTokens(supFresh-metered)+"  $0.00")),
+	}
+	if metered > 0 || m.meteredRuns > 0 {
+		meteredCost := 0.0
+		for _, c := range m.meteredCost {
+			meteredCost += c
+		}
+		lines = append(lines, lr(w, sDim.Render("Plan (workers)"), sAmber.Render(formatTokens(metered)+fmt.Sprintf("  ~$%.2f", meteredCost))))
+	}
+	return append(lines,
 		lr(w, sDim.Render("Local (free)"), sTeal.Render(formatTokens(local)+"  $0.00")),
 		lr(w, sDim.Render("Cached reads"), sText.Render(formatTokens(supCacheRead))),
 		bar,
@@ -110,7 +126,7 @@ func (m Model) viewTokenEconomy(w int) []string {
 		lr(w, sDim.Render("Plan window"), sText.Render(planWindow)),
 		lr(w, sDim.Render("Avg result"), sText.Render(avgResult)),
 		lr(w, sDim.Render("Avg throughput"), sText.Render(fmt.Sprintf("%.0f tok/s", thr))),
-	}
+	)
 }
 
 // listedWorkers are the workers the Agents roster lists: running, queued

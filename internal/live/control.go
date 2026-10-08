@@ -40,8 +40,10 @@ func (o *Orchestrator) OnKillWorker(id string) {
 	// A worker that died without reporting (power loss, crash) has no one
 	// left to record its end, and after a reboot its pid may belong to an
 	// unrelated process: never signal it — close it out as failed.
+	// dsh and claude workers are subprocesses (pid-owned); opencode
+	// workers are server sessions.
 	isDsh := false
-	if mc, ok := o.modelConfig(model); ok && mc.Harness == "dsh" {
+	if mc, ok := o.modelConfig(model); ok && (mc.Harness == "dsh" || mc.Harness == "claude") {
 		isDsh = true
 	}
 	if deadBeforeBoot(started) || (isDsh && !workerAlive(pid, started)) {

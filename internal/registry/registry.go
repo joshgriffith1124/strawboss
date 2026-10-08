@@ -21,7 +21,7 @@ import (
 // Event is one line of workers.jsonl.
 type Event struct {
 	TS      time.Time `json:"ts"`
-	Type    string    `json:"type"` // "queued" | "spawned" | "finished" | "deadline"
+	Type    string    `json:"type"` // "queued" | "spawned" | "finished" | "deadline" | "cost"
 	Worker  string    `json:"worker"`
 	Session string    `json:"session"`
 	// Run scopes workers to one supervisor run so the TUI doesn't replay
@@ -50,6 +50,10 @@ type Event struct {
 	InputTokens     int    `json:"input_tokens,omitempty"`
 	CacheReadTokens int    `json:"cache_read_tokens,omitempty"`
 	OutputTokens    int    `json:"output_tokens,omitempty"`
+	// CostUSD is a cost-event field: a metered worker's notional API cost
+	// (a Claude Code worker on the subscription), for the token economy and
+	// the budget guard. Local workers never write one.
+	CostUSD float64 `json:"cost_usd,omitempty"`
 }
 
 // Registry appends to and replays one workers.jsonl file.
@@ -180,6 +184,14 @@ func (r *Registry) Finish(workerID, session, status, summary, logPath string, du
 			DurationMS:  duration.Milliseconds(),
 			InputTokens: inputTokens, CacheReadTokens: cacheReadTokens, OutputTokens: outputTokens,
 		})
+	})
+}
+
+// RecordCost records a metered worker's notional cost as a "cost" event
+// (after its finished event). Readers that predate it skip the type.
+func (r *Registry) RecordCost(worker, model string, usd float64) error {
+	return r.withLock(func() error {
+		return r.append(Event{TS: time.Now(), Type: "cost", Worker: worker, Run: r.Run, Model: model, CostUSD: usd})
 	})
 }
 

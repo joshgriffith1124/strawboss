@@ -64,6 +64,22 @@ Verify the change works: run the project's tests, add focused tests for
 cases the change should handle, and fix only test code. Report what you
 ran, what passed, and anything that fails with its output."""
 
+# A frontier-model role: `model` names a claude-harness entry from
+# models.toml (see examples/models.toml). Runs are metered — this is the
+# only way the supervisor reaches such a model. Uncomment with that entry.
+# [roles.security]
+# description = "audits the change for vulnerabilities: injection, authz, secrets, unsafe input"
+# read_only = true
+# model = "opus"
+# prompt = """
+# Audit the uncommitted changes (run `git diff`) for security problems:
+# injection, missing authorization, secrets in code or logs, unsafe handling
+# of external input. Report each finding with file, line, severity and a
+# concrete fix. Say so plainly when there is nothing to report."""
+#
+# Point architect at it too to plan on the frontier model:
+#   [roles.architect] … model = "opus"
+
 [pipelines.feature]
 description = "non-trivial features: plan, implement, review with one fix round"
 steps = ["architect", "coder", "reviewer"]

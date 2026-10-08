@@ -72,6 +72,26 @@ harness = "opencode"          # optional here — opencode is the default
 #                             # defines one (reasoning models can burn the
 #                             # whole output budget thinking)
 
+# ── claude harness (a Claude Code worker on your subscription) ──────────
+# For roles that want a frontier model (architecture, security review).
+# Runs `claude -p --model <model>` in the worker's directory with the same
+# auth rules as the supervisor: ANTHROPIC_API_KEY scrubbed, never --bare.
+# No endpoint. METERED: every run spends plan quota, so routing never picks
+# it on its own — not auto routing, not the fallback around a down model,
+# not escalation. It runs only when a roles.toml role names it (`model =
+# "opus"`); the supervisor is never offered it as a plain --model. Its
+# notional cost shows apart from the free local work and counts toward
+# config.toml's [budget] max_cost_usd.
+# [models.opus]
+# harness = "claude"
+# model = "claude-opus-5-5"     # passed as --model
+# tier = 3
+# description = "frontier model: architecture and security review"
+# allowed_tools = ["Read", "Glob", "Grep", "Edit", "Write", "Bash"]
+#                               # optional (this is the default); a
+#                               # read-only role also has Edit/Write denied
+# timeout = "30m"
+
 # ── dsh harness (DeepSeek Harness) ──────────────────────────────────────
 # endpoint = your OpenAI-compatible inference URL directly — no opencode
 #            in the path.

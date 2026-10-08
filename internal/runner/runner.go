@@ -17,6 +17,7 @@ import (
 	"github.com/joshgriffith1124/strawboss/internal/config"
 	"github.com/joshgriffith1124/strawboss/internal/deadline"
 	"github.com/joshgriffith1124/strawboss/internal/harness"
+	"github.com/joshgriffith1124/strawboss/internal/harness/claudecode"
 	"github.com/joshgriffith1124/strawboss/internal/harness/dshacp"
 	"github.com/joshgriffith1124/strawboss/internal/harness/opencode"
 	"github.com/joshgriffith1124/strawboss/internal/registry"
@@ -32,6 +33,8 @@ func NewHarness(mc config.ModelConfig, dir, stateDir string) (harness.WorkerHarn
 		return opencode.New(mc, dir, filepath.Join(stateDir, "logs")), nil
 	case "dsh":
 		return dshacp.New(dir, stateDir), nil
+	case "claude":
+		return claudecode.New(dir, stateDir), nil
 	default:
 		return nil, fmt.Errorf("model %q: unknown harness %q", mc.Name, mc.Harness)
 	}
@@ -67,21 +70,13 @@ func firstN(s []string, n int) []string {
 	return s
 }
 
-// readOnlyKey marks a run whose worker must not modify the working tree
-// (a read-only role: architect, reviewer).
-type readOnlyKey struct{}
+// WithReadOnly marks ctx's run read-only (a read-only role: architect,
+// reviewer): Run fails a worker that changed files anyway and restores them
+// from its before snapshot, so a reviewer that "fixed" things cannot slip
+// edits past the coder and the check.
+func WithReadOnly(ctx context.Context) context.Context { return harness.WithReadOnly(ctx) }
 
-// WithReadOnly marks ctx's run read-only: Run fails a worker that changed
-// files anyway and restores them from its before snapshot, so a reviewer
-// that "fixed" things cannot slip edits past the coder and the check.
-func WithReadOnly(ctx context.Context) context.Context {
-	return context.WithValue(ctx, readOnlyKey{}, true)
-}
-
-func readOnly(ctx context.Context) bool {
-	ro, _ := ctx.Value(readOnlyKey{}).(bool)
-	return ro
-}
+func readOnly(ctx context.Context) bool { return harness.ReadOnly(ctx) }
 
 // watchInterval is how often Run's watcher polls the worker's deadline
 // request file for operator extensions. Var so tests can tighten it.
@@ -349,6 +344,13 @@ func Run(ctx context.Context, h harness.WorkerHarness, reg *registry.Registry, m
 	if err := reg.Finish(oc.WorkerID, session, string(res.Status), res.Summary, res.LogPath,
 		oc.Duration, usage.InputTokens, usage.CacheReadTokens, usage.OutputTokens); err != nil {
 		warn(err.Error())
+	}
+	if usage.CostUSD > 0 {
+		// A metered worker's notional cost: the TUI's economy panel and
+		// the budget guard count it next to the supervisor's.
+		if err := reg.RecordCost(oc.WorkerID, mc.Name, usage.CostUSD); err != nil {
+			warn(err.Error())
+		}
 	}
 	return oc
 }

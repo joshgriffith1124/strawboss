@@ -1,8 +1,9 @@
 // Package harness defines the WorkerHarness boundary between the TUI and
 // whatever runs workers. UI code never talks to a worker backend directly —
 // only through this interface (CLAUDE.md invariant 4). Implementations:
-// opencode (internal/harness/opencode) and DeepSeek Harness
-// (internal/harness/dshacp).
+// opencode (internal/harness/opencode), DeepSeek Harness
+// (internal/harness/dshacp), and Claude Code workers for metered frontier
+// roles (internal/harness/claudecode).
 package harness
 
 import (
@@ -39,6 +40,9 @@ type Usage struct {
 	CacheReadTokens int
 	OutputTokens    int
 	TokensPerSec    float64 // 0 if the backend doesn't report it
+	// CostUSD is the notional API cost of a metered worker (the claude
+	// harness); 0 for free local workers.
+	CostUSD float64
 }
 
 // Result is what the delegate command hands back to the supervisor: the
@@ -54,6 +58,23 @@ type Result struct {
 	// the supervisor: a pipeline hands it to its next step (a plan to the
 	// coder, findings back to it) inside the delegate process.
 	Report string
+}
+
+// readOnlyKey marks a run whose worker must not modify the working tree.
+type readOnlyKey struct{}
+
+// WithReadOnly marks ctx's run read-only (a read-only role). The runner
+// enforces it for every harness after the fact (edits are reverted and the
+// run fails); a harness that can also refuse edits up front — the claude
+// harness denies its edit tools — reads it at Spawn.
+func WithReadOnly(ctx context.Context) context.Context {
+	return context.WithValue(ctx, readOnlyKey{}, true)
+}
+
+// ReadOnly reports whether ctx's run is read-only.
+func ReadOnly(ctx context.Context) bool {
+	ro, _ := ctx.Value(readOnlyKey{}).(bool)
+	return ro
 }
 
 // WorkerHarness is exactly what the TUI and the delegate command need from a

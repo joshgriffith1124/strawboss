@@ -73,6 +73,7 @@ type workerRow struct {
 	Steps    int // completed model steps (dsh; 0 = unknown)
 	Deadline time.Time
 	Role     string // roles.toml role ("" = plain task)
+	Metered  bool   // runs on a metered model (a Claude Code worker), not free local
 }
 
 // Throughput sampling: a sample closer than minRateWindow after the
@@ -337,6 +338,11 @@ type Model struct {
 	// supModelCost splits supCost by model (session model vs the CLI's
 	// helper model); nil until a result reports a split.
 	supModelCost map[string]float64
+	// meteredCost is metered workers' notional cost by model (Claude Code
+	// workers), kept apart from the free local work; meteredRuns counts
+	// them.
+	meteredCost map[string]float64
+	meteredRuns int
 	// supCtx is the supervisor's context footprint: the last API call's
 	// full prompt size (fresh + cache reads + writes). Every call re-reads
 	// the whole prefix, so this is what each future call will cost again.
@@ -663,6 +669,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Role != "" {
 			w.Role = msg.Role
 		}
+		if msg.Metered {
+			w.Metered = true
+		}
 		if msg.Status != "" && msg.Status != w.Status {
 			w.Status = msg.Status
 			if msg.Status == "done" || msg.Status == "failed" {
@@ -819,6 +828,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.turnIn, m.turnOut, m.turnCacheRead, m.turnCacheWrite = 0, 0, 0, 0
 		m.supCost, m.supTurns = 0, 0
 		m.supModelCost = nil
+		m.meteredCost, m.meteredRuns = nil, 0
 		m.supCtx, m.ctxWarned = 0, false
 		m.chat = nil
 		m.streaming = ""
@@ -898,6 +908,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case RolesModeMsg:
 		m.rolesOn = msg.On
+		return m, Listen(m.feed)
+	case WorkerCostMsg:
+		// Copy-on-write, like supModelCost: Model is a value type.
+		costs := make(map[string]float64, len(m.meteredCost)+1)
+		for name, c := range m.meteredCost {
+			costs[name] = c
+		}
+		costs[msg.Model] += msg.CostUSD
+		m.meteredCost = costs
+		m.meteredRuns++
 		return m, Listen(m.feed)
 	case ExtendWorkerMsg:
 		if m.OnExtendWorker != nil {

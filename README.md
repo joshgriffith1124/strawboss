@@ -163,6 +163,16 @@ session to pick it up, after the current turn if one is running), and
 starting state. `strawboss stats --by-role` shows whether a role earns
 its extra runs. `examples/roles.toml` has a starter set.
 
+**Frontier roles (metered).** A `models.toml` entry with `harness =
+"claude"` runs the worker as `claude -p --model <model>` on your
+subscription (same auth rules as the supervisor) — point a security or
+architect role at it with `model = "opus"`. Such runs are metered: routing
+never picks one by itself (no auto routing, fallback or escalation onto
+it), the supervisor reaches it only through a role, a read-only role's
+worker gets Edit/Write denied outright, and its notional cost shows as
+"Plan (workers)" apart from the free local work and counts toward
+`max_cost_usd`.
+
 **Verify.** Put `verify = "go test ./..."` (or your build/lint/test
 command) in a `.strawboss.toml` at the project root and delegate runs it
 after workers finish: a worker whose check fails is reported failed and

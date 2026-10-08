@@ -3,6 +3,7 @@ package live
 import (
 	"context"
 	"net/http"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -22,6 +23,13 @@ import (
 // probe must never be the reason a working model goes unused.
 func Available(ctx context.Context, mc config.ModelConfig) (bool, string) {
 	base := strings.TrimRight(mc.Endpoint, "/")
+	if mc.Harness == "claude" {
+		// A Claude Code worker runs the local CLI: up when it is installed.
+		if _, err := exec.LookPath("claude"); err != nil {
+			return false, "claude CLI not found"
+		}
+		return true, ""
+	}
 	if mc.Harness == "dsh" {
 		models, ok := llmModels(ctx, base)
 		if !ok {

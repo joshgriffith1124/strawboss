@@ -191,6 +191,19 @@ func runDelegate(args []string, stdout io.Writer) error {
 		}
 		wants[i] = modelPin{name: want, from: i}
 	}
+	// A metered model (a Claude Code worker) is reachable from the
+	// supervisor only through a role that names it: where frontier spend
+	// goes is the operator's choice in roles.toml. STRAWBOSS_RUN marks a
+	// call from the TUI's supervisor; a human at a shell may name one.
+	if os.Getenv("STRAWBOSS_RUN") != "" {
+		for i, name := range explicit {
+			for _, mc := range models {
+				if mc.Name == name && mc.Metered() {
+					return fmt.Errorf("delegate: task %d: %s is a metered model — use a role that names it (roles.toml), not --model", i+1, name)
+				}
+			}
+		}
+	}
 	busy := func(m config.ModelConfig) int {
 		return slots.Busy(filepath.Join(*stateDir, "slots"), m.Name, m.MaxConcurrent)
 	}

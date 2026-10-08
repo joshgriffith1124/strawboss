@@ -113,18 +113,22 @@ func (o *Orchestrator) applyRegistryEvent(ctx context.Context, ev registry.Event
 		o.workerPID[ev.Worker] = ev.PID
 		o.workerStarted[ev.Worker] = ev.TS
 		o.unfinished[ev.Worker] = true
-		startTail := false
-		if mc, ok := o.modelConfig(ev.Model); ok && mc.Harness == "dsh" && !o.tailing[ev.Worker] {
+		tail := ""
+		mc, known := o.modelConfig(ev.Model)
+		if known && (mc.Harness == "dsh" || mc.Harness == "claude") && !o.tailing[ev.Worker] {
 			o.tailing[ev.Worker] = true
-			startTail = true
+			tail = mc.Harness
 		}
 		o.mu.Unlock()
-		if startTail {
+		switch tail {
+		case "dsh":
 			go o.tailDshWorker(ctx, ev.Worker, ev.Session)
+		case "claude":
+			go o.tailClaudeWorker(ctx, ev.Worker, ev.Session)
 		}
 		o.emitBatch(ctx, batch, ui.WorkerUpsertMsg{
 			ID: ev.Worker, Model: ev.Model, Task: ev.Task, Dir: ev.Dir, Role: ev.Role,
-			Status: "running", Started: ev.TS,
+			Status: "running", Started: ev.TS, Metered: known && mc.Metered(),
 		})
 	case "finished":
 		o.mu.Lock()
@@ -156,6 +160,12 @@ func (o *Orchestrator) applyRegistryEvent(ctx context.Context, ev registry.Event
 		// A bare upsert: only the deadline — the merge must keep the
 		// row's other fields.
 		o.emitBatch(ctx, batch, ui.WorkerUpsertMsg{ID: ev.Worker, Deadline: ev.Deadline})
+	case "cost":
+		// A metered worker's notional cost: shown apart from the free local
+		// work, and counted by the budget guard with the supervisor's (on
+		// replay too — the guard rebuilds the run's total from history).
+		o.noteBudgetUsage(ev.CostUSD, 0)
+		o.emitBatch(ctx, batch, ui.WorkerCostMsg{ID: ev.Worker, Model: ev.Model, CostUSD: ev.CostUSD})
 	}
 }
 
@@ -387,7 +397,9 @@ func (o *Orchestrator) pollWorkers(ctx context.Context) {
 					unknownModels[s.model] = true
 					strangers = append(strangers, s.model)
 				}
-			case mc.Harness == "dsh":
+			case mc.Harness == "dsh" || mc.Harness == "claude":
+				// Log-tailed workers: no server to poll; usage and rates
+				// come from their tailers.
 				openDsh = append(openDsh, s)
 			default:
 				open = append(open, s)
@@ -515,6 +527,12 @@ func (o *Orchestrator) pollWorkers(ctx context.Context) {
 							ctxWin = win
 						}
 					}
+				}
+			} else if mc.Harness == "claude" {
+				// No endpoint: the local CLI, metered on the plan.
+				note = "claude · metered"
+				if ok, why := Available(ctx, mc); !ok {
+					note = why
 				}
 			} else if !reachable[base] {
 				note = "endpoint unreachable"

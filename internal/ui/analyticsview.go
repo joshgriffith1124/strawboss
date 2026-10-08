@@ -107,6 +107,28 @@ func (m Model) modelCostLines(w int) []string {
 	return lines
 }
 
+// meteredLines shows metered workers (Claude Code workers on the plan)
+// apart from the free local work: their total notional value and run
+// count, then the split by model. Nothing until one has run.
+func (m Model) meteredLines(w int) []string {
+	if m.meteredRuns == 0 {
+		return nil
+	}
+	total := 0.0
+	names := make([]string, 0, len(m.meteredCost))
+	for name, c := range m.meteredCost {
+		names = append(names, name)
+		total += c
+	}
+	sort.Strings(names)
+	lines := []string{" " + sAmber.Render(fmt.Sprintf("metered workers $%.2f · %d run(s) — counts toward the budget", total, m.meteredRuns))}
+	for _, name := range names {
+		suffix := fmt.Sprintf(" $%.2f", m.meteredCost[name])
+		lines = append(lines, "   "+sFaint.Render(truncPlain(name, w-6-len(suffix))+suffix))
+	}
+	return lines
+}
+
 // supervisorDetailLines builds the supervisor session's token-economy
 // lines: auth + marginal cost, context footprint, fresh-in / cache-read
 // split, output, notional API value and average result size, plan-window
@@ -133,6 +155,7 @@ func (m Model) supervisorDetailLines(w int) []string {
 		" " + sDim.Render(fmt.Sprintf("notional API value $%.2f · avg %d tok/delegation result", m.supCost, avgResult)),
 	}
 	lines = append(lines, m.modelCostLines(w)...)
+	lines = append(lines, m.meteredLines(w)...)
 	if m.supCtx > 0 {
 		// MOCKUP.html shows "context    168k/200k" in this panel; the
 		// denominator is the session model's own window, not a constant —

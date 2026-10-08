@@ -37,6 +37,9 @@ type Driver struct {
 	// before the first spawn; afterwards use SetSystemPrompt, which the
 	// spawn paths read under the lock.
 	SystemPrompt string
+	// Model is passed as --model when set (a Claude Code worker pins its
+	// model; the supervisor leaves it to the CLI's default).
+	Model string
 	// Dir is the subprocess working directory. Empty means inherit.
 	Dir string
 	// Env is appended to the (scrubbed) inherited environment.
@@ -174,6 +177,9 @@ func (d *Driver) Start(prompt string) (*Turn, error) {
 	}
 	if sid := d.SessionID(); sid != "" {
 		args = append(args, "--resume", sid)
+	}
+	if d.Model != "" {
+		args = append(args, "--model", d.Model)
 	}
 	if d.PermissionMode != "" {
 		args = append(args, "--permission-mode", d.PermissionMode)

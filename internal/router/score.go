@@ -110,6 +110,11 @@ func Score(task string) (int, []string) {
 // starts at the tier its score maps to, so cheap work stays on cheap models
 // and failures escalate rather than mis-routed work burning a big model.
 func Pick(models []config.ModelConfig, task string) (config.ModelConfig, string) {
+	// Auto routing never lands on a metered model (config.Metered); when
+	// nothing else is configured the list is all there is.
+	if free := config.Unmetered(models); len(free) > 0 {
+		models = free
+	}
 	if len(models) == 0 {
 		return config.ModelConfig{}, "no models"
 	}

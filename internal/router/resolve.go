@@ -14,7 +14,10 @@ func Resolve(models []config.ModelConfig, want config.ModelConfig, avail func(co
 	if available(avail, want) {
 		return want, true
 	}
-	if m, found := firstAvailable(candidates(models, want), avail); found {
+	// Fallbacks never include a metered model: a down local model must not
+	// quietly route its task onto a frontier one. (A metered want that is
+	// itself down may still fall back to a local model.)
+	if m, found := firstAvailable(config.Unmetered(candidates(models, want)), avail); found {
 		return m, true
 	}
 	return want, false
@@ -34,7 +37,7 @@ func PreferFree(models []config.ModelConfig, got config.ModelConfig,
 		return got
 	}
 	for _, m := range models {
-		if m.Name != got.Name && m.Tier == got.Tier && available(avail, m) && free(m) {
+		if m.Name != got.Name && m.Tier == got.Tier && !m.Metered() && available(avail, m) && free(m) {
 			return m
 		}
 	}
@@ -55,7 +58,7 @@ func Balance(models []config.ModelConfig, got config.ModelConfig,
 	}
 	var cands []config.ModelConfig
 	for _, m := range models {
-		if m.Pool != got.Pool {
+		if m.Pool != got.Pool || (m.Metered() && m.Name != got.Name) {
 			continue
 		}
 		if !available(avail, m) {
@@ -112,7 +115,8 @@ func Next(models []config.ModelConfig, cur string, avail func(config.ModelConfig
 	} else {
 		cands = append([]config.ModelConfig{}, models[i+1:]...)
 	}
-	return firstAvailable(cands, avail)
+	// A failed task never escalates onto a metered model.
+	return firstAvailable(config.Unmetered(cands), avail)
 }
 
 // candidates orders every model other than want by how close a substitute it

@@ -15,6 +15,12 @@ any OpenAI-compatible endpoint). The TUI shows the live worker table,
 streaming transcripts, and the token economy: what the plan-metered
 supervisor spent vs. what your free local workers churned through.
 
+Optionally, tasks can run in **roles** (architect, coder, reviewer, QA,
+security…) and **pipelines** that chain them — plan → code → review with
+fix rounds — inside one delegation. A role that deserves a frontier model
+can run as a Claude Code worker on your subscription; those runs are
+metered and never chosen automatically.
+
 Anything you type that starts with `/` goes to the supervisor as a Claude
 Code slash command — `/loop 10m Run one iteration of LOOP.md`, `/compact`,
 `/context`, your own `.claude/commands` skills. Tab completes from the
@@ -38,8 +44,8 @@ results](docs/screenshot-dashboard.png)
 │    ▲                        ▲                          ▲                  │
 │  supervisor driver        worker harnesses           registry watcher     │
 │  (headless `claude -p`,   (opencode serve API ·      (workers.jsonl,      │
-│   stream-json parsed,      dsh ACP over stdio)        replayable)         │
-│   $0 marginal cost)                                                       │
+│   stream-json parsed,      dsh ACP over stdio ·       replayable)         │
+│   $0 marginal cost)        claude -p, metered roles)                      │
 └─────────┬─────────────────────┬───────────────────────────────────────────┘
           │ subprocess          │ HTTP / stdio
      claude CLI            local workers → your OpenAI-compatible endpoint
@@ -69,19 +75,31 @@ results](docs/screenshot-dashboard.png)
   the worker tiles); **Tasks**, **Worktrees**, **Models**, **Analytics**,
   **Logs**
 - Live worker panes with streaming transcripts, per-worker tok/s
-  sparklines, context-window usage, kill (`x`) / retry (`r`) / retry-all
+  sparklines, a context gauge and a deadline countdown in each tile's
+  header (amber under five minutes), kill (`x`) / retry (`r`) / retry-all
   (`R`), undo a worker's edits (`u`, press twice), deadline extensions
-  (`+`, step configurable via `workers.extend_step`), filtering (`/`); a
+  (`+`, default 5m per press, `workers.extend_step`), filtering (`/`); a
   context gauge on the supervisor pane says when a fresh session (`/new`)
   would be cheaper
+- Roles and pipelines (opt-in, `roles.toml`): role prompts, per-role
+  default models, read-only roles whose edits are reverted, and pipelines
+  that hand each step's report to the next with reviewer-driven fix
+  rounds. `ctrl+r` toggles whether the supervisor is offered them
+  ("roles on" in its pane header); `strawboss stats --by-role` measures
+  whether they pay off
 - Paste images into the supervisor chat (`alt+v`, or `ctrl+v` where the
   terminal passes it through) — screenshots go in as image blocks, like
   the Claude Code TUI. Reads the clipboard via PowerShell on WSL,
   `osascript` on macOS, `wl-paste` or `xclip` on Linux
-- Token economy: plan vs. free-local split, notional API value, real
-  plan-window gauges (5h/7d) parsed from the stream
-- Two worker harnesses: opencode server sessions and DeepSeek Harness
-  (ACP), with per-model `tools_mode` (native / code / both)
+- Token economy: plan vs. free-local split, notional API value (split by
+  model on the Analytics tab, with metered Claude workers on their own
+  line), real plan-window gauges (5h/7d) parsed from the stream
+- Three worker harnesses: opencode server sessions, DeepSeek Harness
+  (ACP, per-model `tools_mode` native / code / both), and Claude Code
+  (`claude -p --model …`, metered — for frontier roles only)
+- Capability tiers with auto routing, routing around down models,
+  per-model `max_concurrent`, and `pool`s that load-balance identical
+  model instances across hosts
 - `--worktree` isolation: each parallel worker in its own git worktree +
   branch; nothing clobbers your checkout, nothing merges without you
 - Per-project sessions with a picker (`s`) — resume any past conversation
@@ -100,7 +118,9 @@ results](docs/screenshot-dashboard.png)
   marked "process lost" on the next start instead of "running" forever
 - Loud permission denials with paste-ready allowlist fixes; `strawboss
   clean` retention sweeps; `strawboss costs` per-run summaries;
-  `strawboss models` (which models are up, their tiers and busy slots)
+  `strawboss models` (which models are up, their tiers and busy slots);
+  `strawboss stats` (per-model scorecard, `--by-role` to split by role);
+  `strawboss check` (the project's verify command)
 - `models.toml` is watched: edit it while strawboss runs and the Models
   tab and the supervisor's routing follow
 - Inside a herdr (terminal workspace manager) pane, strawboss reports itself to
@@ -122,7 +142,8 @@ cd strawboss && make build
 
 mkdir -p ~/.strawboss
 cp examples/models.toml ~/.strawboss/models.toml   # edit: your endpoint + models
-cp examples/config.toml ~/.strawboss/config.toml   # optional: notify/budget
+cp examples/config.toml ~/.strawboss/config.toml   # optional: notify/budget/roles mode
+cp examples/roles.toml ~/.strawboss/roles.toml     # optional: roles and pipelines
 
 ./bin/strawboss
 ```
@@ -276,8 +297,20 @@ preview), and its setup is currently manual:
    works around the wire quirks for you (an sglang/dsh tool-call
    streaming incompatibility, reasoning-effort vocabulary clashes).
 
+**Option C — Claude Code workers (metered, for frontier roles only)**:
+not a replacement for local workers — a way to give a few roles
+(security review, architecture) a frontier model.
+
+1. Nothing to install beyond the `claude` CLI the supervisor already uses.
+2. Add an entry with `harness = "claude"` and `model =
+   "claude-opus-5-5"` (no endpoint), and name it from a role in
+   `roles.toml` (`model = "opus"`). Routing never picks it by itself and
+   the supervisor can only reach it through such a role; every run
+   draws on your plan and counts toward the budget guard.
+
 `docs/NOTES.md` has the verified, step-by-step findings behind all of
-this. `examples/models.toml` shows both harness flavors side by side.
+this. `examples/models.toml` shows every harness flavor side by side, and
+`examples/roles.toml` a starter set of roles and pipelines.
 
 ## Claude usage & terms
 
@@ -299,7 +332,9 @@ crosses the line, regardless: running strawboss as a service for others
 on your subscription, always-on unattended daemon farms, or anything
 that spoofs the CLI. Keep it what it is — one human, steering their own
 account, interactively. Read Anthropic's current consumer terms
-yourself; they change.
+yourself; they change. Claude Code workers (the metered roles above) use
+the same CLI and login, and draw on the same plan — keep them to the few
+roles that need them.
 
 ## Honest maturity notes
 

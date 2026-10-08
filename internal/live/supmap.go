@@ -148,6 +148,28 @@ func mapSupEvent(ev supervisor.Event, pid int, supModel string) []tea.Msg {
 	return nil
 }
 
+// resultDelta turns a stream-mode result into THIS turn's share. The
+// supervisor process outlives its turns, and each result reports the
+// process's running totals (num_turns, total_cost_usd, usage), so the UI —
+// which adds every result — counted turn 1 again on every later turn: the
+// notional value grew quadratically to 20-40x the real figure. prev is the
+// previous result from the same process (zero for its first). A counter
+// that went backwards means a fresh process: its totals are already a
+// delta.
+func resultDelta(cur, prev supervisor.ResultEvent) supervisor.ResultEvent {
+	if cur.NumTurns < prev.NumTurns || cur.TotalCostUSD < prev.TotalCostUSD {
+		return cur
+	}
+	d := cur
+	d.NumTurns -= prev.NumTurns
+	d.TotalCostUSD -= prev.TotalCostUSD
+	d.Usage.InputTokens = max(0, cur.Usage.InputTokens-prev.Usage.InputTokens)
+	d.Usage.OutputTokens = max(0, cur.Usage.OutputTokens-prev.Usage.OutputTokens)
+	d.Usage.CacheCreationTokens = max(0, cur.Usage.CacheCreationTokens-prev.Usage.CacheCreationTokens)
+	d.Usage.CacheReadTokens = max(0, cur.Usage.CacheReadTokens-prev.Usage.CacheReadTokens)
+	return d
+}
+
 // parseDelegate recognizes a `strawboss delegate` Bash command and pulls
 // out --model and --task so the chat can show the terse delegation line.
 // Returns nil for anything else.

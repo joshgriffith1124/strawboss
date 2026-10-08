@@ -12,6 +12,39 @@ import (
 	"github.com/joshgriffith1124/strawboss/internal/ui"
 )
 
+// TestResultDelta: stream-mode results carry the process's running
+// totals; each turn must count only its own share.
+func TestResultDelta(t *testing.T) {
+	res := func(turns int, cost float64, in, out, cw, cr int) supervisor.ResultEvent {
+		return supervisor.ResultEvent{NumTurns: turns, TotalCostUSD: cost,
+			Usage: supervisor.Usage{InputTokens: in, OutputTokens: out, CacheCreationTokens: cw, CacheReadTokens: cr}}
+	}
+	tests := []struct {
+		name       string
+		cur, prev  supervisor.ResultEvent
+		wantTurns  int
+		wantCost   float64
+		wantIn     int
+		wantCacheR int
+	}{
+		{"first result of a process passes through", res(3, 0.50, 100, 50, 1000, 20000), supervisor.ResultEvent{}, 3, 0.50, 100, 20000},
+		{"later result counts only the new turn", res(5, 0.80, 150, 90, 1500, 50000), res(3, 0.50, 100, 50, 1000, 20000), 2, 0.30, 50, 30000},
+		{"counters went backwards: fresh process", res(1, 0.10, 10, 5, 100, 2000), res(5, 0.80, 150, 90, 1500, 50000), 1, 0.10, 10, 2000},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resultDelta(tt.cur, tt.prev)
+			if got.NumTurns != tt.wantTurns || got.Usage.InputTokens != tt.wantIn || got.Usage.CacheReadTokens != tt.wantCacheR {
+				t.Errorf("turns/in/cacheRead = %d/%d/%d, want %d/%d/%d", got.NumTurns, got.Usage.InputTokens,
+					got.Usage.CacheReadTokens, tt.wantTurns, tt.wantIn, tt.wantCacheR)
+			}
+			if diff := got.TotalCostUSD - tt.wantCost; diff > 1e-9 || diff < -1e-9 {
+				t.Errorf("cost = %v, want %v", got.TotalCostUSD, tt.wantCost)
+			}
+		})
+	}
+}
+
 func TestParseDelegate(t *testing.T) {
 	tests := []struct {
 		name string

@@ -385,7 +385,13 @@ func (o *Orchestrator) startStream(ctx context.Context) (*supervisor.Stream, err
 	o.mu.Unlock()
 	go func() {
 		pid := s.PID()
+		// This process's previous result: results carry running totals.
+		var prevResult supervisor.ResultEvent
 		for ev := range s.Events {
+			if r, ok := ev.(supervisor.ResultEvent); ok {
+				ev = resultDelta(r, prevResult)
+				prevResult = r
+			}
 			if init, isInit := ev.(supervisor.InitEvent); isInit && init.SessionID != "" {
 				_ = os.MkdirAll(filepath.Dir(o.sessionFile()), 0o755)
 				if err := os.WriteFile(o.sessionFile(), []byte(init.SessionID), 0o644); err != nil {

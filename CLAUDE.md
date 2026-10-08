@@ -18,9 +18,11 @@ Docs: `docs/KICKOFF.md` (milestones, stack), `docs/IDEA.md` (full design rationa
 3. **Terse-result contract.** The delegate command returns to the supervisor only:
    worker id, status, a few-line summary, and the full-log path. Full worker transcripts flow to
    the TUI through the harness — never through the supervisor. Keep avg result ≤ ~250 tokens.
-4. **Harness boundary.** UI code never talks to opencode directly — only through the
-   `WorkerHarness` interface (Spawn/Status/Events/Usage/Result). No second harness
-   implementation until one is actually wanted.
+4. **Harness boundary.** UI code never talks to a worker backend directly — only through
+   the `WorkerHarness` interface (Spawn/Status/Events/Usage/Result). Three implementations:
+   opencode, dsh, and claude (Claude Code workers for metered frontier roles). No further
+   harness without the maintainer's sign-off. Metered models (the claude harness) are never
+   chosen by routing on their own — only a role or an explicit human `--model` names them.
 5. **Model configs, not hosts.** Workers reference named entries in `models.toml`
    (name/endpoint/model/harness). No hostnames in UI code or display logic.
 6. **The supervisor must never block on an interactive permission prompt** — keep

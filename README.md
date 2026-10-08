@@ -78,9 +78,10 @@ results](docs/screenshot-dashboard.png)
   sparklines, a context gauge and a deadline countdown in each tile's
   header (amber under five minutes), kill (`x`) / retry (`r`) / retry-all
   (`R`), undo a worker's edits (`u`, press twice), deadline extensions
-  (`+`, default 5m per press, `workers.extend_step`), filtering (`/`); a
-  context gauge on the supervisor pane says when a fresh session (`/new`)
-  would be cheaper
+  (`+`, default 5m per press, `workers.extend_step`), filtering (`/`); the
+  supervisor pane header shows the git repo and branch it works in
+  (`strawboss ⎇ main *`, `*` = uncommitted changes) and a context gauge
+  that says when a fresh session (`/new`) would be cheaper
 - Roles and pipelines (opt-in, `roles.toml`): role prompts, per-role
   default models, read-only roles whose edits are reverted, and pipelines
   that hand each step's report to the next, with fix rounds driven by any

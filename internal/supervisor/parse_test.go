@@ -306,6 +306,12 @@ func TestParseResultModelWindows(t *testing.T) {
 	if got := res.ModelWindows["claude-haiku-4-5-20251001"]; got != 200_000 {
 		t.Errorf("haiku window = %d, want 200000", got)
 	}
+	if got := res.ModelCosts["claude-fable-5"]; got != 0.164 {
+		t.Errorf("fable cost = %v, want 0.164", got)
+	}
+	if got := res.ModelCosts["claude-haiku-4-5-20251001"]; got != 0.0009 {
+		t.Errorf("haiku cost = %v, want 0.0009", got)
+	}
 }
 
 // TestParseResultNoModelUsage: older streams have no modelUsage; the

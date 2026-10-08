@@ -387,6 +387,32 @@ func TestSupCtxLabel(t *testing.T) {
 	}
 }
 
+// TestModelCostLines: the notional value split by model, costliest first,
+// accumulated across results; nothing before a split is reported.
+func TestModelCostLines(t *testing.T) {
+	m := New(nil)
+	if got := m.modelCostLines(80); got != nil {
+		t.Fatalf("no split yet: got %q, want nil", got)
+	}
+	for _, msg := range []SupUsageMsg{
+		{CostUSD: 1.0, ModelCosts: map[string]float64{"helper": 0.05, "big": 0.95}},
+		{CostUSD: 1.0, ModelCosts: map[string]float64{"helper": 0.05, "big": 0.95}},
+	} {
+		next, _ := m.Update(msg)
+		m = next.(Model)
+	}
+	got := m.modelCostLines(80)
+	if len(got) != 2 {
+		t.Fatalf("got %d lines, want 2: %q", len(got), got)
+	}
+	if !strings.Contains(got[0], "big") || !strings.Contains(got[0], "$1.90") || !strings.Contains(got[0], "95%") {
+		t.Errorf("first line = %q, want big $1.90 (95%%)", got[0])
+	}
+	if !strings.Contains(got[1], "helper") || !strings.Contains(got[1], "$0.10") {
+		t.Errorf("second line = %q, want helper $0.10", got[1])
+	}
+}
+
 // TestWorkerCtxLabel: a worker pane's context gauge, in the same shape as
 // the supervisor's.
 func TestWorkerCtxLabel(t *testing.T) {

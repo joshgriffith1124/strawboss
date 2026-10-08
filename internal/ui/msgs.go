@@ -83,7 +83,10 @@ type SupUsageMsg struct {
 	Input, Output         int
 	CacheRead, CacheWrite int
 	CostUSD               float64
-	Turns                 int // increment
+	// ModelCosts splits CostUSD by model (session model vs the CLI's
+	// helper), additive like CostUSD; nil = no split reported.
+	ModelCosts map[string]float64
+	Turns      int // increment
 	// Ctx is the supervisor's last known context footprint (one API
 	// call's full prompt incl. cache reads) — carried by the seed msg so
 	// a resumed session shows its context BEFORE the first token burns.

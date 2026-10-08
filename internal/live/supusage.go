@@ -23,6 +23,9 @@ type supUsageTotals struct {
 	CacheWrite int     `json:"cache_write"`
 	Turns      int     `json:"turns"`
 	CostUSD    float64 `json:"cost_usd"`
+	// ModelCosts splits CostUSD by model (session model vs the CLI's
+	// helper model).
+	ModelCosts map[string]float64 `json:"model_costs,omitempty"`
 	// Ctx is the last API call's full prompt size — the session's context
 	// footprint. Persisted so a resume can show what the next prompt will
 	// re-read BEFORE it burns.
@@ -66,6 +69,18 @@ func (o *Orchestrator) recordSupUsage(msg ui.SupUsageMsg) {
 	o.supTotals.CacheWrite += msg.CacheWrite
 	o.supTotals.Turns += msg.Turns
 	o.supTotals.CostUSD += msg.CostUSD
+	if len(msg.ModelCosts) > 0 {
+		// A fresh map, never the previous snapshot's: t below is
+		// marshalled outside the lock.
+		costs := make(map[string]float64, len(o.supTotals.ModelCosts)+len(msg.ModelCosts))
+		for name, c := range o.supTotals.ModelCosts {
+			costs[name] = c
+		}
+		for name, c := range msg.ModelCosts {
+			costs[name] += c
+		}
+		o.supTotals.ModelCosts = costs
+	}
 	if msg.CtxWindow > 0 {
 		o.supTotals.Win = msg.CtxWindow
 	}
@@ -95,7 +110,7 @@ func (o *Orchestrator) seedSupUsage() {
 		o.emitAsync(ui.SupUsageMsg{
 			Input: t.In, Output: t.Out,
 			CacheRead: t.CacheRead, CacheWrite: t.CacheWrite,
-			CostUSD: t.CostUSD, Turns: t.Turns,
+			CostUSD: t.CostUSD, ModelCosts: t.ModelCosts, Turns: t.Turns,
 			Ctx: t.Ctx, CtxWindow: t.Win,
 		})
 	}

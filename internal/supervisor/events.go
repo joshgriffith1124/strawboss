@@ -189,6 +189,10 @@ type ResultEvent struct {
 	// session's own, so the caller must pick by the model name from
 	// system/init rather than assuming one entry.
 	ModelWindows map[string]int
+	// ModelCosts is each model's notional cost from modelUsage[].costUSD:
+	// the session model plus the CLI's small helper model. Running totals
+	// for the process, like TotalCostUSD.
+	ModelCosts map[string]float64
 }
 
 // UnknownEvent preserves lines this parser doesn't understand (new CLI

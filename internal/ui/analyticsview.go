@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
@@ -73,6 +74,39 @@ func (m Model) scorecardLines(w int) []string {
 	return lines
 }
 
+// modelCostLines splits the notional API value by model, costliest first:
+// the session model and the small helper model the CLI runs alongside it.
+// Shown only once a result has reported a split.
+func (m Model) modelCostLines(w int) []string {
+	if len(m.supModelCost) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(m.supModelCost))
+	total := 0.0
+	for name, c := range m.supModelCost {
+		names = append(names, name)
+		total += c
+	}
+	sort.Slice(names, func(i, j int) bool {
+		ci, cj := m.supModelCost[names[i]], m.supModelCost[names[j]]
+		if ci != cj {
+			return ci > cj
+		}
+		return names[i] < names[j]
+	})
+	lines := make([]string, 0, len(names))
+	for _, name := range names {
+		c := m.supModelCost[name]
+		pct := 0
+		if total > 0 {
+			pct = int(100*c/total + 0.5)
+		}
+		suffix := fmt.Sprintf(" $%.2f (%d%%)", c, pct)
+		lines = append(lines, "   "+sFaint.Render(truncPlain(name, w-6-len(suffix))+suffix))
+	}
+	return lines
+}
+
 // supervisorDetailLines builds the supervisor session's token-economy
 // lines: auth + marginal cost, context footprint, fresh-in / cache-read
 // split, output, notional API value and average result size, plan-window
@@ -98,6 +132,7 @@ func (m Model) supervisorDetailLines(w int) []string {
 		" " + sDim.Render(fmt.Sprintf("output   %8s", formatTokens(dOut))),
 		" " + sDim.Render(fmt.Sprintf("notional API value $%.2f · avg %d tok/delegation result", m.supCost, avgResult)),
 	}
+	lines = append(lines, m.modelCostLines(w)...)
 	if m.supCtx > 0 {
 		// MOCKUP.html shows "context    168k/200k" in this panel; the
 		// denominator is the session model's own window, not a constant —

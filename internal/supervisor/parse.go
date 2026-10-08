@@ -286,19 +286,23 @@ func parseResult(line []byte, sessionID string) (Event, error) {
 		DurationMS    int     `json:"duration_ms"`
 		DurationAPIMS int     `json:"duration_api_ms"`
 		ModelUsage    map[string]struct {
-			ContextWindow int `json:"contextWindow"`
+			ContextWindow int     `json:"contextWindow"`
+			CostUSD       float64 `json:"costUSD"`
 		} `json:"modelUsage"`
 	}
 	if err := json.Unmarshal(line, &v); err != nil {
 		return UnknownEvent{Type: "result", Raw: line, Err: err}, nil
 	}
 	var windows map[string]int
+	var costs map[string]float64
 	if len(v.ModelUsage) > 0 {
 		windows = make(map[string]int, len(v.ModelUsage))
+		costs = make(map[string]float64, len(v.ModelUsage))
 		for name, u := range v.ModelUsage {
 			if u.ContextWindow > 0 {
 				windows[name] = u.ContextWindow
 			}
+			costs[name] = u.CostUSD
 		}
 	}
 	return ResultEvent{
@@ -312,5 +316,6 @@ func parseResult(line []byte, sessionID string) (Event, error) {
 		DurationMS:    v.DurationMS,
 		DurationAPIMS: v.DurationAPIMS,
 		ModelWindows:  windows,
+		ModelCosts:    costs,
 	}, nil
 }

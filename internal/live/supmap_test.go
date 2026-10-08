@@ -45,6 +45,23 @@ func TestResultDelta(t *testing.T) {
 	}
 }
 
+// TestResultDeltaModelCosts: the per-model split is a running total too.
+func TestResultDeltaModelCosts(t *testing.T) {
+	prev := supervisor.ResultEvent{NumTurns: 2, TotalCostUSD: 0.60,
+		ModelCosts: map[string]float64{"big": 0.55, "helper": 0.05}}
+	cur := supervisor.ResultEvent{NumTurns: 3, TotalCostUSD: 1.00,
+		ModelCosts: map[string]float64{"big": 0.90, "helper": 0.10}}
+	got := resultDelta(cur, prev).ModelCosts
+	for name, want := range map[string]float64{"big": 0.35, "helper": 0.05} {
+		if d := got[name] - want; d > 1e-9 || d < -1e-9 {
+			t.Errorf("ModelCosts[%s] = %v, want %v", name, got[name], want)
+		}
+	}
+	if cur.ModelCosts["big"] != 0.90 {
+		t.Error("resultDelta mutated the caller's running totals")
+	}
+}
+
 func TestParseDelegate(t *testing.T) {
 	tests := []struct {
 		name string

@@ -118,6 +118,7 @@ func mapSupEvent(ev supervisor.Event, pid int, supModel string) []tea.Msg {
 			CacheRead:  e.Usage.CacheReadTokens,
 			CacheWrite: e.Usage.CacheCreationTokens,
 			CostUSD:    e.TotalCostUSD,
+			ModelCosts: e.ModelCosts,
 			Turns:      1,
 			CtxWindow:  e.ModelWindows[supModel],
 		}, ui.SupTurnDoneMsg{Interrupted: e.Interrupted}}
@@ -167,6 +168,12 @@ func resultDelta(cur, prev supervisor.ResultEvent) supervisor.ResultEvent {
 	d.Usage.OutputTokens = max(0, cur.Usage.OutputTokens-prev.Usage.OutputTokens)
 	d.Usage.CacheCreationTokens = max(0, cur.Usage.CacheCreationTokens-prev.Usage.CacheCreationTokens)
 	d.Usage.CacheReadTokens = max(0, cur.Usage.CacheReadTokens-prev.Usage.CacheReadTokens)
+	if len(cur.ModelCosts) > 0 {
+		d.ModelCosts = make(map[string]float64, len(cur.ModelCosts))
+		for name, c := range cur.ModelCosts {
+			d.ModelCosts[name] = max(0, c-prev.ModelCosts[name])
+		}
+	}
 	return d
 }
 

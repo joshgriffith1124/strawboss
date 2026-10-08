@@ -329,6 +329,9 @@ type Model struct {
 	turnIn, turnOut, turnCacheRead, turnCacheWrite int
 	supCost                                        float64
 	supTurns                                       int
+	// supModelCost splits supCost by model (session model vs the CLI's
+	// helper model); nil until a result reports a split.
+	supModelCost map[string]float64
 	// supCtx is the supervisor's context footprint: the last API call's
 	// full prompt size (fresh + cache reads + writes). Every call re-reads
 	// the whole prefix, so this is what each future call will cost again.
@@ -583,6 +586,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.supCacheRead += msg.CacheRead
 		m.supCacheWrite += msg.CacheWrite
 		m.supCost += msg.CostUSD
+		if len(msg.ModelCosts) > 0 {
+			// Copy-on-write: Model is a value type, and a map shared with
+			// an earlier copy would change under it.
+			costs := make(map[string]float64, len(m.supModelCost)+len(msg.ModelCosts))
+			for name, c := range m.supModelCost {
+				costs[name] = c
+			}
+			for name, c := range msg.ModelCosts {
+				costs[name] += c
+			}
+			m.supModelCost = costs
+		}
 		m.supTurns += msg.Turns
 		m.turnIn, m.turnOut, m.turnCacheRead, m.turnCacheWrite = 0, 0, 0, 0
 		if msg.CtxWindow > 0 {
@@ -795,6 +810,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.supIn, m.supOut, m.supCacheRead, m.supCacheWrite = 0, 0, 0, 0
 		m.turnIn, m.turnOut, m.turnCacheRead, m.turnCacheWrite = 0, 0, 0, 0
 		m.supCost, m.supTurns = 0, 0
+		m.supModelCost = nil
 		m.supCtx, m.ctxWarned = 0, false
 		m.chat = nil
 		m.streaming = ""

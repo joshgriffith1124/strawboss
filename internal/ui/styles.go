@@ -202,13 +202,25 @@ func truncPlain(s string, n int) string {
 		b.WriteRune(r)
 	}
 	s = b.String()
-	if len(s) <= n {
+	// Measure in cells, not bytes: "⎇" is 3 bytes but 1 cell, and a byte
+	// count cut labels that fit (and could split a rune).
+	if lipgloss.Width(s) <= n {
 		return s
 	}
 	if n <= 1 {
 		return "…"
 	}
-	return s[:n-1] + "…"
+	b.Reset()
+	used := 0
+	for _, r := range s {
+		rw := lipgloss.Width(string(r))
+		if used+rw > n-1 {
+			break
+		}
+		b.WriteRune(r)
+		used += rw
+	}
+	return b.String() + "…"
 }
 
 func formatTokens(n int) string {

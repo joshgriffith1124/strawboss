@@ -59,6 +59,10 @@ func TestRepoLabel(t *testing.T) {
 	}{
 		{80, "strawboss ⎇ repo-info-pane *"},
 		{20, "⎇ repo-info-pane *"}, // repo name dropped, branch whole
+		// Exactly 18 cells but 20 bytes ("⎇" is 3 bytes): must still fit.
+		{19, "⎇ repo-info-pane *"},
+		{18, "⎇ repo-info-pane *"},
+		{17, "⎇ repo-info-pane…"},
 	}
 	for _, tt := range tests {
 		if got := m.repoLabel(tt.room); got != tt.want {

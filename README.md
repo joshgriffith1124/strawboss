@@ -83,8 +83,8 @@ results](docs/screenshot-dashboard.png)
   would be cheaper
 - Roles and pipelines (opt-in, `roles.toml`): role prompts, per-role
   default models, read-only roles whose edits are reverted, and pipelines
-  that hand each step's report to the next with reviewer-driven fix
-  rounds. `ctrl+r` toggles whether the supervisor is offered them
+  that hand each step's report to the next, with fix rounds driven by any
+  read-only gate (reviewer, security) and each step's place on its tile. `ctrl+r` toggles whether the supervisor is offered them
   ("roles on" in its pane header); `strawboss stats --by-role` measures
   whether they pay off
 - Paste images into the supervisor chat (`alt+v`, or `ctrl+v` where the
@@ -174,9 +174,12 @@ default model or tier, and an optional `read_only` rule (a read-only
 worker that edits anyway fails and its edits are reverted). A pipeline
 chains roles inside one delegate call: `strawboss delegate --pipeline
 feature --task "..."` runs plan → code → review in order in the working
-directory, handing each step's full report to the next, with optional fix
-rounds when the reviewer ends on `VERDICT: CHANGES`; the supervisor reads
-one terse result. Nothing changes until you use it: the supervisor is only
+directory, handing each step's full report to the next. With
+`fix_rounds`, every read-only step after a writing step is a gate — a
+reviewer or security audit ending on `VERDICT: CHANGES` sends its findings
+back to the coder, then re-checks (each gate has its own budget); the
+supervisor reads one terse result, and each step's tile shows its place
+(`w906 coder · feature 2/3`, `· feature fix 1 · security`). Nothing changes until you use it: the supervisor is only
 told about roles while the roles mode is on — `ctrl+r` in the TUI toggles
 it live (the header shows "roles on"; the supervisor restarts on the same
 session to pick it up, after the current turn if one is running), and

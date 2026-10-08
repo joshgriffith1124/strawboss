@@ -43,10 +43,12 @@ type PipelineConfig struct {
 	Name        string   `toml:"-"`
 	Description string   `toml:"description"`
 	Steps       []string `toml:"steps"`
-	// FixRounds lets the final step — which must be a read-only reviewer —
-	// send its findings back: the last writing step runs again on them,
-	// then the reviewer re-checks, at most this many times. 0 = review
-	// only, never loop.
+	// FixRounds turns every read-only step that follows a writing step
+	// into a gate (reviewer, security, QA in report mode): a CHANGES
+	// verdict sends its findings back to the nearest writing step before
+	// it, then the gate re-checks — at most this many times PER GATE.
+	// Read-only steps before any writer (an architect) only plan. 0 =
+	// report only, never loop.
 	FixRounds int `toml:"fix_rounds"`
 }
 
@@ -147,22 +149,22 @@ func LoadRoles(path string, models []ModelConfig) (Roles, error) {
 		if len(pc.Steps) == 0 {
 			return Roles{}, fmt.Errorf("pipeline %q: no steps", pc.Name)
 		}
-		writes := false
+		// A gate is a read-only step after a writing step (see
+		// PipelineConfig.FixRounds); fix rounds need at least one.
+		writes, gate := false, false
 		for _, step := range pc.Steps {
 			rc, ok := out.Role(step)
 			if !ok {
 				return Roles{}, fmt.Errorf("pipeline %q: step %q is not a role in %s", pc.Name, step, path)
 			}
+			gate = gate || (rc.ReadOnly && writes)
 			writes = writes || !rc.ReadOnly
 		}
 		if pc.FixRounds < 0 {
 			return Roles{}, fmt.Errorf("pipeline %q: fix_rounds %d must be 0 or more", pc.Name, pc.FixRounds)
 		}
-		if pc.FixRounds > 0 {
-			last, _ := out.Role(pc.Steps[len(pc.Steps)-1])
-			if !last.ReadOnly || !writes {
-				return Roles{}, fmt.Errorf("pipeline %q: fix_rounds needs a read-only last step reviewing an earlier writing step", pc.Name)
-			}
+		if pc.FixRounds > 0 && !gate {
+			return Roles{}, fmt.Errorf("pipeline %q: fix_rounds needs a read-only step (reviewer, security, …) after a writing step", pc.Name)
 		}
 	}
 	return out, nil

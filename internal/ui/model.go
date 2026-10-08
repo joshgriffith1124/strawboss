@@ -73,6 +73,8 @@ type workerRow struct {
 	Steps    int // completed model steps (dsh; 0 = unknown)
 	Deadline time.Time
 	Role     string // roles.toml role ("" = plain task)
+	Pipeline string // pipeline this worker is a step of ("" = none)
+	Step     string // its place: "2/3", "fix 1 · security", "3/3 recheck 1"
 	Metered  bool   // runs on a metered model (a Claude Code worker), not free local
 }
 
@@ -673,6 +675,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.Role != "" {
 			w.Role = msg.Role
+		}
+		if msg.Pipeline != "" {
+			w.Pipeline, w.Step = msg.Pipeline, msg.Step
 		}
 		if msg.Metered {
 			w.Metered = true

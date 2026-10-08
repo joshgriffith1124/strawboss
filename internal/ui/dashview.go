@@ -258,6 +258,15 @@ func (m Model) workerDetailLines(wk *workerRow, w int) []string {
 		lines = append(lines, " "+style.Render("ends "+wk.Deadline.Local().Format("15:04")+" · "+left+" left"))
 	}
 
+	// A role or pipeline step names its place in the chain.
+	if wk.Role != "" {
+		where := "role " + wk.Role
+		if wk.Pipeline != "" {
+			where += " · pipeline " + wk.Pipeline + " " + wk.Step
+		}
+		lines = append(lines, " "+sAmber.Render(truncPlain(where, w-4)))
+	}
+
 	meta := fmt.Sprintf("started %s · ran %s", wk.Started.Local().Format("15:04:05"), formatMinSec(elapsed))
 	if wk.Steps > 0 {
 		meta += fmt.Sprintf(" · step %d", wk.Steps)

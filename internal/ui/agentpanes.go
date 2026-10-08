@@ -153,6 +153,10 @@ func (m Model) viewWorkerPane(wk *workerRow, w, h int, focused bool) string {
 	if wk.Role != "" {
 		label += " " + wk.Role
 	}
+	if wk.Pipeline != "" {
+		// Where in the chain: "w906 coder · feature 2/3".
+		label += " · " + wk.Pipeline + " " + wk.Step
+	}
 	text, fg, bg := glyphQueued+" "+label+" ›", cAmber, cKeyBg
 	switch wk.Status {
 	case "running":

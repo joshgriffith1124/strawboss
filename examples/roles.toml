@@ -21,9 +21,13 @@
 # A pipeline chains roles inside ONE delegate call: the steps run in order
 # in the task's working directory (no branch to merge), each step's full
 # report is handed to the next, and the supervisor reads one terse result.
-# fix_rounds > 0 makes a read-only last step a gate: it must end its reply
-# with "VERDICT: PASS" or "VERDICT: CHANGES"; CHANGES sends its findings
-# back to the last writing step, then it re-reviews, up to fix_rounds times.
+# fix_rounds > 0 makes every read-only step that follows a writing step a
+# GATE (reviewer, security, …): it must end its reply with "VERDICT: PASS"
+# or "VERDICT: CHANGES"; CHANGES sends its findings back to the nearest
+# writing step before it, then the gate re-checks — up to fix_rounds times
+# per gate. A gate still requesting changes fails the pipeline. Read-only
+# steps before any writer (architect) only plan. Each step's tile shows
+# its place: "w906 coder · feature 2/3", "· feature fix 1 · security".
 #
 # Every step is a full worker run, and a pipeline costs several of them —
 # measure with `strawboss stats --by-role` before making one the default.
@@ -89,3 +93,10 @@ fix_rounds = 1
 description = "bug fixes: implement, then review with one fix round"
 steps = ["coder", "reviewer"]
 fix_rounds = 1
+
+# With the security role enabled: security and the reviewer are both gates,
+# each with its own fix round.
+# [pipelines.secure]
+# description = "security-sensitive changes: plan, implement, security audit, review"
+# steps = ["architect", "coder", "security", "reviewer"]
+# fix_rounds = 1

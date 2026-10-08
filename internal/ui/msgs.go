@@ -146,6 +146,9 @@ type WorkerUpsertMsg struct {
 	Deadline time.Time
 	// Role is the roles.toml role the worker runs in; "" keeps existing.
 	Role string
+	// Pipeline and Step place a pipeline step's worker in its chain
+	// ("feature", "2/3" / "fix 1 · security"); "" keeps existing.
+	Pipeline, Step string
 	// Metered marks a worker on a metered model (a Claude Code worker);
 	// false keeps existing.
 	Metered bool

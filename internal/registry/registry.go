@@ -38,6 +38,10 @@ type Event struct {
 	// Role is the roles.toml role the worker ran in ("" = plain task),
 	// stamped on every event so the TUI and the scorecard can split by it.
 	Role string `json:"role,omitempty"`
+	// Pipeline and Step place a pipeline step's worker in its chain
+	// ("feature", "2/3" or "fix 1 · security"), stamped like Role.
+	Pipeline string `json:"pipeline,omitempty"`
+	Step     string `json:"step,omitempty"`
 	// Deadline is a deadline-event field: the worker's current per-attempt
 	// deadline (initial or extended), so the TUI can show time left and
 	// operator push-backs.
@@ -64,6 +68,8 @@ type Registry struct {
 	// Role is stamped onto every appended event that doesn't carry one.
 	// Delegate gives each role task its own copy of the Registry.
 	Role string
+	// Pipeline and Step are stamped like Role for a pipeline step.
+	Pipeline, Step string
 }
 
 // withLock serializes multi-process access (concurrent delegations) around
@@ -87,6 +93,9 @@ func (r *Registry) withLock(fn func() error) error {
 func (r *Registry) append(ev Event) error {
 	if ev.Role == "" {
 		ev.Role = r.Role
+	}
+	if ev.Pipeline == "" {
+		ev.Pipeline, ev.Step = r.Pipeline, r.Step
 	}
 	f, err := os.OpenFile(r.Path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {

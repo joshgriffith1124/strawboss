@@ -101,6 +101,7 @@ func (o *Orchestrator) applyRegistryEvent(ctx context.Context, ev registry.Event
 		o.mu.Unlock()
 		o.emitBatch(ctx, batch, ui.WorkerUpsertMsg{
 			ID: ev.Worker, Model: ev.Model, Task: ev.Task, Dir: ev.Dir, Role: ev.Role,
+			Pipeline: ev.Pipeline, Step: ev.Step,
 			Status: "queued",
 		})
 	case "spawned":
@@ -128,6 +129,7 @@ func (o *Orchestrator) applyRegistryEvent(ctx context.Context, ev registry.Event
 		}
 		o.emitBatch(ctx, batch, ui.WorkerUpsertMsg{
 			ID: ev.Worker, Model: ev.Model, Task: ev.Task, Dir: ev.Dir, Role: ev.Role,
+			Pipeline: ev.Pipeline, Step: ev.Step,
 			Status: "running", Started: ev.TS, Metered: known && mc.Metered(),
 		})
 	case "finished":

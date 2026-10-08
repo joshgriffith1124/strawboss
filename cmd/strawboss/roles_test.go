@@ -149,7 +149,7 @@ func TestRunPipeline(t *testing.T) {
 			var runs []string
 			used := map[string]int{}
 			var prompts []string
-			env := pipelineEnv{roles: roles, step: func(_ context.Context, rc config.RoleConfig, prompt, _ string) runner.Outcome {
+			env := pipelineEnv{roles: roles, step: func(_ context.Context, rc config.RoleConfig, prompt, _, _, _ string) runner.Outcome {
 				runs = append(runs, rc.Name)
 				prompts = append(prompts, prompt)
 				reply := tt.replies[rc.Name][used[rc.Name]]
@@ -190,8 +190,10 @@ func TestRunPipelineFixPrompt(t *testing.T) {
 	roles := config.Roles{Roles: []config.RoleConfig{{Name: "coder"}, {Name: "reviewer", ReadOnly: true}}}
 	var prompts []string
 	replies := []string{"v1", "nil deref in parse()\nVERDICT: CHANGES", "v2", "VERDICT: PASS"}
-	env := pipelineEnv{roles: roles, step: func(_ context.Context, _ config.RoleConfig, prompt, _ string) runner.Outcome {
+	var labels []string
+	env := pipelineEnv{roles: roles, step: func(_ context.Context, _ config.RoleConfig, prompt, _, pipeline, label string) runner.Outcome {
 		prompts = append(prompts, prompt)
+		labels = append(labels, pipeline+" "+label)
 		r := replies[len(prompts)-1]
 		return runner.Outcome{WorkerID: fmt.Sprintf("w%d", len(prompts)), Res: harness.Result{Status: harness.StatusDone, Report: r}}
 	}}
@@ -204,5 +206,94 @@ func TestRunPipelineFixPrompt(t *testing.T) {
 	}
 	if !strings.Contains(prompts[2], "Fix round 1 of 1") || !strings.Contains(prompts[2], "nil deref in parse()") {
 		t.Errorf("fix prompt lacks the findings:\n%s", prompts[2])
+	}
+	// Each worker is labelled with its place in the chain.
+	if want := "fix 1/2|fix 2/2|fix fix 1 · reviewer|fix 2/2 recheck 1"; strings.Join(labels, "|") != want {
+		t.Errorf("labels = %q, want %q", strings.Join(labels, "|"), want)
+	}
+}
+
+// TestRunPipelineGates: every read-only step after a writer is a gate with
+// its own fix-round budget — a security gate in the middle sends its
+// findings back to the coder before the reviewer runs; an architect
+// before any writer only plans.
+func TestRunPipelineGates(t *testing.T) {
+	roles := config.Roles{Roles: []config.RoleConfig{
+		{Name: "architect", ReadOnly: true},
+		{Name: "coder"},
+		{Name: "security", ReadOnly: true},
+		{Name: "reviewer", ReadOnly: true},
+	}}
+	tests := []struct {
+		name       string
+		replies    map[string][]string
+		wantRuns   string
+		wantStatus harness.Status
+		wantInHead []string
+	}{
+		{
+			name: "security finds a hole, coder fixes, then the reviewer passes",
+			replies: map[string][]string{
+				"architect": {"plan"},
+				"coder":     {"v1", "v2"},
+				"security":  {"SQL injection in q()\nVERDICT: CHANGES", "VERDICT: PASS"},
+				"reviewer":  {"VERDICT: PASS"},
+			},
+			wantRuns:   "architect coder security coder security reviewer",
+			wantStatus: harness.StatusDone,
+			wantInHead: []string{"1 fix round(s)", "security PASS", "reviewer PASS"},
+		},
+		{
+			name: "each gate has its own budget",
+			replies: map[string][]string{
+				"architect": {"plan"},
+				"coder":     {"v1", "v2", "v3"},
+				"security":  {"VERDICT: CHANGES", "VERDICT: PASS"},
+				"reviewer":  {"VERDICT: CHANGES", "VERDICT: PASS"},
+			},
+			wantRuns:   "architect coder security coder security reviewer coder reviewer",
+			wantStatus: harness.StatusDone,
+			wantInHead: []string{"2 fix round(s)", "security PASS", "reviewer PASS"},
+		},
+		{
+			name: "a gate still requesting changes stops the chain",
+			replies: map[string][]string{
+				"architect": {"plan"},
+				"coder":     {"v1", "v2"},
+				"security":  {"VERDICT: CHANGES", "VERDICT: CHANGES"},
+			},
+			wantRuns:   "architect coder security coder security",
+			wantStatus: harness.StatusFailed,
+			wantInHead: []string{"security still requests changes"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var runs []string
+			used := map[string]int{}
+			env := pipelineEnv{roles: roles, step: func(_ context.Context, rc config.RoleConfig, prompt, _, _, _ string) runner.Outcome {
+				runs = append(runs, rc.Name)
+				if rc.Name == "architect" && strings.Contains(prompt, "VERDICT") {
+					t.Error("the architect (before any writer) was asked for a verdict")
+				}
+				reply := tt.replies[rc.Name][used[rc.Name]]
+				used[rc.Name]++
+				return runner.Outcome{WorkerID: fmt.Sprintf("w%d", len(runs)), Res: harness.Result{Status: harness.StatusDone, Report: reply}}
+			}}
+			p := config.PipelineConfig{Name: "secure", Steps: []string{"architect", "coder", "security", "reviewer"}, FixRounds: 1}
+			oc := runPipeline(context.Background(), env, p, "the task")
+			if got := strings.Join(runs, " "); got != tt.wantRuns {
+				t.Errorf("runs = %q, want %q", got, tt.wantRuns)
+			}
+			if oc.Res.Status != tt.wantStatus {
+				t.Errorf("status = %s, want %s\n%s", oc.Res.Status, tt.wantStatus, oc.Res.Summary)
+			}
+			head := strings.SplitN(oc.Res.Summary, "\n", 2)[0]
+			for _, want := range tt.wantInHead {
+				if !strings.Contains(head, want) {
+					t.Errorf("summary head %q missing %q", head, want)
+				}
+			}
+		})
 	}
 }

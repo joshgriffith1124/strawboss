@@ -49,14 +49,23 @@ fix_rounds = 1
 		{name: "pipeline step not a role", toml: "[roles.a]\n[pipelines.p]\nsteps = [\"a\", \"b\"]\n", wantErr: `step "b" is not a role`},
 		{name: "empty pipeline", toml: "[pipelines.p]\nsteps = []\n", wantErr: "no steps"},
 		{
-			name:    "fix rounds need a read-only last step",
+			name:    "fix rounds need a read-only step after a writer",
 			toml:    "[roles.coder]\n[roles.other]\n[pipelines.p]\nsteps = [\"coder\", \"other\"]\nfix_rounds = 1\n",
-			wantErr: "fix_rounds needs a read-only last step",
+			wantErr: "fix_rounds needs a read-only step",
 		},
 		{
-			name:    "fix rounds need a writing step to fix",
-			toml:    "[roles.r]\nread_only = true\n[pipelines.p]\nsteps = [\"r\"]\nfix_rounds = 1\n",
-			wantErr: "fix_rounds needs a read-only last step",
+			name:    "a read-only step before any writer is not a gate",
+			toml:    "[roles.r]\nread_only = true\n[roles.coder]\n[pipelines.p]\nsteps = [\"r\", \"coder\"]\nfix_rounds = 1\n",
+			wantErr: "fix_rounds needs a read-only step",
+		},
+		{
+			name: "a gate in the middle is enough",
+			toml: "[roles.coder]\n[roles.security]\nread_only = true\n[roles.docs]\n[pipelines.p]\nsteps = [\"coder\", \"security\", \"docs\"]\nfix_rounds = 1\n",
+			check: func(t *testing.T, r Roles) {
+				if p, ok := r.Pipeline("p"); !ok || p.FixRounds != 1 {
+					t.Errorf("pipeline = %+v", p)
+				}
+			},
 		},
 	}
 	for _, tt := range tests {

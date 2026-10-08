@@ -147,6 +147,19 @@ split work evenly across the least-loaded member.
 `examples/models.toml` has a worked pair; `docs/DELEGATION.md` has the
 routing rules.
 
+**Roles and pipelines (opt-in).** `~/.strawboss/roles.toml` can define
+worker roles — architect, coder, reviewer, QA — each a prompt preamble, a
+default model or tier, and an optional `read_only` rule (a read-only
+worker that edits anyway fails and its edits are reverted). A pipeline
+chains roles inside one delegate call: `strawboss delegate --pipeline
+feature --task "..."` runs plan → code → review in order in the working
+directory, handing each step's full report to the next, with optional fix
+rounds when the reviewer ends on `VERDICT: CHANGES`; the supervisor reads
+one terse result. Nothing changes until you use it: the supervisor is only
+told about roles with `[roles] mode = "on"` in `config.toml` (or
+`strawboss --roles on`), and `strawboss stats --by-role` shows whether a
+role earns its extra runs. `examples/roles.toml` has a starter set.
+
 **Verify.** Put `verify = "go test ./..."` (or your build/lint/test
 command) in a `.strawboss.toml` at the project root and delegate runs it
 after workers finish: a worker whose check fails is reported failed and

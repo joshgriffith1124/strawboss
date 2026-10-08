@@ -100,7 +100,7 @@ func (o *Orchestrator) applyRegistryEvent(ctx context.Context, ev registry.Event
 		o.workerTask[ev.Worker] = ev.Task
 		o.mu.Unlock()
 		o.emitBatch(ctx, batch, ui.WorkerUpsertMsg{
-			ID: ev.Worker, Model: ev.Model, Task: ev.Task, Dir: ev.Dir,
+			ID: ev.Worker, Model: ev.Model, Task: ev.Task, Dir: ev.Dir, Role: ev.Role,
 			Status: "queued",
 		})
 	case "spawned":
@@ -123,7 +123,7 @@ func (o *Orchestrator) applyRegistryEvent(ctx context.Context, ev registry.Event
 			go o.tailDshWorker(ctx, ev.Worker, ev.Session)
 		}
 		o.emitBatch(ctx, batch, ui.WorkerUpsertMsg{
-			ID: ev.Worker, Model: ev.Model, Task: ev.Task, Dir: ev.Dir,
+			ID: ev.Worker, Model: ev.Model, Task: ev.Task, Dir: ev.Dir, Role: ev.Role,
 			Status: "running", Started: ev.TS,
 		})
 	case "finished":

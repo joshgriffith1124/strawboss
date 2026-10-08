@@ -30,6 +30,7 @@ func runTUI(args []string) error {
 	demo := fs.Bool("demo", false, "drive the UI from recorded streams instead of live feeds")
 	speed := fs.Float64("speed", 1, "demo replay speed multiplier")
 	fresh := fs.Bool("new", false, "start a fresh supervisor session instead of resuming the last one")
+	rolesMode := fs.String("roles", "", "roles mode for this run: on or off (default: config.toml [roles] mode, else off)")
 	stateDir := fs.String("state-dir", "", "state directory (default ~/.strawboss)")
 	modelsPath := fs.String("models", "", "models.toml path (default <state-dir>/models.toml)")
 	if err := fs.Parse(args); err != nil {
@@ -60,7 +61,7 @@ func runTUI(args []string) error {
 		m = ui.New(replay.Feed(*speed))
 	} else {
 		var err error
-		if m, cleanup, err = buildLive(*stateDir, *modelsPath, *fresh); err != nil {
+		if m, cleanup, err = buildLive(*stateDir, *modelsPath, *fresh, *rolesMode); err != nil {
 			return err
 		}
 	}
@@ -142,7 +143,7 @@ func supervisorDisallowedTools(stateDir string) []string {
 	return []string{"Read(//" + strings.TrimPrefix(filepath.ToSlash(abs), "/") + "/**)"}
 }
 
-func buildLive(stateDir, modelsPath string, fresh bool) (ui.Model, func(), error) {
+func buildLive(stateDir, modelsPath string, fresh bool, rolesMode string) (ui.Model, func(), error) {
 	var zero ui.Model
 	if stateDir == "" {
 		var err error
@@ -173,9 +174,39 @@ func buildLive(stateDir, modelsPath string, fresh bool) (ui.Model, func(), error
 
 	allowed := supervisorAllowedTools(exe, cfg.Supervisor.AllowedTools)
 	denied := supervisorDisallowedTools(stateDir)
+	// Roles mode (opt-in): config.toml [roles] mode, overridden per run by
+	// --roles. On, the supervisor is offered roles.toml's roles and
+	// pipelines; off, its prompt never mentions them.
+	rolesOn := cfg.Roles.On()
+	switch rolesMode {
+	case "on":
+		rolesOn = true
+	case "off":
+		rolesOn = false
+	case "":
+	default:
+		return zero, nil, fmt.Errorf("--roles %q: want on or off", rolesMode)
+	}
+	rolesPath := filepath.Join(stateDir, "roles.toml")
+	if rolesOn {
+		if _, err := config.LoadRoles(rolesPath, models); err != nil {
+			return zero, nil, err
+		}
+	}
+	promptFor := func(ms []config.ModelConfig) string {
+		p := live.BuildSystemPrompt(exe, ms)
+		if rolesOn {
+			// Validated above; a later models.toml edit that breaks a role
+			// drops the section rather than the whole prompt.
+			if roles, err := config.LoadRoles(rolesPath, ms); err == nil {
+				p += live.RolesPrompt(exe, roles)
+			}
+		}
+		return p
+	}
 	system := cfg.Supervisor.SystemPrompt
 	if system == "" {
-		system = live.BuildSystemPrompt(exe, models)
+		system = promptFor(models)
 	}
 	// The run id scopes worker history: --new rotates it so old runs'
 	// workers don't replay into a fresh session; resume keeps it. Both it
@@ -211,7 +242,7 @@ func buildLive(stateDir, modelsPath string, fresh bool) (ui.Model, func(), error
 	o := live.New(driver, models, stateDir)
 	o.ModelsPath = modelsPath
 	if cfg.Supervisor.SystemPrompt == "" {
-		o.PromptFor = func(ms []config.ModelConfig) string { return live.BuildSystemPrompt(exe, ms) }
+		o.PromptFor = promptFor
 	}
 	o.RunID = runID
 	o.Notify = cfg.Notify

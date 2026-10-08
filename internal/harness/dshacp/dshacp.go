@@ -474,10 +474,11 @@ func (h *Harness) Result(ctx context.Context, workerID string) (harness.Result, 
 		summary = "worker produced no answer (model finish: " + info.FinishReason +
 			") — likely output budget exhausted. Do NOT retry the same task: split it into smaller pieces or demand a much smaller deliverable."
 	}
+	report := summary
 	if len(summary) > maxSummaryBytes {
 		summary = summary[:maxSummaryBytes] + "…"
 	}
-	return harness.Result{WorkerID: workerID, Status: status, Summary: summary, LogPath: logPath}, nil
+	return harness.Result{WorkerID: workerID, Status: status, Summary: summary, LogPath: logPath, Report: report}, nil
 }
 
 // Abort cancels the worker's prompt (ACP session/cancel), waiting briefly

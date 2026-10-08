@@ -128,6 +128,21 @@ func scorecard(events []registry.Event, run string, since time.Time) []modelScor
 	return out
 }
 
+// splitByRole keys each role worker's model as "model · role", so the
+// scorecard shows which model does well in which role — the evidence for
+// whether a role or pipeline is worth its extra runs. Plain tasks keep the
+// bare model name.
+func splitByRole(events []registry.Event) []registry.Event {
+	out := make([]registry.Event, len(events))
+	for i, ev := range events {
+		if ev.Type == "spawned" && ev.Role != "" {
+			ev.Model += " · " + ev.Role
+		}
+		out[i] = ev
+	}
+	return out
+}
+
 // runStats prints the per-model success rate and routing scorecard from the
 // JSONL worker history: outcomes per model, which failures a later attempt on
 // another model completed (rescued), and success by auto-score task-weight
@@ -137,6 +152,7 @@ func runStats(args []string, stdout io.Writer) error {
 	stateDir := fs.String("state-dir", "", "state directory (default ~/.strawboss)")
 	run := fs.String("run", "", "only events from this run (default: all runs)")
 	since := fs.Duration("since", 0, "only workers spawned within this long before now, e.g. 72h (default: no limit)")
+	byRole := fs.Bool("by-role", false, "split each model's row by roles.toml role (\"model · role\")")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -156,6 +172,9 @@ func runStats(args []string, stdout io.Writer) error {
 		sinceTime = time.Now().Add(-*since)
 	}
 
+	if *byRole {
+		events = splitByRole(events)
+	}
 	scores := scorecard(events, *run, sinceTime)
 	if len(scores) == 0 {
 		fmt.Fprintln(stdout, "no finished workers in range")

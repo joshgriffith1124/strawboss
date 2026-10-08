@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -56,6 +57,30 @@ type Outcome struct {
 	Err      error
 	Added    []string // files the worker created (from before/after snapshots); nil when unknown
 	Changed  []string // files the worker touched (created, modified or deleted); nil when unknown
+}
+
+// firstN is s cut to at most n entries.
+func firstN(s []string, n int) []string {
+	if len(s) > n {
+		return s[:n]
+	}
+	return s
+}
+
+// readOnlyKey marks a run whose worker must not modify the working tree
+// (a read-only role: architect, reviewer).
+type readOnlyKey struct{}
+
+// WithReadOnly marks ctx's run read-only: Run fails a worker that changed
+// files anyway and restores them from its before snapshot, so a reviewer
+// that "fixed" things cannot slip edits past the coder and the check.
+func WithReadOnly(ctx context.Context) context.Context {
+	return context.WithValue(ctx, readOnlyKey{}, true)
+}
+
+func readOnly(ctx context.Context) bool {
+	ro, _ := ctx.Value(readOnlyKey{}).(bool)
+	return ro
 }
 
 // watchInterval is how often Run's watcher polls the worker's deadline
@@ -281,6 +306,22 @@ func Run(ctx context.Context, h harness.WorkerHarness, reg *registry.Registry, m
 				oc.Changed = changed
 			}
 		}
+	}
+	// A read-only role that edited anyway fails, and its edits are undone
+	// from the before snapshot (when one was saved — a linked worktree
+	// keeps none, and its branch is discarded on failure regardless).
+	if readOnly(ctx) && len(oc.Changed) > 0 {
+		note := fmt.Sprintf("[read-only role modified %d file(s): %s", len(oc.Changed), strings.Join(firstN(oc.Changed, 5), ", "))
+		if undo {
+			if _, rerr := snapshot.Restore(dir, oc.WorkerID); rerr != nil {
+				note += " — restore failed: " + rerr.Error()
+			} else {
+				note += " — reverted"
+				oc.Added, oc.Changed = nil, nil
+			}
+		}
+		res.Status = harness.StatusFailed
+		res.Summary = note + "]\n" + res.Summary
 	}
 	// Operator push-back is visible to everyone the summary reaches (the
 	// supervisor's terse result, the registry, the TUI): prefix it before

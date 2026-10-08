@@ -25,3 +25,9 @@
 [workers]
 # extend_step = "5m"              # how much one `+` press pushes a running
 #                                 # worker's deadline out (Go duration)
+
+[roles]
+# mode = "off"                    # "on" offers roles.toml's roles and
+#                                 # pipelines to the supervisor (see
+#                                 # examples/roles.toml); `strawboss --roles
+#                                 # on|off` overrides it for one run

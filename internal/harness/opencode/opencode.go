@@ -311,7 +311,17 @@ func (h *Harness) Result(ctx context.Context, workerID string) (harness.Result, 
 		Status:   status,
 		Summary:  summary,
 		LogPath:  logPath,
+		Report:   report(msgs),
 	}, nil
+}
+
+// report is the final assistant reply in full — no summary cap — for a
+// pipeline's next step. "" when the worker never answered.
+func report(msgs []Message) string {
+	if last := lastAssistant(msgs); last != nil {
+		return strings.TrimSpace(textOf(last))
+	}
+	return ""
 }
 
 func (h *Harness) loopThreshold() int {

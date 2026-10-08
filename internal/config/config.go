@@ -161,12 +161,27 @@ type Workers struct {
 	ExtendStep time.Duration `toml:"-"`
 }
 
+// RolesSettings is config.toml's [roles] table: whether the supervisor is
+// told about roles.toml.
+type RolesSettings struct {
+	// Mode "off" (the default) keeps delegation plain: the supervisor's
+	// prompt never mentions roles or pipelines. "on" lists roles.toml's
+	// roles and pipelines in the prompt so the supervisor can route tasks
+	// through them. The delegate flags (--role, --pipeline) work in both
+	// modes — the mode only decides what the supervisor is offered.
+	Mode string `toml:"mode"`
+}
+
+// On reports whether the roles mode is enabled.
+func (r RolesSettings) On() bool { return r.Mode == "on" }
+
 // Config is the app configuration from config.toml.
 type Config struct {
-	Supervisor Supervisor `toml:"supervisor"`
-	Notify     Notify     `toml:"notify"`
-	Budget     Budget     `toml:"budget"`
-	Workers    Workers    `toml:"workers"`
+	Supervisor Supervisor    `toml:"supervisor"`
+	Notify     Notify        `toml:"notify"`
+	Budget     Budget        `toml:"budget"`
+	Workers    Workers       `toml:"workers"`
+	Roles      RolesSettings `toml:"roles"`
 
 	// StateDir is where logs and session state live. Default ~/.strawboss.
 	StateDir string `toml:"state_dir"`
@@ -221,6 +236,11 @@ func Load(path string) (Config, error) {
 			return Config{}, fmt.Errorf("loading %s: workers.extend_step %q must be positive", path, cfg.Workers.ExtendStepRaw)
 		}
 		cfg.Workers.ExtendStep = d
+	}
+	switch cfg.Roles.Mode {
+	case "", "off", "on":
+	default:
+		return Config{}, fmt.Errorf("loading %s: roles.mode %q must be \"off\" or \"on\"", path, cfg.Roles.Mode)
 	}
 	return cfg, nil
 }

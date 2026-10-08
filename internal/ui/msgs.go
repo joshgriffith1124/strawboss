@@ -144,6 +144,8 @@ type WorkerUpsertMsg struct {
 	// Deadline is the worker's current per-attempt deadline; zero keeps
 	// existing so usage/status upserts don't wipe a known one.
 	Deadline time.Time
+	// Role is the roles.toml role the worker runs in; "" keeps existing.
+	Role string
 }
 
 // WorkerUsageMsg updates a worker's token counts. Input is fresh;

@@ -50,6 +50,10 @@ type Result struct {
 	Status   Status
 	Summary  string
 	LogPath  string
+	// Report is the worker's whole final reply, uncapped. It never reaches
+	// the supervisor: a pipeline hands it to its next step (a plan to the
+	// coder, findings back to it) inside the delegate process.
+	Report string
 }
 
 // WorkerHarness is exactly what the TUI and the delegate command need from a

@@ -119,15 +119,20 @@ func (m Model) viewWorkerPane(wk *workerRow, w, h int, focused bool) string {
 		return pane(sDim.Render("no worker selected"), "", []string{" " + sFaint.Render("⇥ then ↑↓ to pick a worker")}, w, h, border)
 	}
 
-	// Head pill by status; default keeps the queued look before status arrives.
-	text, fg, bg := glyphQueued+" "+wk.ID+" ›", cAmber, cKeyBg
+	// Head pill by status; default keeps the queued look before status
+	// arrives. A role task names its role after the id ("w12 reviewer ›").
+	label := wk.ID
+	if wk.Role != "" {
+		label += " " + wk.Role
+	}
+	text, fg, bg := glyphQueued+" "+label+" ›", cAmber, cKeyBg
 	switch wk.Status {
 	case "running":
-		text, fg, bg = glyphRun+" "+wk.ID+" ›", cOK, lipgloss.Color("#0E2417")
+		text, fg, bg = glyphRun+" "+label+" ›", cOK, lipgloss.Color("#0E2417")
 	case "done":
-		text, fg, bg = glyphDone+" "+wk.ID+" ›", cOK, lipgloss.Color("#0E2417")
+		text, fg, bg = glyphDone+" "+label+" ›", cOK, lipgloss.Color("#0E2417")
 	case "failed":
-		text, fg, bg = glyphFail+" "+wk.ID+" ›", cErr, lipgloss.Color("#2A1214")
+		text, fg, bg = glyphFail+" "+label+" ›", cErr, lipgloss.Color("#2A1214")
 	}
 	head := pill(text, fg, bg)
 	// Header right like the supervisor pane: the deadline countdown (when

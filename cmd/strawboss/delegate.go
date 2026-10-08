@@ -91,6 +91,18 @@ func runDelegate(args []string, stdout io.Writer) error {
 		pins = append(pins, modelPin{name: s, from: len(tasks)})
 		return nil
 	})
+	// --role and --pipeline are sticky like --model ("none" clears). Both
+	// are opt-in: a task without them runs exactly as a plain delegation.
+	var rolePins, pipePins []modelPin
+	fs.Func("role", "roles.toml role for the tasks that follow (\"none\" clears): its prompt, default model and read-only rule", func(s string) error {
+		rolePins = append(rolePins, modelPin{name: s, from: len(tasks)})
+		return nil
+	})
+	fs.Func("pipeline", "roles.toml pipeline for the tasks that follow (\"none\" clears): runs the task through its role steps in order", func(s string) error {
+		pipePins = append(pipePins, modelPin{name: s, from: len(tasks)})
+		return nil
+	})
+	rolesPath := fs.String("roles", "", "roles.toml path (default <state-dir>/roles.toml)")
 	dir := fs.String("dir", "", "worker working directory (default: current directory)")
 	useWorktree := fs.Bool("worktree", false, "run each worker in an isolated git worktree on its own strawboss/* branch")
 	escalate := fs.Bool("escalate", true, "on worker failure, retry the task once on the next model config in models.toml — the next tier up when tiers are set (skipped with --worktree)")
@@ -139,10 +151,50 @@ func runDelegate(args []string, stdout io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("delegate: %w", err)
 	}
-	routes, err := routeTasks(models, tasks, pins, *modelsPath, live.Available,
-		func(m config.ModelConfig) int {
-			return slots.Busy(filepath.Join(*stateDir, "slots"), m.Name, m.MaxConcurrent)
-		})
+	if *rolesPath == "" {
+		*rolesPath = filepath.Join(*stateDir, "roles.toml")
+	}
+	roles, err := config.LoadRoles(*rolesPath, models)
+	if err != nil {
+		return err
+	}
+	// Per task: its role or pipeline, and the model it wants — an explicit
+	// --model wins, else the role's (a pipeline's first step) default.
+	taskRoles := make([]config.RoleConfig, len(tasks))
+	taskPipes := make([]config.PipelineConfig, len(tasks))
+	explicit := make([]string, len(tasks))
+	wants := make([]modelPin, len(tasks))
+	for i := range tasks {
+		want := pinFor(pins, i)
+		if want != router.Auto {
+			explicit[i] = want
+		}
+		if name := stickyAt(pipePins, i); name != "" {
+			p, ok := roles.Pipeline(name)
+			if !ok {
+				return fmt.Errorf("delegate: no pipeline %q in %s", name, *rolesPath)
+			}
+			taskPipes[i] = p
+			if want == router.Auto {
+				first, _ := roles.Role(p.Steps[0])
+				want = roleWant(first, models)
+			}
+		} else if name := stickyAt(rolePins, i); name != "" {
+			rc, ok := roles.Role(name)
+			if !ok {
+				return fmt.Errorf("delegate: no role %q in %s", name, *rolesPath)
+			}
+			taskRoles[i] = rc
+			if want == router.Auto {
+				want = roleWant(rc, models)
+			}
+		}
+		wants[i] = modelPin{name: want, from: i}
+	}
+	busy := func(m config.ModelConfig) int {
+		return slots.Busy(filepath.Join(*stateDir, "slots"), m.Name, m.MaxConcurrent)
+	}
+	routes, err := routeTasks(models, tasks, wants, *modelsPath, live.Available, busy)
 	if err != nil {
 		return err
 	}
@@ -266,49 +318,89 @@ func runDelegate(args []string, stdout io.Writer) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			prompt := repomap.Prompt(repoMap, task)
-			// Per-worker harness: with worktrees every worker has its own
-			// working directory, which the harness carries.
-			h, err := runner.NewHarness(mc, workerDir, *stateDir)
-			if err != nil {
-				outcomes[i] = runner.Outcome{Err: err}
-				return
-			}
-			// Per-attempt deadline (flag > model > default), created when
-			// the attempt starts and cancelled when it returns, so a slow
-			// worker spends only its own clock, never the batch's. A
-			// deadline (not a plain ctx) so the operator can push it back
-			// mid-run; the runner records and watches for extensions.
-			attemptCtx, cancelAttempt := deadline.WithTimeout(ctx, timeoutFor(*timeout, mc))
-			outcomes[i] = runner.Run(attemptCtx, h, reg, mc, prompt, task, workerDir, warn, decorate)
-			cancelAttempt()
-			// Cheap-first escalation: a failure on the requested (cheap)
-			// model re-dispatches ONCE to the next config in models.toml
-			// (the next tier up when tiers are set), inside this call — the
-			// supervisor still reads a single terse result instead of
-			// hand-retrying. Availability is probed fresh: minutes have
-			// passed since dispatch, and escalating into a dead model burns
-			// a guaranteed second failure. Worktree runs are excluded: the
-			// second attempt would share the first's partial state and
-			// worktree finalization runs per attempt.
-			if *escalate && wts == nil && ctx.Err() == nil && !succeeded(outcomes[i]) {
-				up := func(m config.ModelConfig) bool { ok, _ := live.Available(ctx, m); return ok }
-				if next, ok := router.Next(models, mc.Name, up); ok {
-					warn("escalating failed task to " + next.Name)
-					retryPrompt := prompt
-					if verifyFail := gate.LastFailure(); verifyFail != "" {
-						retryPrompt += "\n\nA previous attempt at this task left the project failing its check (`" +
-							check.Command + "`). Its changes are still in the working tree — fix them or redo the task so the check passes:\n" +
-							verifyFail
+			if p := taskPipes[i]; p.Name != "" {
+				// A pipeline runs its steps in order in this task's own
+				// directory and returns one outcome for the chain. The
+				// verify gate judges each writing step; a worktree commits
+				// once, after the last step.
+				env := pipelineEnv{
+					roles: roles, models: models, stateDir: *stateDir,
+					dir: workerDir, repoMap: repoMap, reg: *reg, timeout: *timeout, model: explicit[i],
+					route: func(want, task string) (config.ModelConfig, error) {
+						rs, err := routeTasks(models, []string{task}, []modelPin{{name: want}}, *modelsPath, live.Available, busy)
+						if err != nil {
+							return config.ModelConfig{}, err
+						}
+						return rs[0].mc, nil
+					},
+					decorate: gate.Decorate,
+					warn:     warn,
+				}
+				outcomes[i] = runPipeline(ctx, env, p, task)
+				if finalize != nil && outcomes[i].Err == nil {
+					finalize(&outcomes[i].Res)
+				}
+			} else {
+				prompt := repomap.Prompt(repoMap, task)
+				// A role frames the task and stamps the worker; a read-only
+				// role's edits are reverted and fail the attempt.
+				rc := taskRoles[i]
+				taskReg := reg
+				if rc.Name != "" {
+					prompt = repomap.Prompt(repoMap, rolePrompt(rc, task))
+					r := *reg
+					r.Role = rc.Name
+					taskReg = &r
+				}
+				policy := func(c context.Context) context.Context {
+					if rc.ReadOnly {
+						return runner.WithReadOnly(c)
 					}
-					// The retry's clock is also created now: the first
-					// attempt's deadline is already spent, so the retry
-					// model's timeout is measured from here. Extendable
-					// like the first attempt's.
-					retryCtx, cancelRetry := deadline.WithTimeout(ctx, timeoutFor(*timeout, next))
-					outcomes[i] = runEscalated(retryCtx, outcomes[i], next, mc.Name,
-						retryPrompt, task, workerDir, *stateDir, reg, warn, decorate)
-					cancelRetry()
+					return c
+				}
+				// Per-worker harness: with worktrees every worker has its own
+				// working directory, which the harness carries.
+				h, err := runner.NewHarness(mc, workerDir, *stateDir)
+				if err != nil {
+					outcomes[i] = runner.Outcome{Err: err}
+					return
+				}
+				// Per-attempt deadline (flag > model > default), created when
+				// the attempt starts and cancelled when it returns, so a slow
+				// worker spends only its own clock, never the batch's. A
+				// deadline (not a plain ctx) so the operator can push it back
+				// mid-run; the runner records and watches for extensions.
+				attemptCtx, cancelAttempt := deadline.WithTimeout(ctx, timeoutFor(*timeout, mc))
+				outcomes[i] = runner.Run(policy(attemptCtx), h, taskReg, mc, prompt, task, workerDir, warn, decorate)
+				cancelAttempt()
+				// Cheap-first escalation: a failure on the requested (cheap)
+				// model re-dispatches ONCE to the next config in models.toml
+				// (the next tier up when tiers are set), inside this call — the
+				// supervisor still reads a single terse result instead of
+				// hand-retrying. Availability is probed fresh: minutes have
+				// passed since dispatch, and escalating into a dead model burns
+				// a guaranteed second failure. Worktree runs are excluded: the
+				// second attempt would share the first's partial state and
+				// worktree finalization runs per attempt.
+				if *escalate && wts == nil && ctx.Err() == nil && !succeeded(outcomes[i]) {
+					up := func(m config.ModelConfig) bool { ok, _ := live.Available(ctx, m); return ok }
+					if next, ok := router.Next(models, mc.Name, up); ok {
+						warn("escalating failed task to " + next.Name)
+						retryPrompt := prompt
+						if verifyFail := gate.LastFailure(); verifyFail != "" {
+							retryPrompt += "\n\nA previous attempt at this task left the project failing its check (`" +
+								check.Command + "`). Its changes are still in the working tree — fix them or redo the task so the check passes:\n" +
+								verifyFail
+						}
+						// The retry's clock is also created now: the first
+						// attempt's deadline is already spent, so the retry
+						// model's timeout is measured from here. Extendable
+						// like the first attempt's.
+						retryCtx, cancelRetry := deadline.WithTimeout(ctx, timeoutFor(*timeout, next))
+						outcomes[i] = runEscalated(policy(retryCtx), outcomes[i], next, mc.Name,
+							retryPrompt, task, workerDir, *stateDir, taskReg, warn, decorate)
+						cancelRetry()
+					}
 				}
 			}
 			// The routing note rides on the supervisor-facing summary only:

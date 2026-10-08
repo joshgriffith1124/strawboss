@@ -72,6 +72,7 @@ type workerRow struct {
 	Ctx      int // current context footprint (0 = unknown)
 	Steps    int // completed model steps (dsh; 0 = unknown)
 	Deadline time.Time
+	Role     string // roles.toml role ("" = plain task)
 }
 
 // Throughput sampling: a sample closer than minRateWindow after the
@@ -654,6 +655,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.Dir != "" {
 			w.Dir = msg.Dir
+		}
+		if msg.Role != "" {
+			w.Role = msg.Role
 		}
 		if msg.Status != "" && msg.Status != w.Status {
 			w.Status = msg.Status

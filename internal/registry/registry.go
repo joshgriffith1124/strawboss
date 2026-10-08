@@ -35,6 +35,9 @@ type Event struct {
 	// 0 for server-backed workers (opencode). The TUI kills by pid when
 	// there is no server to ask.
 	PID int `json:"pid,omitempty"`
+	// Role is the roles.toml role the worker ran in ("" = plain task),
+	// stamped on every event so the TUI and the scorecard can split by it.
+	Role string `json:"role,omitempty"`
 	// Deadline is a deadline-event field: the worker's current per-attempt
 	// deadline (initial or extended), so the TUI can show time left and
 	// operator push-backs.
@@ -54,6 +57,9 @@ type Registry struct {
 	Path string
 	// Run is stamped onto every appended event.
 	Run string
+	// Role is stamped onto every appended event that doesn't carry one.
+	// Delegate gives each role task its own copy of the Registry.
+	Role string
 }
 
 // withLock serializes multi-process access (concurrent delegations) around
@@ -75,6 +81,9 @@ func (r *Registry) withLock(fn func() error) error {
 }
 
 func (r *Registry) append(ev Event) error {
+	if ev.Role == "" {
+		ev.Role = r.Role
+	}
 	f, err := os.OpenFile(r.Path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return fmt.Errorf("registry append: %w", err)

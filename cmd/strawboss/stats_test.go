@@ -19,6 +19,28 @@ func evFinish(worker, run, status string, at time.Time, durMS int64) registry.Ev
 	return registry.Event{TS: at, Type: "finished", Worker: worker, Run: run, Status: status, DurationMS: durMS}
 }
 
+// TestSplitByRole: --by-role keys role workers as "model · role" and
+// leaves plain tasks on the bare model.
+func TestSplitByRole(t *testing.T) {
+	now := time.Now()
+	reviewer := evSpawn("w1", "r", "big", "t1", now)
+	reviewer.Role = "reviewer"
+	events := []registry.Event{
+		reviewer, evFinish("w1", "r", "done", now, 1000),
+		evSpawn("w2", "r", "big", "t2", now), evFinish("w2", "r", "failed", now, 1000),
+	}
+	var models []string
+	for _, s := range scorecard(splitByRole(events), "", time.Time{}) {
+		models = append(models, s.Model)
+	}
+	if want := []string{"big", "big · reviewer"}; !reflect.DeepEqual(models, want) {
+		t.Errorf("rows = %v, want %v", models, want)
+	}
+	if events[0].Model != "big" {
+		t.Error("splitByRole mutated its input")
+	}
+}
+
 func TestScorecard(t *testing.T) {
 	base := time.Date(2025, 5, 1, 12, 0, 0, 0, time.UTC)
 	at := func(min int) time.Time { return base.Add(time.Duration(min) * time.Minute) }

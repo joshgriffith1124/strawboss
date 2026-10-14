@@ -12,9 +12,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -1097,6 +1099,163 @@ esac
 	case p := <-o.prompts:
 		t.Errorf("unexpected prompt: %+v", p)
 	default:
+	}
+}
+
+// TestOpenClawCmdEnv: the openclaw child runs with
+// NODE_DISABLE_COMPILE_CACHE=1 on both the poll-read and the send paths —
+// the Node CLI otherwise writes a fresh compile cache into
+// /tmp/node-compile-cache on every start (a tmpfs flood at a 5s poll).
+func TestOpenClawCmdEnv(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		run  func(o *Orchestrator)
+	}{
+		{"read", func(o *Orchestrator) {
+			_, _ = o.openclawRead(context.Background(), 0)
+		}},
+		{"send", func(o *Orchestrator) { o.pushOpenClaw("hello") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			envlog := filepath.Join(dir, "env.log")
+			script := `#!/bin/sh
+env > ` + envlog + `
+echo '{"payload":{"messages":[]}}'
+`
+			bin := filepath.Join(dir, "openclaw")
+			if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			o := New(&supervisor.Driver{}, nil, dir)
+			o.Notify = config.Notify{OpenClawTarget: "channel:1", OpenClawBin: bin}
+
+			tc.run(o)
+
+			// The send path is async; poll either way.
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				if b, err := os.ReadFile(envlog); err == nil {
+					if !strings.Contains(string(b), "NODE_DISABLE_COMPILE_CACHE=1") {
+						t.Fatalf("child env lacks NODE_DISABLE_COMPILE_CACHE=1:\n%s", b)
+					}
+					return
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("openclaw child never recorded its env")
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+		})
+	}
+}
+
+// TestOpenClawCmdKillsProcessGroup: the openclaw CLI (a Node program)
+// spawns children of its own; a timeout must kill the whole process
+// group, not just the top process, and openclawRead must return promptly
+// instead of hanging on pipes a grandchild still holds.
+func TestOpenClawCmdKillsProcessGroup(t *testing.T) {
+	dir := t.TempDir()
+	pids := filepath.Join(dir, "pids")
+	script := `#!/bin/sh
+echo $$ > ` + pids + `
+sleep 60 &
+echo $! >> ` + pids + `
+wait
+`
+	bin := filepath.Join(dir, "openclaw")
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	o := New(&supervisor.Driver{}, nil, dir)
+	o.Notify = config.Notify{OpenClawTarget: "channel:1", OpenClawBin: bin}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := o.openclawRead(ctx, 0); err == nil {
+		t.Fatal("expected the read to fail on timeout")
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("openclawRead returned after %s, should not hang", d)
+	}
+
+	// Both the CLI and its sleeping child must be gone.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var out []byte
+		if b, err := os.ReadFile(pids); err == nil {
+			out = b
+			alive := false
+			for _, f := range strings.Fields(string(b)) {
+				if pid, err := strconv.Atoi(f); err == nil && syscall.Kill(pid, 0) == nil {
+					alive = true
+				}
+			}
+			if !alive {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("processes still alive after group kill: %s", out)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// TestOpenClawBackoff: consecutive failed reads double the poll wait
+// (capped) instead of spinning at the normal interval, but only the
+// first failure is logged.
+func TestOpenClawBackoff(t *testing.T) {
+	dir := t.TempDir()
+	stamps := filepath.Join(dir, "stamps")
+	script := `#!/bin/sh
+echo x >> ` + stamps + `
+exit 1
+`
+	bin := filepath.Join(dir, "openclaw")
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	o := New(&supervisor.Driver{}, nil, dir)
+	o.Notify = config.Notify{OpenClawTarget: "channel:1", OpenClawBin: bin, OpenClawTwoWay: true}
+	o.OpenClawPollEvery = 40 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	t0 := time.Now()
+	go o.openclawLoop(ctx)
+
+	// With backoff (40→80→160→320) the 4th failed read lands no earlier
+	// than ~600ms in; without backoff it would be ~160ms.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if b, _ := os.ReadFile(stamps); strings.Count(string(b), "x") >= 4 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("reads did not keep happening")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if d := time.Since(t0); d < 400*time.Millisecond {
+		t.Errorf("4th read after %s: reads are not backing off", d)
+	}
+
+	// Only the first failure is logged, even across many failures.
+	logs := 0
+	logDeadline := time.Now().Add(800 * time.Millisecond)
+	for time.Now().Before(logDeadline) {
+		select {
+		case m := <-o.Feed():
+			if r, ok := m.(ui.RawLogMsg); ok && strings.Contains(r.Line, "openclaw read") {
+				logs++
+			}
+		default:
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	if logs != 1 {
+		t.Errorf("failure logged %d times, want exactly 1", logs)
 	}
 }
 

@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -115,6 +117,9 @@ func (o *Orchestrator) pushNtfy(title, text string) {
 
 // ── OpenClaw ───────────────────────────────────────────────────────────
 
+// maxBackoff caps the openclawLoop poll backoff after consecutive failures.
+const maxBackoff = 2 * time.Minute
+
 func (o *Orchestrator) openclawBin() string {
 	if o.Notify.OpenClawBin != "" {
 		return o.Notify.OpenClawBin
@@ -129,6 +134,23 @@ func (o *Orchestrator) openclawChannel() string {
 	return "discord"
 }
 
+// openclawCmd builds an exec.Cmd for the openclaw CLI. The CLI is a Node
+// program: every start writes files into /tmp/node-compile-cache (a tmpfs
+// flood at a 5s poll), and it spawns children of its own that linger when
+// only the top process is killed. So: NODE_DISABLE_COMPILE_CACHE=1 stops
+// the cache writes, the child runs in its own process group so Cancel can
+// SIGKILL the whole group (children included) on timeout, and WaitDelay
+// keeps Output/CombinedOutput from hanging on pipes a grandchild still
+// holds. Used for both the poll reads and message sends.
+func (o *Orchestrator) openclawCmd(ctx context.Context, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, o.openclawBin(), args...)
+	cmd.Env = append(os.Environ(), "NODE_DISABLE_COMPILE_CACHE=1")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = 2 * time.Second
+	return cmd
+}
+
 // pushOpenClaw sends one message to the configured channel target.
 func (o *Orchestrator) pushOpenClaw(text string) {
 	target := o.Notify.OpenClawTarget
@@ -138,7 +160,7 @@ func (o *Orchestrator) pushOpenClaw(text string) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		cmd := exec.CommandContext(ctx, o.openclawBin(), "message", "send",
+		cmd := o.openclawCmd(ctx, "message", "send",
 			"--channel", o.openclawChannel(), "--target", target,
 			"--message", truncN(text, 1800), "--json")
 		if out, err := cmd.CombinedOutput(); err != nil {
@@ -166,7 +188,7 @@ func (o *Orchestrator) openclawRead(ctx context.Context, afterID uint64) ([]open
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, o.openclawBin(), args...).Output()
+	out, err := o.openclawCmd(ctx, args...).Output()
 	if err != nil {
 		return nil, err
 	}
@@ -197,11 +219,15 @@ func (o *Orchestrator) openclawLoop(ctx context.Context) {
 	var lastID uint64
 	baselined := false
 	failing := false
+	// Back off while reads fail: each consecutive failure doubles the wait
+	// (capped at 2 minutes) so a dead channel doesn't spin; any success
+	// resets to the normal interval. Only the first failure is logged.
+	wait := interval
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(interval):
+		case <-time.After(wait):
 		}
 		msgs, err := o.openclawRead(ctx, lastID)
 		if err != nil {
@@ -209,9 +235,13 @@ func (o *Orchestrator) openclawLoop(ctx context.Context) {
 				failing = true
 				o.emitAsync(ui.RawLogMsg{Source: "app", Line: "openclaw read: " + err.Error()})
 			}
+			if wait *= 2; wait > maxBackoff {
+				wait = maxBackoff
+			}
 			continue
 		}
 		failing = false
+		wait = interval
 		ids := make([]uint64, 0, len(msgs))
 		byID := map[uint64]openclawMessage{}
 		for _, m := range msgs {

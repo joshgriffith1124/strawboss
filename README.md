@@ -80,7 +80,7 @@ results](docs/screenshot-dashboard.png)
   (`R`), undo a worker's edits (`u`, press twice), deadline extensions
   (`+`, default 5m per press, `workers.extend_step`), filtering (`/`); the
   supervisor pane header shows the git repo and branch it works in
-  (`strawboss ⎇ main *`, `*` = uncommitted changes) and a context gauge
+  (`strawboss @ main *`, `*` = uncommitted changes) and a context gauge
   that says when a fresh session (`/new`) would be cheaper
 - Roles and pipelines (opt-in, `roles.toml`): role prompts, per-role
   default models, read-only roles whose edits are reverted, and pipelines

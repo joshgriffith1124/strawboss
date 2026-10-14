@@ -202,7 +202,7 @@ func truncPlain(s string, n int) string {
 		b.WriteRune(r)
 	}
 	s = b.String()
-	// Measure in cells, not bytes: "⎇" is 3 bytes but 1 cell, and a byte
+	// Measure in cells, not bytes: "…" is 3 bytes but 1 cell, and a byte
 	// count cut labels that fit (and could split a rune).
 	if lipgloss.Width(s) <= n {
 		return s

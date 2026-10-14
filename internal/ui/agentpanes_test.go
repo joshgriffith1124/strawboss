@@ -40,7 +40,7 @@ func TestWrapEventLinesHang(t *testing.T) {
 	}
 }
 
-// TestRepoLabel: empty before the first RepoInfoMsg, then "repo ⎇ branch"
+// TestRepoLabel: empty before the first RepoInfoMsg, then "repo @ branch"
 // with a " *" suffix when the worktree is dirty; short on room, the repo
 // name drops before the branch is cut.
 func TestRepoLabel(t *testing.T) {
@@ -49,7 +49,7 @@ func TestRepoLabel(t *testing.T) {
 		t.Fatalf("fresh model repoLabel = %q, want empty", got)
 	}
 	m = agentsFeed(t, m, RepoInfoMsg{Repo: "strawboss", Branch: "repo-info-pane"})
-	if got := m.repoLabel(80); got != "strawboss ⎇ repo-info-pane" {
+	if got := m.repoLabel(80); got != "strawboss @ repo-info-pane" {
 		t.Fatalf("repoLabel = %q", got)
 	}
 	m = agentsFeed(t, m, RepoInfoMsg{Repo: "strawboss", Branch: "repo-info-pane", Dirty: true})
@@ -57,19 +57,18 @@ func TestRepoLabel(t *testing.T) {
 		room int
 		want string
 	}{
-		{80, "strawboss ⎇ repo-info-pane *"},
-		{20, "⎇ repo-info-pane *"}, // repo name dropped, branch whole
-		// Exactly 18 cells but 20 bytes ("⎇" is 3 bytes): must still fit.
-		{19, "⎇ repo-info-pane *"},
-		{18, "⎇ repo-info-pane *"},
-		{17, "⎇ repo-info-pane…"},
+		{80, "strawboss @ repo-info-pane *"},
+		{20, "@ repo-info-pane *"}, // repo name dropped, branch whole
+		{19, "@ repo-info-pane *"},
+		{18, "@ repo-info-pane *"},
+		{17, "@ repo-info-pane…"},
 	}
 	for _, tt := range tests {
 		if got := m.repoLabel(tt.room); got != tt.want {
 			t.Errorf("repoLabel(%d) = %q, want %q", tt.room, got, tt.want)
 		}
 	}
-	if got := m.repoLabel(10); lipgloss.Width(got) > 10 || !strings.HasPrefix(got, "⎇ repo") {
+	if got := m.repoLabel(10); lipgloss.Width(got) > 10 || !strings.HasPrefix(got, "@ repo") {
 		t.Errorf("repoLabel(10) = %q, want the branch cut to fit", got)
 	}
 }
@@ -162,7 +161,7 @@ func TestSupRepoInfoNarrowPane(t *testing.T) {
 	m = agentsFeed(t, m, RepoInfoMsg{Repo: "strawboss", Branch: "repo-info-pane"})
 	pane = m.viewSupPane(44, 10, true)
 	plain = ansiSeq.ReplaceAllString(pane, "")
-	if strings.Contains(plain, "strawboss ⎇") || !strings.Contains(plain, "⎇ repo") {
+	if strings.Contains(plain, "strawboss @") || !strings.Contains(plain, "@ repo") {
 		t.Fatalf("44-col pane: want the branch without the repo name: %q", plain)
 	}
 	fit(t, pane, 44)

@@ -64,7 +64,7 @@ func gitRepoInfo(dir string) (repoInfo, bool) {
 	}
 	// No commits yet (or the worktree vanished mid-probe): abbrev-ref
 	// fails, and there is no branch worth naming — wait for a real one
-	// instead of rendering a dangling "name ⎇ " in the header.
+	// instead of rendering a dangling "name @ " in the header.
 	abbrevRef, err := gitOut(dir, "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
 		return repoInfo{}, false

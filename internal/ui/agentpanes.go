@@ -60,14 +60,16 @@ func (m Model) viewSupPane(w, h int, focused bool) string {
 }
 
 // repoLabel is the repo and branch the supervisor works in, fitted to room
-// cells: "strawboss ⎇ repo-info-pane *" (`*` = uncommitted changes), else
-// "⎇ repo-info-pane *" without the repo name, else the branch cut short.
+// cells: "strawboss @ repo-info-pane *" (`*` = uncommitted changes), else
+// "@ repo-info-pane *" without the repo name, else the branch cut short.
+// Plain ASCII on purpose: terminals that draw "⎇" from a fallback font
+// paint it wide and hide the branch's last letter.
 // Empty until the first RepoInfoMsg arrives.
 func (m Model) repoLabel(room int) string {
 	if m.repoName == "" {
 		return ""
 	}
-	branch := "⎇ " + m.repoBranch
+	branch := "@ " + m.repoBranch
 	if m.repoDirty {
 		branch += " *"
 	}

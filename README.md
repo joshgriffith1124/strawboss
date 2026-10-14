@@ -30,14 +30,6 @@ handles itself. A `/loop` lives only as long as the supervisor process:
 interrupts the current turn in place: the supervisor process, its running
 workers, and any loop stay up.
 
-![The chat tab: supervisor conversation, inline delegations, and the token
-economy — 180k fresh plan tokens steering 4M free local
-tokens](docs/screenshot-chat.png)
-
-![The dashboard: live worker table, per-worker transcript with tok/s and
-context usage, supervisor detail with recent delegation
-results](docs/screenshot-dashboard.png)
-
 ```
 ┌────────────────────────── strawboss (Go, one process) ────────────────────┐
 │  Agents (chat + worker panes) · Tasks · Worktrees · Models · Analytics    │

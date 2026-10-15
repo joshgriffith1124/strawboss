@@ -136,29 +136,12 @@ type Supervisor struct {
 }
 
 // Notify configures optional push notifications. The bell stays; these
-// add remote reach — all local HTTP/CLI from the TUI, zero supervisor
-// tokens (the OpenClaw two-way path injects prompts the same way typing
-// does, which is user input, not observability overhead).
+// add remote reach — all local HTTP from the TUI, zero supervisor tokens.
 type Notify struct {
 	// NtfyTopic enables worker-failure pushes to <server>/<topic>.
 	NtfyTopic string `toml:"ntfy_topic"`
 	// NtfyServer overrides the default https://ntfy.sh.
 	NtfyServer string `toml:"ntfy_server"`
-
-	// OpenClawTarget enables notifications through an OpenClaw gateway
-	// channel (e.g. Discord): the `--target` value openclaw expects,
-	// such as "channel:<id>". Empty disables the OpenClaw path.
-	OpenClawTarget string `toml:"openclaw_target"`
-	// OpenClawChannel is the chat channel type. Default "discord".
-	OpenClawChannel string `toml:"openclaw_channel"`
-	// OpenClawBin overrides the openclaw CLI path. Default "openclaw".
-	OpenClawBin string `toml:"openclaw_bin"`
-	// OpenClawTwoWay also polls the channel: messages you send there are
-	// injected into the supervisor as prompts (mid-turn works), and the
-	// supervisor's replies are relayed back — remote unblocking when
-	// strawboss is stuck and you are away. Bot-authored messages are
-	// ignored, so notifications never feed back.
-	OpenClawTwoWay bool `toml:"openclaw_two_way"`
 }
 
 // Budget guards the metered side of a run: the supervisor's notional API
@@ -229,6 +212,27 @@ func defaults() Config {
 	}
 }
 
+// legacyNotifyKeys are [notify] keys the OpenClaw/Discord integration
+// (removed 2026-10-15) used. Old configs still carry them; they are
+// ignored silently instead of failing the strict decode.
+var legacyNotifyKeys = map[string]bool{
+	"notify.openclaw_target":  true,
+	"notify.openclaw_channel": true,
+	"notify.openclaw_bin":     true,
+	"notify.openclaw_two_way": true,
+}
+
+// firstUnknown returns the first undecoded key that is not a known
+// legacy key, or "" if every undecoded key is legacy (safe to ignore).
+func firstUnknown(undec []toml.Key) string {
+	for _, k := range undec {
+		if !legacyNotifyKeys[k.String()] {
+			return k.String()
+		}
+	}
+	return ""
+}
+
 // Load reads config.toml at path. A missing file is not an error: defaults
 // are returned so strawboss runs with zero configuration.
 func Load(path string) (Config, error) {
@@ -241,7 +245,9 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("loading %s: %w", path, err)
 	}
 	if undec := meta.Undecoded(); len(undec) > 0 {
-		return Config{}, fmt.Errorf("loading %s: unknown key %q", path, undec[0].String())
+		if key := firstUnknown(undec); key != "" {
+			return Config{}, fmt.Errorf("loading %s: unknown key %q", path, key)
+		}
 	}
 	if cfg.StateDir == "" {
 		cfg.StateDir, err = DefaultStateDir()

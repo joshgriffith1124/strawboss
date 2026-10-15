@@ -50,20 +50,14 @@ type Orchestrator struct {
 	// the owning delegate to record the finish before declaring the
 	// worker orphaned. Default 10s; tests shorten it.
 	DshRecoverGrace time.Duration
-	// Notify configures optional failure pushes and OpenClaw two-way
-	// remote control (docs: config.Notify).
+	// Notify configures optional failure pushes (docs: config.Notify).
 	Notify config.Notify
 	// Budget guards the metered side of the run (docs: config.Budget).
 	Budget config.Budget
-	// OpenClawPollEvery is the two-way poll interval. Default 5s.
-	OpenClawPollEvery time.Duration
 
 	// started marks this orchestrator's birth: replayed history from
 	// before it must not re-trigger notifications.
 	started time.Time
-	// remoteActive: the last prompt came from the remote channel, so
-	// supervisor replies relay back there until local input resumes.
-	remoteActive atomic.Bool
 
 	feed      chan tea.Msg
 	prompts   chan prompt
@@ -173,11 +167,9 @@ func (o *Orchestrator) Models() []config.ModelConfig {
 // Feed is the channel the UI listens on.
 func (o *Orchestrator) Feed() <-chan tea.Msg { return o.feed }
 
-// OnPrompt queues a user prompt for the supervisor (ui hook). Local
-// input ends any remote conversation — replies stop relaying out.
-// Pasted images (if any) ride along as attachments on the same message.
+// OnPrompt queues a user prompt for the supervisor (ui hook). Pasted
+// images (if any) ride along as attachments on the same message.
 func (o *Orchestrator) OnPrompt(text string, images []ui.Image) {
-	o.remoteActive.Store(false)
 	supImages := make([]supervisor.Image, 0, len(images))
 	for _, img := range images {
 		supImages = append(supImages, supervisor.Image{MediaType: img.MediaType, Data: img.Data})
@@ -229,7 +221,6 @@ func (o *Orchestrator) Run(ctx context.Context) {
 	go o.watchRegistry(ctx)
 	go o.pollWorkers(ctx)
 	go o.ensureServers(ctx)
-	go o.openclawLoop(ctx)
 	go o.watchModels(ctx)
 	go o.pollRepo(ctx)
 	o.subscribeNewEndpoints(ctx)

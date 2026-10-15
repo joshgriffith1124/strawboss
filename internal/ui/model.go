@@ -402,11 +402,10 @@ type Model struct {
 	deniedSeen map[string]bool // allowlist suggestions already shown
 
 	// logs + toast
-	logs          []logLine
-	logSrc        string // logs-tab source filter: "" all, else sup/wrk/app
-	toast         string
-	toastUntil    time.Time
-	remoteChannel string // armed two-way channel ("" = none)
+	logs       []logLine
+	logSrc     string // logs-tab source filter: "" all, else sup/wrk/app
+	toast      string
+	toastUntil time.Time
 
 	quitting bool
 }
@@ -693,7 +692,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Replayed failures stay silent. Restarting after a crash
 			// reads back every worker the crash killed, and announcing
 			// them claims they are failing now — the same rule the
-			// remote push already follows.
+			// failure push already follows.
 			if msg.Status == "failed" && !msg.Replay {
 				m.ringBell(msg.ID + " failed — " + truncPlain(firstLine(msg.Summary), 40))
 			}
@@ -825,10 +824,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, Listen(m.feed)
 	case ToastMsg:
 		m.showToast(msg.Text) // showToast logs it
-		return m, Listen(m.feed)
-	case RemoteMsg:
-		m.remoteChannel = msg.Channel
-		m.log("app", "remote control armed via "+msg.Channel)
 		return m, Listen(m.feed)
 	case SessionSwitchedMsg:
 		// Old session's chat, workers, and supervisor totals no longer

@@ -11,9 +11,6 @@
 [notify]
 # ntfy_topic = "strawboss-yourname-x7k2m9"   # phone pushes via ntfy.sh
 # ntfy_server = "https://ntfy.sh"
-# openclaw_target = "channel:<discord-channel-id>"  # alerts via OpenClaw
-# openclaw_channel = "discord"
-# openclaw_two_way = true         # reply in the channel to steer the supervisor
 
 [budget]
 # Guard the metered side of a run; workers are free and never limited.

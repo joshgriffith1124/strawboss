@@ -221,10 +221,6 @@ type RawLogMsg struct {
 // user-initiated worker actions.
 type ToastMsg struct{ Text string }
 
-// RemoteMsg announces that a remote control channel is armed (OpenClaw
-// two-way): shown in the topbar so leaving the desk is an informed act.
-type RemoteMsg struct{ Channel string }
-
 // SessionInfo is one entry in the session picker (this project only).
 type SessionInfo struct {
 	ID      string

@@ -100,9 +100,7 @@ workers, and any loop stay up.
 - Budget guard: notional-cost / plan-window ceilings that warn, then block
   new delegations with a terse refusal the supervisor understands
 - Remote reach (entirely optional): worker failures push via
-  [ntfy](https://ntfy.sh) or an [OpenClaw](https://openclaw.ai) channel
-  (e.g. Discord) — and with two-way enabled, replying in the channel
-  steers the supervisor from your phone. Unconfigured, you keep the
+  [ntfy](https://ntfy.sh) to your phone. Unconfigured, you keep the
   terminal bell and nothing external is ever contacted
 - Honest results: a worker that leaves stray files behind (debug tests,
   scratch scripts) has them listed in its result; a worker blocked on an
@@ -337,8 +335,8 @@ roles that need them.
 This is young software, built fast and verified against real binaries as
 it went (every finding is dated in [`docs/NOTES.md`](docs/NOTES.md) — the
 lab journal is half the value of the repo). It has one daily user so far.
-The invariants above are load-bearing and tested; the edges (dsh setup,
-OpenClaw integration) assume you enjoy plumbing. Issues and PRs welcome —
+The invariants above are load-bearing and tested; the edges (dsh setup)
+assume you enjoy plumbing. Issues and PRs welcome —
 `make build test fmt` must pass.
 
 - [`docs/IDEA.md`](docs/IDEA.md) — full design rationale

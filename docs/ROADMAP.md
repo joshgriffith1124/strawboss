@@ -7,8 +7,9 @@ tested at the end (same rule as milestones). Struck items are done.
 2. ~~dsh harness (DeepSeek Harness ACP workers) + tools_mode~~ (4b90e81, abaa539, 9433896)
 3. ~~Worktree-per-worker~~ (`delegate --worktree`, 5e1b2de)
 4. ~~`strawboss clean`~~ (retention sweep, 64248ea)
-5. ~~Remote notify + control~~ — ntfy pushes and OpenClaw two-way Discord
-   (inject prompts / relay replies) (db681cf, d64d067)
+5. ~~Remote notify + control~~ — ntfy pushes (db681cf, d64d067). The
+   OpenClaw two-way Discord part (inject prompts / relay replies) was
+   removed on 2026-10-15; ntfy stays.
 6. ~~Worker table filter + logs source filter~~ (31e202b; UI polish pass
    69bc0ce, 737fea0)
 7. ~~Budget guard~~ (`[budget]` config, delegate stop marker, `strawboss costs`)
@@ -104,6 +105,6 @@ agents, and once the remote box is a full strawboss host anyway, `ssh
 -t` + tmux gets the same result for free (README: "Working on a remote
 machine"). The only shape ssh can't cover is one TUI watching several
 boxes at once; revisit if that need is real. Also not planned: web UI,
-remote/mobile control beyond OpenClaw, MCP management — agent-deck does
+remote/mobile control, MCP management — agent-deck does
 these; strawboss stays a local TUI with a token-free supervisor (see the
 agent-deck research note).

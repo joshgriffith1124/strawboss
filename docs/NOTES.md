@@ -472,6 +472,8 @@ Discord channel:
   reply on its own — that's OpenClaw config territory (channel routing /
   allowlists), not something strawboss can suppress.
 
+2026-10-15: OpenClaw/Discord integration removed from strawboss; ntfy remains.
+
 ## dsh vs opencode speed (verified 2026-08-29, controlled comparison)
 
 Perceived dsh slowness investigated; dsh is NOT slower per worker.

@@ -125,16 +125,13 @@ func (m Model) viewTabCells(short bool) string {
 	return strings.Join(cells, " ")
 }
 
-// viewTopRight is the right side of the merged top row: the remote
-// channel (when armed), the 5h plan-window gauge, and the mockup's fleet
+// viewTopRight is the right side of the merged top row: the 5h
+// plan-window gauge, and the mockup's fleet
 // readout "● N models up · N agents · N tok/s" — agents counts the
 // supervisor plus the live (running/queued) workers; the old run clock
 // and raw running count are gone.
 func (m Model) viewTopRight() string {
 	var rightParts []string
-	if m.remoteChannel != "" {
-		rightParts = append(rightParts, sTeal.Render("⇄ "+m.remoteChannel))
-	}
 	if m.fiveHour > 0 {
 		gauge := sDim.Render(fmt.Sprintf("5h %.0f%%", m.fiveHour*100))
 		if m.fiveHour >= 0.7 {

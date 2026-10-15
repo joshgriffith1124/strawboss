@@ -132,6 +132,41 @@ func TestLoadExtendStep(t *testing.T) {
 	}
 }
 
+// TestLoadLegacyNotifyKeys: configs written before the OpenClaw/Discord
+// integration was removed (2026-10-15) still carry its [notify] keys —
+// they must load silently instead of failing the strict decode, and any
+// genuinely unknown key still errors.
+func TestLoadLegacyNotifyKeys(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	tomlText := `
+[notify]
+ntfy_topic = "strawboss-legacy"
+openclaw_target = "channel:<discord-channel-id>"
+openclaw_channel = "discord"
+openclaw_bin = "/usr/local/bin/openclaw"
+openclaw_two_way = true
+`
+	if err := os.WriteFile(path, []byte(tomlText), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("legacy openclaw keys should be ignored: %v", err)
+	}
+	if cfg.Notify.NtfyTopic != "strawboss-legacy" {
+		t.Errorf("NtfyTopic = %q", cfg.Notify.NtfyTopic)
+	}
+
+	// A truly unknown key still fails.
+	path2 := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path2, []byte("[notify]\nbogus = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path2); err == nil {
+		t.Error("unknown key should still error")
+	}
+}
+
 func TestLoadMissingFileReturnsDefaults(t *testing.T) {
 	cfg, err := Load(filepath.Join(t.TempDir(), "nope.toml"))
 	if err != nil {
